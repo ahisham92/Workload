@@ -54,6 +54,51 @@ const toPercent = (v) => (v === null || v === undefined || v === '' ? ''
 const fromPercent = (v) => (v === null || v === undefined || v === '' ? null
   : Number(v) / 100);
 
+/* ------------------------------------------------------------ tone rules
+ *
+ * One place decides what counts as bad, so a loss looks the same wherever it
+ * appears. Colour is never the only signal: the number itself is always there,
+ * and a loss keeps its minus sign.
+ */
+const tone = {
+  /** Money and man-months: below zero is a loss. */
+  amount: (v) => (v === null || v === undefined ? ''
+    : v < -0.0001 ? 'bad' : v > 0.0001 ? 'ok' : ''),
+  /** Earned per man-month spent. Below 1.00 means costing more than it earns. */
+  cpi: (v) => (v === null || v === undefined ? ''
+    : v >= 1 ? 'ok' : v >= 0.8 ? 'warn' : 'bad'),
+  /** Busy-ness against capacity — over is as much a problem as under. */
+  utilisation: (v) => (v === null || v === undefined ? ''
+    : v > 1.05 ? 'bad' : v >= 0.85 ? 'ok' : v >= 0.7 ? 'warn' : 'bad'),
+  /** Distance from a target of 1.00, either side. */
+  target: (v, target = 1) => {
+    if (v === null || v === undefined) return '';
+    const off = Math.abs(v - target) / (target || 1);
+    return off <= 0.15 ? 'ok' : off <= 0.3 ? 'warn' : 'bad';
+  },
+  /** How far a project has got. */
+  progress: (v) => (v === null || v === undefined ? ''
+    : v >= 1 ? 'ok' : v >= 0.5 ? 'warn' : ''),
+  score: (v) => (v === null || v === undefined ? ''
+    : v >= 80 ? 'ok' : v >= 60 ? 'warn' : 'bad'),
+};
+
+/** A number with its tone applied — as a class, so print keeps it too. */
+function toned(value, kind, format = num, ...rest) {
+  const cls = typeof kind === 'function' ? kind(value, ...rest) : kind;
+  return el('span', { class: cls ? `v-${cls}` : '' }, format(value));
+}
+
+/** A progress bar with its percentage beside it. */
+function progressCell(value) {
+  if (value === null || value === undefined) return '—';
+  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+  return el('span', { class: 'progress-cell' },
+    el('span', { class: `progress-track ${tone.progress(value)}` },
+      el('span', { style: `width:${pct}%` })),
+    el('span', { class: 'progress-value' }, `${pct}%`));
+}
+
 function toast(message, kind = '') {
   const node = el('div', { class: `toast ${kind}` }, message);
   $('#toasts').append(node);
@@ -317,19 +362,23 @@ function renderOverview() {
 
   // Everything here is for the period chosen above, not life-to-date.
   const cards = [
-    ['In-hand budget', num(inHand), `active and not started, ${label.toLowerCase()}`],
-    ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
-    ['Actual MM booked', num(t.actual_mm), `${fmt.hours(t.actual_mm * report.hours_per_man_month)} hours`],
-    ['Earned MM', num(t.earned_mm), 'value delivered'],
-    ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
-    ['Utilisation', fmt.pct(t.utilisation), `of ${num(t.capacity_to_date_mm)} MM capacity to date`],
-    ['Efficiency (CPI)', fmt.ratio(t.cpi), t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
-    ['Projects live', fmt.int(t.projects_live), `${t.projects_active} active or not started`],
+    ['In-hand budget', num(inHand), '', `active and not started, ${label.toLowerCase()}`],
+    ['Planned MM', num(t.planned_mm), '', 'what we said we would burn'],
+    ['Actual MM booked', num(t.actual_mm), '',
+      `${fmt.hours(t.actual_mm * report.hours_per_man_month)} hours`],
+    ['Earned MM', num(t.earned_mm), '', 'value delivered'],
+    ['Profit / (loss)', num(t.profit_mm), tone.amount(t.profit_mm), 'earned − actual'],
+    ['Utilisation', fmt.pct(t.utilisation), tone.utilisation(t.utilisation),
+      `of ${num(t.capacity_to_date_mm)} MM capacity to date`],
+    ['Efficiency (CPI)', fmt.ratio(t.cpi), tone.cpi(t.cpi),
+      t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
+    ['Active projects', fmt.int(t.projects_active), '',
+      `${t.projects_not_started} not started · ${t.projects_live} live in the period`],
   ];
-  $('#overview-cards').replaceChildren(...cards.map(([label_, value, sub]) =>
+  $('#overview-cards').replaceChildren(...cards.map(([label_, value, cls, sub]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, label_),
-      el('div', { class: 'value' }, value),
+      el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
       el('div', { class: 'sub' }, sub))));
 
   renderHeroes(report);
@@ -411,9 +460,9 @@ function engineerBlock(name, report, overview) {
     : util > 1.05 ? 'pill-bad' : util < 0.7 ? 'pill-warn' : 'pill-ok';
   const won = (report.heroes && report.heroes.wins && report.heroes.wins[name]) || 0;
 
-  const measure = (label, value, hint) => el('div', { class: 'measure' },
+  const measure = (label, value, hint, cls = '') => el('div', { class: 'measure' },
     el('span', { class: 'measure-label', title: hint }, label),
-    el('span', { class: 'measure-value' }, value));
+    el('span', { class: `measure-value ${cls ? `v-${cls}` : ''}` }, value));
 
   return el('div', { class: 'eng' },
     el('div', { class: 'eng-head' },
@@ -435,9 +484,10 @@ function engineerBlock(name, report, overview) {
       measure('Capacity MM', num(e.capacity_to_date_mm),
         'Availability × months, pro-rated to the as-at date'),
       measure('Earned MM', num(e.earned_mm), 'Value delivered, budget × progress'),
-      measure('CPI', fmt.ratio(e.cpi), 'Earned ÷ actual. Above 1.00 is good'),
+      measure('CPI', fmt.ratio(e.cpi), 'Earned ÷ actual. Above 1.00 is good',
+        tone.cpi(e.cpi)),
       measure('Plan adherence', fmt.pct(e.plan_adherence),
-        'Actual against what was planned to date'),
+        'Actual against what was planned to date', tone.target(e.plan_adherence)),
       measure('Projects', fmt.int(e.projects_worked), 'Projects booked to in this period')),
 
     el('div', { class: 'muted', style: 'margin-top:6px' },
@@ -477,11 +527,11 @@ function renderIssues(issues) {
     return;
   }
   $('#issues').replaceChildren(...issues.map((issue) => {
-    const tone = issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info';
+    const level = issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info';
     // Anything that names a project gets a way straight to it.
     const project = issue.project
       || state.projects.find((p) => issue.message.includes(p.number))?.number;
-    return el('div', { class: `msg msg-${tone} msg-action` },
+    return el('div', { class: `msg msg-${level} msg-action` },
       el('span', {}, el('strong', {}, `${issue.where}: `), issue.message),
       project
         ? el('button', { class: 'btn btn-sm', type: 'button',
@@ -520,16 +570,16 @@ function renderCapacity(check) {
   const target = $('#ts-capacity');
   if (!cap) { target.replaceChildren(); return; }
   const used = cap.rows_used / cap.total_capacity;
-  const tone = cap.over_capacity ? 'bad' : cap.low_headroom ? 'warn' : '';
+  const meter = cap.over_capacity ? 'bad' : cap.low_headroom ? 'warn' : '';
   const warnings = check.capacity_warnings || [];
 
   target.replaceChildren(el('div', { class: 'panel' },
     el('h3', {}, 'Room left in the workbook'),
     el('p', { class: 'muted' },
-      `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}. `
-      + 'Rows past that stay on the sheet but reach nothing — and because the sheets stack '
-      + `${cap.stack_order.join(' then ')}, they are ${cap.stack_order[cap.stack_order.length - 1]}'s first.`),
-    el('div', { class: `meter ${tone}` },
+      `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}, `
+      + `stacked from each monthly sheet down to row ${cap.source_last_row.toLocaleString()}. `
+      + 'Rows past either limit stay on the sheet but reach nothing.'),
+    el('div', { class: `meter ${meter}` },
       el('span', { style: `width:${Math.min(100, Math.round(used * 100))}%` })),
     el('p', { class: 'muted' },
       `${cap.rows_used.toLocaleString()} of ${cap.total_capacity.toLocaleString()} rows used`
@@ -539,18 +589,50 @@ function renderCapacity(check) {
     ...warnings.map((w) => el('div', {
       class: `msg msg-${w.level === 'error' ? 'bad' : 'warn'}`,
     }, w.message)),
-    (cap.over_capacity || cap.low_headroom)
-      ? el('button', { class: 'btn btn-primary', type: 'button',
-          onclick: () => extendCapacity(cap) },
-          `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} rows`)
+    el('div', { class: 'row-actions' },
+      (cap.over_capacity || cap.low_headroom)
+        ? el('button', { class: 'btn btn-primary', type: 'button',
+            onclick: () => extendCapacity(cap) },
+            `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} rows`)
+        : null,
+      cap.source_is_short
+        ? el('button', { class: 'btn', type: 'button',
+            onclick: () => raiseSourceLimit(cap) },
+            `Read each sheet to row ${cap.suggested_source_last_row.toLocaleString()}`)
+        : null),
+    cap.source_is_short
+      ? el('p', { class: 'muted' },
+          `Each monthly sheet is only read to row ${cap.source_last_row.toLocaleString()} `
+          + `(${cap.per_sheet_capacity.toLocaleString()} entries). Reading to row `
+          + `${cap.suggested_source_last_row.toLocaleString()} leaves room for years of imports.`)
       : null));
+}
+
+async function raiseSourceLimit(cap) {
+  if (!window.confirm(
+    `Read each monthly sheet down to row ${cap.suggested_source_last_row.toLocaleString()} `
+    + `instead of ${cap.source_last_row.toLocaleString()}?\n\n`
+    + 'This widens the stack that builds Timesheet Raw so a single sheet can hold '
+    + 'far more entries. A backup is taken first.')) return;
+  try {
+    toast('Widening the stack…');
+    const result = await api('/api/timesheets/capacity', {
+      method: 'POST',
+      body: { source_last_row: cap.suggested_source_last_row },
+    });
+    markSaved(result.save);
+    toast(`Each sheet is now read to row ${result.source_last_row.toLocaleString()}.`, 'ok');
+    await refreshAll();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
 }
 
 async function extendCapacity(cap) {
   const perSheetNeeded = Math.max(
     ...Object.values(cap.per_sheet).map((s) => s.rows)) + 1500;
-  const source = perSheetNeeded > cap.per_sheet_capacity
-    ? Math.min(cap.source_last_row + 3000, cap.suggested_raw_last_row) : null;
+  const source = perSheetNeeded > cap.per_sheet_capacity || cap.source_is_short
+    ? cap.suggested_source_last_row : null;
   if (!window.confirm(
     `Raise the limit from ${cap.raw_last_row.toLocaleString()} to `
     + `${cap.suggested_raw_last_row.toLocaleString()} rows?\n\n`
@@ -729,15 +811,13 @@ function renderProjects() {
       ['#', 'Number', 'Name', 'Status', 'Budget MM', 'Progress', 'Actual MM',
        'Earned MM', 'Profit MM', 'CPI', 'Deliverables', '']
         .map((h, i) => el('th', {
-          class: i === 0 || (i >= 4 && i <= 9) ? 'num' : '',
+          class: i === 0 || (i >= 4 && i <= 10) ? 'num' : '',
         }, h)))),
     el('tbody', {}, rows.length === 0
       ? el('tr', {}, el('td', { colspan: 12 },
           el('div', { class: 'empty' }, 'No projects match.')))
       : rows.map((project, position) => {
         const m = byNumber.get(project.number) || {};
-        const cpiPill = m.cpi === null || m.cpi === undefined ? ''
-          : m.cpi >= 1 ? 'pill-ok' : m.cpi >= 0.8 ? 'pill-warn' : 'pill-bad';
         return el('tr', { class: 'clickable', onclick: () => openProject(project.number) },
           el('td', { class: 'num muted', title: `Inputs row ${project.row}` }, position + 1),
           el('td', { class: 'code' }, project.number),
@@ -745,15 +825,18 @@ function renderProjects() {
           el('td', {}, el('span', { class: `pill ${statusPill(project.status)}` },
             project.status || '—')),
           el('td', { class: 'num' }, fmt.mm(project.budget_mm)),
-          el('td', { class: 'num' }, fmt.pct(m.progress)),
+          el('td', { class: 'num' }, progressCell(m.progress)),
           el('td', { class: 'num' }, fmt.mm(m.actual_mm)),
           el('td', { class: 'num' }, fmt.mm(m.earned_mm)),
-          el('td', { class: 'num' }, fmt.mm(m.profit_mm)),
-          el('td', { class: 'num' }, cpiPill
-            ? el('span', { class: `pill ${cpiPill}` }, fmt.ratio(m.cpi)) : '—'),
-          el('td', {}, m.deliverables
-            ? el('span', { class: `pill ${m.weight_ok ? 'pill-ok' : 'pill-bad'}` },
-                m.weight_ok ? `${m.deliverables} · 100%` : `${m.deliverables} · ${fmt.pct(m.weight_total)}`)
+          el('td', { class: 'num' }, toned(m.profit_mm, tone.amount, fmt.mm)),
+          el('td', { class: 'num' }, m.cpi === null || m.cpi === undefined
+            ? '—' : toned(m.cpi, tone.cpi, fmt.ratio)),
+          el('td', { class: 'num' }, m.deliverables
+            ? (m.weight_ok
+                ? fmt.int(m.deliverables)
+                : el('span', { class: 'pill pill-bad',
+                    title: `Phase weights total ${fmt.pct(m.weight_total)}, not 100%` },
+                    `${m.deliverables} · ${fmt.pct(m.weight_total)}`))
             : el('span', { class: 'pill pill-warn' }, 'none yet')),
           el('td', {}, el('span', { class: 'chevron' }, '›')));
       })));
@@ -1475,10 +1558,10 @@ function table(headers, rows, opts = {}) {
 }
 
 function kpiCards(items) {
-  return el('div', { class: 'cards' }, items.map(([label, value, sub]) =>
+  return el('div', { class: 'cards' }, items.map(([label, value, sub, cls]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, label),
-      el('div', { class: 'value' }, value),
+      el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
       el('div', { class: 'sub' }, sub))));
 }
 
@@ -1542,11 +1625,16 @@ function renderDashboard(data) {
       ['Planned MM', num(t.planned_mm), 'full period plan'],
       ['Actual MM', num(t.actual_mm), 'what was burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
-      ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
-      ['Utilisation', fmt.pct(t.utilisation), `vs ${num(t.capacity_to_date_mm)} MM capacity to date`],
-      ['Efficiency (CPI)', fmt.ratio(t.cpi), t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
-      ['Plan adherence', fmt.pct(t.plan_adherence), `vs ${num(t.planned_to_date_mm)} MM planned to date`],
-      ['Projects live', fmt.int(t.projects_live), `${t.projects_active} active or not started`],
+      ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
+      ['Utilisation', fmt.pct(t.utilisation), `vs ${num(t.capacity_to_date_mm)} MM capacity to date`,
+        tone.utilisation(t.utilisation)],
+      ['Efficiency (CPI)', fmt.ratio(t.cpi),
+        t.cpi >= 1 ? 'earning above cost' : 'earning below cost', tone.cpi(t.cpi)],
+      ['Plan adherence', fmt.pct(t.plan_adherence),
+        `vs ${num(t.planned_to_date_mm)} MM planned to date`,
+        tone.target(t.plan_adherence)],
+      ['Active projects', fmt.int(t.projects_active),
+        `${t.projects_not_started} not started · ${t.projects_live} live`],
     ]),
 
     el('div', { class: 'report-grid' },
@@ -1594,11 +1682,12 @@ function renderDashboard(data) {
         data.projects.filter((p) => p.live)
           .sort((a, b) => (b.actual_mm || 0) - (a.actual_mm || 0))
           .map((p) => ({
-            cells: [p.number, p.status, num(p.budget_mm), fmt.pct(p.progress),
+            cells: [p.number, p.status, num(p.budget_mm),
+              { node: progressCell(p.progress) },
               num(p.planned_mm), num(p.actual_mm), num(p.earned_mm),
-              p.cpi === null ? '—' : fmt.ratio(p.cpi),
+              p.cpi === null ? '—' : toned(p.cpi, tone.cpi, fmt.ratio),
               num(p.cost_at_completion_mm), num(p.remaining_mm),
-              num(p.lifetime_profit_mm)],
+              toned(p.lifetime_profit_mm, tone.amount, num)],
           })), { numeric: [2, 3, 4, 5, 6, 7, 8, 9, 10] })));
 }
 
@@ -1608,20 +1697,20 @@ function renderEngineerKpis(data) {
   const names = data.engineers;
   const per = data.per_engineer;
   const rows = [
-    ['Actual MM booked', 'actual_mm', num],
-    ['Planned MM to date', 'planned_to_date_mm', num],
-    ['Earned MM', 'earned_mm', num],
-    ['Profit / (loss) MM', 'profit_mm', num],
-    ['Capacity MM to date', 'capacity_to_date_mm', num],
-    ['Utilisation', 'utilisation', fmt.pct],
-    ['Plan adherence', 'plan_adherence', fmt.pct],
-    ['Efficiency (CPI)', 'cpi', fmt.ratio],
-    ['Type-weighted earned MM', 'type_weighted_earned_mm', num],
-    ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio],
-    ['Share of team time', 'share_of_team_time', fmt.pct],
-    ['Remaining on hand', 'remaining_mm', num],
-    ['Projects worked', 'projects_worked', (v) => fmt.int(v)],
-    ['Average MM per project', 'average_mm_per_project', num],
+    ['Actual MM booked', 'actual_mm', num, null],
+    ['Planned MM to date', 'planned_to_date_mm', num, null],
+    ['Earned MM', 'earned_mm', num, null],
+    ['Profit / (loss) MM', 'profit_mm', num, tone.amount],
+    ['Capacity MM to date', 'capacity_to_date_mm', num, null],
+    ['Utilisation', 'utilisation', fmt.pct, tone.utilisation],
+    ['Plan adherence', 'plan_adherence', fmt.pct, tone.target],
+    ['Efficiency (CPI)', 'cpi', fmt.ratio, tone.cpi],
+    ['Type-weighted earned MM', 'type_weighted_earned_mm', num, null],
+    ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio, tone.cpi],
+    ['Share of team time', 'share_of_team_time', fmt.pct, null],
+    ['Remaining on hand', 'remaining_mm', num, null],
+    ['Projects worked', 'projects_worked', (v) => fmt.int(v), null],
+    ['Average MM per project', 'average_mm_per_project', num, null],
   ];
 
   const worked = {};
@@ -1656,11 +1745,7 @@ function renderEngineerKpis(data) {
 
     el('section', { class: 'panel' },
       el('h3', {}, 'KPIs by engineer'),
-      table(['KPI', ...names, 'Team'],
-        rows.map(([label, key, format]) => ({
-          cells: [label, ...names.map((n) => format(per[n][key])),
-            format(teamValue(data, key))],
-        })), { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) })),
+      kpiTable(data, rows, { scores: true })),
 
     el('section', { class: 'panel' },
       el('h3', {}, 'Who worked on what'),
@@ -1670,6 +1755,40 @@ function renderEngineerKpis(data) {
           cells: [p.number, p.status, ...names.map((n) => num(p.by[n] || 0)),
             num(p.total)],
         })), { numeric: names.map((_n, i) => i + 2).concat([names.length + 2]) })));
+}
+
+/** The KPI grid used by both Engineer KPIs and Management Review.
+ *
+ *  ``scores`` adds the weighted scorecard total as a closing row, so the table
+ *  ends on who is ahead rather than leaving the reader to work it out.
+ */
+function kpiTable(data, rows, { scores = false } = {}) {
+  const names = data.engineers;
+  const per = data.per_engineer;
+  const body = rows.map(([label, key, format, toneOf]) => ({
+    cells: [label,
+      ...names.map((n) => (toneOf
+        ? toned(per[n][key], toneOf, format)
+        : format(per[n][key]))),
+      (toneOf ? toned(teamValue(data, key), toneOf, format)
+        : format(teamValue(data, key)))],
+  }));
+
+  if (scores) {
+    const totals = (data.scorecard && data.scorecard.totals) || {};
+    const best = Math.max(...names.map((n) => totals[n] || 0));
+    body.push({
+      __class: 'total-row',
+      cells: ['Weighted score (out of 100)',
+        ...names.map((n) => el('span', {
+          class: `v-${tone.score(totals[n])}`,
+          title: (totals[n] || 0) >= best ? 'best in the team' : '',
+        }, `${num(totals[n], 1)}${(totals[n] || 0) >= best ? ' \u2605' : ''}`)),
+        '—'],
+    });
+  }
+  return table(['KPI', ...names, 'Team'], body,
+    { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) });
 }
 
 function teamValue(data, key) {
@@ -1715,9 +1834,14 @@ function renderTeamMember(data) {
     kpiCards([
       ['Actual MM', num(person.actual_mm), `${person.projects_worked} project(s) worked`],
       ['Earned MM', num(person.earned_mm), 'value delivered'],
-      ['Utilisation', fmt.pct(person.utilisation), `of ${num(person.capacity_to_date_mm)} MM capacity`],
-      ['Efficiency (CPI)', fmt.ratio(person.cpi), 'earned ÷ actual'],
-      ['Plan adherence', fmt.pct(person.plan_adherence), `vs ${num(person.planned_to_date_mm)} MM planned`],
+      ['Utilisation', fmt.pct(person.utilisation),
+        `of ${num(person.capacity_to_date_mm)} MM capacity`,
+        tone.utilisation(person.utilisation)],
+      ['Efficiency (CPI)', fmt.ratio(person.cpi), 'earned ÷ actual',
+        tone.cpi(person.cpi)],
+      ['Plan adherence', fmt.pct(person.plan_adherence),
+        `vs ${num(person.planned_to_date_mm)} MM planned`,
+        tone.target(person.plan_adherence)],
       ['Remaining on hand', num(person.remaining_mm), 'still allocated'],
     ]),
 
@@ -1774,7 +1898,8 @@ function renderScorecard(data) {
       el('h3', {}, 'Ranking'),
       table(['Rank', 'Engineer', 'Weighted score', 'Strongest factor', 'Weakest factor'],
         board.ranking.map((r) => ({
-          cells: [`${medal[r.rank - 1] || ''} ${r.rank}`, r.engineer, num(r.score, 1),
+          cells: [`${medal[r.rank - 1] || ''} ${r.rank}`, r.engineer,
+            toned(r.score, tone.score, (v) => num(v, 1)),
             { node: el('span', {}, r.strongest), wide: true },
             { node: el('span', {}, r.weakest), wide: true }],
         })), { numeric: [0, 2] })),
@@ -1807,9 +1932,11 @@ function renderReview(data) {
       ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
       ['Actual MM', num(t.actual_mm), 'what we actually burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
-      ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
-      ['Utilisation', fmt.pct(t.utilisation), 'actual vs capacity to date'],
-      ['Plan adherence', fmt.pct(t.plan_adherence), 'actual vs planned to date'],
+      ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
+      ['Utilisation', fmt.pct(t.utilisation), 'actual vs capacity to date',
+        tone.utilisation(t.utilisation)],
+      ['Plan adherence', fmt.pct(t.plan_adherence), 'actual vs planned to date',
+        tone.target(t.plan_adherence)],
     ]),
 
     el('div', { class: 'report-grid' },
@@ -1826,25 +1953,24 @@ function renderReview(data) {
 
     el('section', { class: 'panel' },
       el('h3', {}, 'Team KPIs'),
-      table(['KPI', ...names, 'Team'], [
-        ['Actual MM booked', 'actual_mm', num],
-        ['Planned MM to date', 'planned_to_date_mm', num],
-        ['Earned MM', 'earned_mm', num],
-        ['Utilisation', 'utilisation', fmt.pct],
-        ['Plan adherence', 'plan_adherence', fmt.pct],
-        ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio],
-        ['Average type factor', 'average_type_factor', (v) => num(v, 2)],
-        ['Remaining on hand', 'remaining_mm', num],
-      ].map(([label, key, format]) => ({
-        cells: [label, ...names.map((n) => format(per[n][key])),
-          format(teamValue(data, key))],
-      })), { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) })),
+      kpiTable(data, [
+        ['Actual MM booked', 'actual_mm', num, null],
+        ['Planned MM to date', 'planned_to_date_mm', num, null],
+        ['Earned MM', 'earned_mm', num, null],
+        ['Profit / (loss) MM', 'profit_mm', num, tone.amount],
+        ['Utilisation', 'utilisation', fmt.pct, tone.utilisation],
+        ['Plan adherence', 'plan_adherence', fmt.pct, tone.target],
+        ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio, tone.cpi],
+        ['Average type factor', 'average_type_factor', (v) => num(v, 2), null],
+        ['Remaining on hand', 'remaining_mm', num, null],
+      ], { scores: true })),
 
     el('section', { class: 'panel' },
       el('h3', {}, 'Delivery mix'),
       el('p', { class: 'muted' },
-        'Where the delivered hours came from. Support figures come from the '
-        + 'Support Plan sheet.'),
+        `Where the delivered hours came from over ${data.period.label.toLowerCase()}. `
+        + 'Support figures are the plan totals from the Support Plan sheet, which '
+        + 'the workbook does not date, so they are not cut to the period.'),
       table(['Source', 'Hours', 'Man-months', 'Share'],
         mix.map((row) => ({
           cells: [row.source, fmt.hours(row.hours), num(row.man_months),

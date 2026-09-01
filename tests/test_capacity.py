@@ -177,3 +177,43 @@ class TestImportWarnsBeforehand:
         rows = [[None] * 72] * 10
         assert all(w["level"] != "error"
                    for w in wb.replace_timesheet("Kirolos", rows)["capacity_warnings"])
+
+
+class TestTheDefaultStackIsTooShallow:
+    """A fresh workbook only reads 6,000 rows from each monthly sheet."""
+
+    def test_a_short_per_sheet_limit_is_reported(self, readonly_wb):
+        report = readonly_wb.timesheet_capacity()
+        assert report["source_last_row"] == 6000
+        assert report["source_is_short"] is True
+        assert report["suggested_source_last_row"] == cfg.TS_SOURCE_TARGET_LAST_ROW
+        assert cfg.TS_SOURCE_TARGET_LAST_ROW == 25000
+
+    def test_the_per_sheet_limit_can_be_raised_on_its_own(self, wb):
+        result = wb.extend_timesheet_capacity(source_last_row=25000)
+        assert result["source_last_row"] == 25000
+        after = wb.timesheet_capacity()
+        assert after["source_last_row"] == 25000
+        assert after["source_is_short"] is False
+        assert after["raw_last_row"] == 8000        # untouched
+        assert after["per_sheet_capacity"] == 25000 - cfg.TS_FIRST_DATA_ROW + 1
+
+    def test_the_ceiling_follows_the_number_of_sheets(self, readonly_wb):
+        report = readonly_wb.timesheet_capacity()
+        assert report["max_raw_last_row"] == (
+            cfg.TS_RAW_FIRST_DATA_ROW
+            + len(report["stack_order"]) * report["per_sheet_capacity"] - 1)
+
+    def test_widening_the_stack_lifts_the_ceiling(self, wb):
+        beyond = wb.timesheet_capacity()["max_raw_last_row"] + 5000
+        with pytest.raises(ValidationError):
+            wb.extend_timesheet_capacity(raw_last_row=beyond)
+        wb.extend_timesheet_capacity(source_last_row=25000)
+        assert wb.timesheet_capacity()["max_raw_last_row"] > beyond
+
+    def test_the_low_headroom_warning_names_no_one(self, readonly_wb):
+        report = readonly_wb.timesheet_capacity()
+        warning = capacity.messages(report)[0]
+        assert warning["level"] == "warning"
+        for name in report["stack_order"]:
+            assert name not in warning["message"]

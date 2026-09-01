@@ -188,7 +188,8 @@ TS_HEADER_ROW = 3
 TS_FIRST_DATA_ROW = 4
 #: Columns A..BT.  Timesheet Raw reads each sheet from row 4 to row 6000.
 TS_LAST_COLUMN = "BT"
-TS_MAX_DATA_ROW = 6000
+#: Fallback only; the real limit is read from the VSTACK in the workbook.
+TS_MAX_DATA_ROW = 25000
 
 #: Columns of the export that the workbook actually reads, by header name.
 TS_KEY_FIELDS = {
@@ -229,10 +230,12 @@ BACKUP_DIRNAME = "backups"
 SHEET_TS_RAW = "Timesheet Raw"
 TS_RAW_FIRST_DATA_ROW = 4
 
-#: ``Timesheet Raw!A4`` stacks the three TS sheets with VSTACK and filters the
-#: blanks out.  The stack is read from each sheet up to this row, so it is the
-#: cap on any one engineer's sheet.
+#: ``Timesheet Raw!A4`` stacks the TS sheets with VSTACK and filters the blanks
+#: out.  The stack is read from each sheet up to this row, so it caps any one
+#: engineer's sheet.  The workbook shipped with 6000; the app raises it so an
+#: engineer's own sheet stops being the thing that runs out first.
 TS_SOURCE_DEFAULT_LAST_ROW = 6000
+TS_SOURCE_TARGET_LAST_ROW = 25000
 
 #: Every SUMIFS / MINIFS / MAXIFS that reads the consolidated view stops at this
 #: row.  Rows spilled beyond it are invisible to the whole workbook, and because

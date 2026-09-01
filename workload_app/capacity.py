@@ -129,7 +129,10 @@ def report(wb: Workbook, rows_per_engineer: Dict[str, int],
         "per_sheet": per_sheet,
         "stack_order": list(order),
         "suggested_raw_last_row": suggest_raw_last_row(used, raw),
-        "max_raw_last_row": cfg.TS_RAW_FIRST_DATA_ROW + 3 * per_sheet_capacity - 1,
+        "suggested_source_last_row": max(source, cfg.TS_SOURCE_TARGET_LAST_ROW),
+        "source_is_short": source < cfg.TS_SOURCE_TARGET_LAST_ROW,
+        "max_raw_last_row": (cfg.TS_RAW_FIRST_DATA_ROW
+                             + len(order) * per_sheet_capacity - 1),
     }
 
 
@@ -158,12 +161,11 @@ def messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
                 f"The timesheet has outgrown the workbook. Every calculation "
                 f"reads {cfg.SHEET_TS_RAW} rows "
                 f"{cfg.TS_RAW_FIRST_DATA_ROW}-{data['raw_last_row']:,} "
-                f"({data['total_capacity']:,} rows) but the three sheets hold "
-                f"{data['rows_used']:,}. The sheets are stacked "
-                f"{' then '.join(data['stack_order'])}, so the rows past the "
-                f"end belong to {lost}. Those hours are on the sheet but reach "
-                f"nothing — no project, no dashboard, no CPI. Raise the limit "
-                f"to at least {data['suggested_raw_last_row']:,}."
+                f"({data['total_capacity']:,} rows) but the sheets hold "
+                f"{data['rows_used']:,}, so the surplus belongs to {lost}. "
+                f"Those hours are on the sheet but reach nothing — no project, "
+                f"no dashboard, no CPI. Raise the limit to at least "
+                f"{data['suggested_raw_last_row']:,}."
             ),
         })
     elif data["low_headroom"]:
@@ -172,9 +174,8 @@ def messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
             "message": (
                 f"Only {data['headroom']:,} rows left before the timesheet "
                 f"outgrows the workbook ({data['rows_used']:,} of "
-                f"{data['total_capacity']:,} used). Past that point the last "
-                f"engineer in the stack ({data['stack_order'][-1]}) silently "
-                f"stops counting. Raise the limit to "
+                f"{data['total_capacity']:,} used). Past that point the newest "
+                f"rows stop counting. Raise the limit to "
                 f"{data['suggested_raw_last_row']:,} before the next import."
             ),
         })
