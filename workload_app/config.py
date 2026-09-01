@@ -312,3 +312,68 @@ SCORECARD_DIRECTION_TARGET = "Target band"
 SHEET_DEFINITIONS = "Definitions"
 DEFINITIONS_COLUMNS = {"field": "A", "where": "B", "means": "C", "how": "D"}
 DEFINITIONS_LAST_ROW = 40
+
+# -- Task Management -------------------------------------------------------
+#: A sheet of the app's own, created on demand.  Nothing in the workbook reads
+#: it: the task list is a planning aid that sits beside the model rather than
+#: inside it, so nothing here can move a project's figures.
+SHEET_TASKS = "Tasks"
+TASKS_TITLE_CELL = "A1"
+TASKS_SETTINGS_LABEL_CELL = "R1"
+TASKS_SETTINGS_CELL = "S1"
+TASKS_HEADER_ROW = 2
+TASKS_FIRST_ROW = 3
+#: Well past a year of daily tasks for a team of this size.
+TASKS_LAST_ROW = 5000
+
+TASK_COLUMNS: Dict[str, str] = {
+    "id": "A",
+    "name": "B",
+    "definition": "C",
+    "project_number": "D",
+    "deliverable_row": "E",
+    "deliverable_name": "F",
+    "assignees": "G",
+    "required_hours": "H",
+    "actual_hours": "I",
+    "start": "J",
+    "due": "K",
+    "status": "L",
+    "kind": "M",
+    "series": "N",
+    "notes": "O",
+}
+
+TASK_HEADERS = [
+    "ID", "Task", "Definition", "Project", "Deliverable row", "Deliverable",
+    "Assigned to", "Required hours", "Actual hours", "Start", "Due", "Status",
+    "Kind", "Series", "Notes",
+]
+
+TASK_STATUSES = ["Not started", "In progress", "Blocked", "Done"]
+TASK_DONE_STATUS = "Done"
+TASK_KINDS = ["Task", "Submission", "Meeting"]
+
+#: The working day the load is measured against.  The team starts at 09:00 and
+#: is meant to finish at 17:30; anything past that is the overtime the stats
+#: exist to make visible, so it is not built into the capacity.
+TASK_DEFAULT_SETTINGS: Dict[str, object] = {
+    "day_start": "09:00",
+    "day_end": "17:30",
+    #: Monday is 0, Sunday is 6 -- Python's own weekday numbering.
+    "work_days": [0, 1, 2, 3, 4],
+    "horizon_weeks": 4,
+    #: A deliverable's date pulls a week of daily preparation before it.
+    "submission_lead_days": 7,
+    "submission_hours_per_day": 2.0,
+    "meeting_hours": 1.0,
+    "meeting_weekday": 0,
+    "meeting_weeks": 12,
+}
+
+#: Load against capacity: past this someone is working overtime to finish.
+TASK_OVERLOADED_AT = 1.0
+#: Below this there is real room for more work.  The band between the two is
+#: deliberately wide: a plan that fills every hour is a plan with no slack in
+#: it, and one that fills two thirds of them is not somebody idle.
+TASK_UNDERLOADED_AT = 0.7

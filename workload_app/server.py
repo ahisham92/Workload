@@ -23,7 +23,8 @@ from urllib.parse import parse_qs, urlparse
 from . import config as cfg, library, metrics, reports, timesheets
 from .timesheets import ImportError_, ParsedTimesheet
 from .library import NotAWorkbook
-from .workbook import ValidationError, WorkloadWorkbook
+from .tasks import TaskError
+from .workbook import ValidationError, WorkloadWorkbook, iso
 from .xlsx_io import XlsxError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -460,6 +461,77 @@ class WorkloadService:
             result["capacity"] = wb.timesheet_capacity()
             return result
 
+    # -- tasks -----------------------------------------------------------
+    def tasks(self) -> Dict[str, Any]:
+        """The list, the load it puts on the team, and what a task may refer to."""
+        with self._lock:
+            wb = self.workbook
+            deliverables = [
+                {
+                    "row": d.row,
+                    "name": d.name,
+                    "project_number": d.project_number,
+                    "date": iso(d.status_date),
+                }
+                for d in wb.deliverables()
+            ]
+            return {
+                "tasks": wb.tasks(),
+                "settings": wb.task_settings(),
+                "load": wb.task_load(),
+                "engineers": wb.engineer_names(),
+                "projects": [{"number": p.number, "name": p.name}
+                             for p in wb.projects()],
+                "deliverables": deliverables,
+                "statuses": list(cfg.TASK_STATUSES),
+                "kinds": list(cfg.TASK_KINDS),
+                "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday",
+                             "Friday", "Saturday", "Sunday"],
+            }
+
+    def add_task(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            task = self.workbook.save_task(body)
+            return {"task": task, "save": self._commit()}
+
+    def update_task(self, task_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            task = self.workbook.save_task(body, task_id=task_id)
+            return {"task": task, "save": self._commit()}
+
+    def delete_task(self, task_id: int) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.delete_task(task_id)
+            result["save"] = self._commit()
+            return result
+
+    def delete_task_series(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.delete_task_series(str(body.get("series") or ""))
+            result["save"] = self._commit()
+            return result
+
+    def save_task_settings(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            result = {"settings": self.workbook.save_task_settings(body)}
+            result["save"] = self._commit()
+            return result
+
+    def generate_submission_tasks(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            row = body.get("deliverable_row")
+            result = self.workbook.generate_submission_tasks(
+                only_row=int(row) if row not in (None, "") else None,
+                include_past=bool(body.get("include_past")))
+            result["save"] = self._commit()
+            return result
+
+    def generate_weekly_meetings(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.generate_weekly_meetings(body)
+            result["save"] = self._commit()
+            return result
+
     def discard_timesheet(self, token: str) -> Dict[str, Any]:
         with self._lock:
             self._staged.pop(token, None)
@@ -514,6 +586,17 @@ def build_routes(service: WorkloadService) -> List[Route]:
         ("GET", "/api/reports",
          lambda q, b: service.reports(
              q.get("period", ["year"])[0], _year(q), q.get("quarter", [None])[0])),
+        ("GET", "/api/tasks", lambda q, b: service.tasks()),
+        ("POST", "/api/tasks", lambda q, b: service.add_task(b)),
+        ("PUT", "/api/tasks/settings", lambda q, b: service.save_task_settings(b)),
+        ("POST", "/api/tasks/series/delete",
+         lambda q, b: service.delete_task_series(b)),
+        ("POST", "/api/tasks/generate/submissions",
+         lambda q, b: service.generate_submission_tasks(b)),
+        ("POST", "/api/tasks/generate/meetings",
+         lambda q, b: service.generate_weekly_meetings(b)),
+        ("PUT", "/api/tasks/{}", lambda q, b, task_id: service.update_task(_int(task_id), b)),
+        ("DELETE", "/api/tasks/{}", lambda q, b, task_id: service.delete_task(_int(task_id))),
         ("GET", "/api/timesheets", lambda q, b: service.timesheet_status()),
         ("POST", "/api/timesheets/stage", lambda q, b: _stage(service, b)),
         ("POST", "/api/timesheets/apply",
@@ -651,7 +734,7 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_static(path)
         except ApiError as exc:
             self._send_json(exc.status, {"error": exc.message, "errors": exc.errors})
-        except ValidationError as exc:
+        except (ValidationError, TaskError) as exc:
             self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY,
                             {"error": "The change was rejected.", "errors": exc.errors})
         except NotAWorkbook as exc:

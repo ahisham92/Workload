@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from . import actuals_block, capacity, config as cfg
+from . import actuals_block, capacity, config as cfg, tasks as task_sheet
 from .xlsx_io import (
     CellValue, Workbook, build_cell, col_to_index, from_serial, index_to_col,
 )
@@ -1718,6 +1718,84 @@ class WorkloadWorkbook:
                 key=lambda item: -item["rows"],
             ),
         }
+
+    # -- tasks -----------------------------------------------------------
+    #
+    # The task list is the one thing in this app that the workbook does not
+    # calculate from.  It lives on a sheet of its own so it travels with the
+    # file, and every method here is a thin pass through to ``tasks`` -- the
+    # domain rules are there, the dirty flag is here.
+
+    def tasks(self) -> List[Dict[str, Any]]:
+        return [t.to_dict() for t in task_sheet.read(self._wb)]
+
+    def task_settings(self) -> Dict[str, Any]:
+        return task_sheet.settings(self._wb)
+
+    def save_task_settings(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        result = task_sheet.save_settings(self._wb, data)
+        self._touch_tasks()
+        return result
+
+    def task_load(self, *, weeks: Optional[int] = None,
+                  today: Optional[_dt.date] = None) -> Dict[str, Any]:
+        return task_sheet.load(
+            task_sheet.read(self._wb), self.engineer_names(),
+            self.task_settings(), today=today, weeks=weeks)
+
+    def save_task(self, data: Dict[str, Any],
+                  task_id: Optional[int] = None) -> Dict[str, Any]:
+        task = task_sheet.save(
+            self._wb, data, engineers=self.engineer_names(),
+            projects=[p.number for p in self.projects()], task_id=task_id)
+        self._touch_tasks()
+        return task.to_dict()
+
+    def delete_task(self, task_id: int) -> Dict[str, Any]:
+        result = task_sheet.delete(self._wb, task_id)
+        self._touch_tasks()
+        return result
+
+    def delete_task_series(self, series: str) -> Dict[str, Any]:
+        result = task_sheet.delete_series(self._wb, series)
+        self._touch_tasks()
+        return result
+
+    def generate_submission_tasks(self, *, only_row: Optional[int] = None,
+                                  today: Optional[_dt.date] = None,
+                                  include_past: bool = False) -> Dict[str, Any]:
+        """Fill in the run-up to every dated deliverable."""
+        deliverables = [d.to_dict() for d in self.deliverables()]
+        for source, target in zip(self.deliverables(), deliverables):
+            target["shares"] = source.shares
+        result = task_sheet.generate_submissions(
+            self._wb, deliverables, engineers=self.engineer_names(),
+            only_row=only_row, today=today, include_past=include_past)
+        self._touch_tasks()
+        return result
+
+    def generate_weekly_meetings(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        number = str(data.get("project_number") or "").strip()
+        name = ""
+        if number:
+            project = next((p for p in self.projects() if p.number == number), None)
+            if project is None:
+                raise ValidationError([f"{number} is not a project in the register."])
+            name = project.name
+        start = data.get("start")
+        result = task_sheet.generate_meetings(
+            self._wb, engineers=self.engineer_names(),
+            project_number=number, project_name=name,
+            start=_dt.date.fromisoformat(start) if start else None,
+            weeks=data.get("weeks"), weekday=data.get("weekday"),
+            hours=data.get("hours"))
+        self._touch_tasks()
+        return result
+
+    def _touch_tasks(self) -> None:
+        """The task sheet holds no formulas, so only the file is dirty."""
+        self._dirty = True
+        self._version += 1
 
     def register_issues(self) -> List[Dict[str, str]]:
         """Problems the workbook would flag in its own check columns."""

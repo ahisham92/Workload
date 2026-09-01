@@ -15,6 +15,7 @@ const state = {
   detail: null,          // the project currently open, with its deliverables
   referenceDraft: null,
   projectSort: { key: null, dir: 1 },   // null = the register's own order
+  tasks: null,           // the task list, its settings and the load it makes
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -300,6 +301,17 @@ function openModal(title, fields, onSubmit, values = {}) {
     } else if (field.type === 'textarea') {
       input = el('textarea', { id, name: field.name });
       input.value = values[field.name] ?? '';
+    } else if (field.type === 'checks') {
+      // A task can be shared, so its people are a set rather than a choice.
+      const chosen = new Set(values[field.name] ?? field.value ?? []);
+      input = el('div', { class: 'check-group', 'data-group': field.name },
+        field.options.map((option) => {
+          const value = typeof option === 'string' ? option : option.value;
+          const label = typeof option === 'string' ? option : option.label;
+          const box = el('input', { type: 'checkbox', value });
+          box.checked = chosen.has(value);
+          return el('label', { class: 'check-chip' }, box, el('span', {}, label));
+        }));
     } else {
       input = el('input', {
         id, name: field.name, type: field.type || 'text',
@@ -330,6 +342,9 @@ function modalValues() {
   const out = {};
   for (const node of $$('#modal-form [name]')) {
     out[node.name] = node.value.trim() === '' ? null : node.value.trim();
+  }
+  for (const group of $$('#modal-form [data-group]')) {
+    out[group.dataset.group] = $$('input:checked', group).map((box) => box.value);
   }
   return out;
 }
@@ -1501,6 +1516,7 @@ async function refreshAll() {
   renderReference();
   await setupReports();
   if (state.team) await loadTeam();
+  if (state.tasks) await loadTasks();
 }
 
 async function setupReports() {
@@ -1528,6 +1544,7 @@ async function setupReports() {
 
 function switchView(view) {
   if (view === 'team' && !state.team) loadTeam();
+  if (view === 'tasks' && !state.tasks) loadTasks();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
@@ -1561,6 +1578,15 @@ function wire() {
   $('#btn-new-project').addEventListener('click', newProject);
   $('#btn-ts-check').addEventListener('click', checkTimesheetFile);
   $('#btn-add-engineer').addEventListener('click', () => openEngineerModal(null));
+  $('#btn-add-task').addEventListener('click', () => openTaskModal(null));
+  $('#btn-task-settings').addEventListener('click', openWorkingDayModal);
+  $('#btn-task-submissions').addEventListener('click', openSubmissionModal);
+  $('#btn-task-meeting').addEventListener('click', openMeetingModal);
+  for (const id of ['#task-engineer', '#task-project', '#task-status-filter',
+    '#task-show-done']) {
+    $(id).addEventListener('change', () => renderTaskTable(state.tasks));
+  }
+  $('#task-search').addEventListener('input', () => renderTaskTable(state.tasks));
   $('#btn-pick').addEventListener('click', pickFile);
   $('#btn-add-unit').addEventListener('click', addUnit);
   $('#unit-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') addUnit(); });
@@ -2225,4 +2251,392 @@ async function removeEngineer(person) {
   } catch (error) {
     toast((error.errors || [error.message]).join(' '), 'bad');
   }
+}
+
+/* --------------------------------------------------------------- tasks */
+/*
+ * The one tab that stands apart. Nothing here is read by the workbook: no
+ * actual MM, no progress, no CPI. It is the plan — what has to be done, who
+ * shares it, and whether it fits in the hours the days actually hold.
+ */
+
+async function loadTasks() {
+  state.tasks = await api('/api/tasks');
+  renderTasks();
+}
+
+function renderTasks() {
+  const data = state.tasks;
+  if (!data) return;
+
+  fillFilter($('#task-engineer'), 'Everyone',
+    data.engineers.map((name) => ({ value: name, label: name })));
+  fillFilter($('#task-project'), 'Every project',
+    data.projects.map((p) => ({ value: p.number, label: `${p.number} — ${p.name}` })));
+  fillFilter($('#task-status-filter'), 'Any status',
+    data.statuses.map((name) => ({ value: name, label: name })));
+
+  renderTaskLoad(data);
+  renderTaskTable(data);
+}
+
+/** Keep a filter's chosen value across a re-render. */
+function fillFilter(select, allLabel, options) {
+  const chosen = select.value;
+  select.replaceChildren(
+    el('option', { value: 'all' }, allLabel),
+    ...options.map((o) => el('option', { value: o.value }, o.label)));
+  select.value = options.some((o) => o.value === chosen) ? chosen : 'all';
+}
+
+/** Who is overloaded, against the hours a working day actually holds. */
+function renderTaskLoad(data) {
+  const load = data.load;
+  const settings = data.settings;
+  const window_ = `${fmt.date(load.from)} → ${fmt.date(load.to)}`;
+  const verdictTone = { overloaded: 'bad', 'on plan': 'ok', underloaded: 'warn' };
+
+  $('#task-load').replaceChildren(el('section', { class: 'panel' },
+    el('h3', {}, 'Who is loaded, and who is not'),
+    el('p', { class: 'muted' },
+      `Open work due in the next ${load.weeks} week(s) — ${window_} — against `
+      + `${fmt.int(load.working_days)} working days of `
+      + `${num(load.hours_per_day)} hours (${settings.day_start}–${settings.day_end}), `
+      + `so ${fmt.hours(load.capacity_hours)} hours each. A shared task counts `
+      + 'only its share against each person. Overdue work is counted too; '
+      + 'anything past the window is not.'),
+    el('div', { class: 'load-grid' },
+      data.engineers.map((name) => {
+        const e = load.per_engineer[name] || {};
+        const pct = Math.round((e.load || 0) * 100);
+        const tone_ = verdictTone[e.verdict] || '';
+        return el('div', { class: 'load-card' },
+          el('div', { class: 'load-head' },
+            el('span', { class: 'eng-name' },
+              el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
+              name),
+            el('span', { class: `pill pill-${tone_ || 'info'}` }, e.verdict || '—')),
+          el('span', { class: `progress-track ${tone_}`,
+            style: 'width:100%;height:9px' },
+            el('span', { style: `width:${Math.min(100, pct)}%` })),
+          el('div', { class: 'load-figures' },
+            el('span', {}, el('b', { class: tone_ ? `v-${tone_}` : '' },
+              `${pct}%`), ' of capacity'),
+            el('span', {}, `${fmt.hours(e.hours + e.overdue_hours)} h · `
+              + `${num(e.days)} day(s)`)),
+          el('div', { class: 'load-detail' },
+            e.overtime_hours
+              ? el('div', { class: 'v-bad' },
+                  `${fmt.hours(e.overtime_hours)} h beyond the working day — `
+                  + 'overtime, or work that has to move')
+              : el('div', { class: 'muted' },
+                  `${fmt.hours(e.spare_hours)} h still free`),
+            el('div', { class: 'muted' },
+              `${fmt.int(e.tasks)} due · ${fmt.int(e.overdue_tasks)} overdue`
+              + ` · ${fmt.int(e.undated_tasks)} with no date`
+              + ` · ${fmt.hours(e.later_hours)} h later on`),
+            e.actual_hours
+              ? el('div', { class: 'muted' },
+                  `${fmt.hours(e.actual_hours)} h actually spent so far`)
+              : null));
+      })),
+    load.unassigned.tasks
+      ? el('div', { class: 'msg msg-warn' },
+          `${fmt.int(load.unassigned.tasks)} task(s) worth `
+          + `${fmt.hours(load.unassigned.hours)} h belong to nobody yet.`)
+      : null));
+}
+
+function taskFilters() {
+  return {
+    engineer: $('#task-engineer').value,
+    project: $('#task-project').value,
+    status: $('#task-status-filter').value,
+    search: $('#task-search').value.trim().toLowerCase(),
+    showDone: $('#task-show-done').checked,
+  };
+}
+
+function renderTaskTable(data) {
+  const f = taskFilters();
+  const rows = data.tasks.filter((t) => {
+    if (!f.showDone && t.done) return false;
+    if (f.engineer !== 'all' && !t.assignees.includes(f.engineer)) return false;
+    if (f.project !== 'all' && t.project_number !== f.project) return false;
+    if (f.status !== 'all' && t.status !== f.status) return false;
+    if (!f.search) return true;
+    return `${t.name} ${t.definition} ${t.deliverable_name} ${t.project_number}`
+      .toLowerCase().includes(f.search);
+  }).sort(taskOrder);
+
+  const hidden = data.tasks.filter((t) => t.done).length;
+  const statusPillFor = (status) => (
+    status === 'Done' ? 'pill-ok'
+      : status === 'Blocked' ? 'pill-bad'
+        : status === 'In progress' ? 'pill-warn' : 'pill-info');
+
+  $('#task-body').replaceChildren(
+    el('p', { class: 'muted' },
+      `${fmt.int(rows.length)} task(s) shown`
+      + (f.showDone || !hidden ? '' : ` · ${fmt.int(hidden)} done and hidden`)),
+    el('table', { class: 'tasks-table' },
+      el('thead', {}, el('tr', {},
+        ['Task', 'For', 'Assigned to', 'Required (h)', 'Actual (h)', 'Due',
+          'Status', '']
+          .map((h, i) => el('th', { class: i >= 3 && i <= 4 ? 'num' : '' }, h)))),
+      el('tbody', {}, rows.length === 0
+        ? el('tr', {}, el('td', { colspan: 8 },
+            el('div', { class: 'empty' },
+              data.tasks.length ? 'No task matches these filters.'
+                : 'No tasks yet. Add one, or let a deliverable date fill in its week.')))
+        : rows.map((task) => el('tr', {
+            class: `clickable ${task.done ? 'row-done' : ''}`,
+            onclick: () => openTaskModal(task),
+          },
+          el('td', {},
+            el('div', { class: 'task-name' }, task.name,
+              task.kind !== 'Task'
+                ? el('span', { class: 'pill pill-info tag' }, task.kind) : null),
+            task.definition
+              ? el('div', { class: 'muted small' }, task.definition) : null),
+          el('td', { class: 'wide' },
+            task.project_number
+              ? el('div', { class: 'code' }, task.project_number) : null,
+            task.deliverable_name
+              ? el('div', { class: 'muted small' }, task.deliverable_name) : null),
+          el('td', {},
+            el('div', { class: 'who' }, task.assignees.length
+              ? task.assignees.map((name) => el('span', { class: 'who-chip' },
+                  el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
+                  name))
+              : el('span', { class: 'pill pill-warn' }, 'nobody')),
+            task.shared
+              ? el('div', { class: 'muted small' },
+                  `shared — ${num(task.hours_each)} h each`)
+              : null),
+          el('td', { class: 'num' }, task.required_hours === null
+            ? '—' : fmt.hours(task.required_hours)),
+          // Actual against required only means something once the work is
+          // finished; until then it is simply how far along it is.
+          el('td', { class: 'num' }, task.actual_hours === null ? '—'
+            : (task.done && task.required_hours
+              ? toned(task.actual_hours - task.required_hours,
+                (v) => (v > 0.01 ? 'bad' : 'ok'),
+                () => fmt.hours(task.actual_hours))
+              : fmt.hours(task.actual_hours))),
+          el('td', {}, dueCell(task)),
+          el('td', {}, el('span', { class: `pill ${statusPillFor(task.status)}` },
+            task.status)),
+          el('td', { class: 'row-actions' },
+            el('button', {
+              class: 'btn btn-sm', type: 'button',
+              onclick: (event) => { event.stopPropagation(); toggleTaskDone(task); },
+            }, task.done ? 'Reopen' : 'Done'),
+            el('button', {
+              class: 'btn btn-sm btn-ghost', type: 'button',
+              onclick: (event) => { event.stopPropagation(); deleteTask(task); },
+            }, '✕'))))))); 
+}
+
+/** Overdue first, then by date, then the undated. */
+function taskOrder(a, b) {
+  if (a.done !== b.done) return a.done ? 1 : -1;
+  if (!a.due && !b.due) return a.id - b.id;
+  if (!a.due) return 1;
+  if (!b.due) return -1;
+  return a.due < b.due ? -1 : a.due > b.due ? 1 : a.id - b.id;
+}
+
+function dueCell(task) {
+  if (!task.due) return el('span', { class: 'muted' }, 'no date');
+  const today = new Date().toISOString().slice(0, 10);
+  const late = !task.done && task.due < today;
+  return el('span', { class: late ? 'v-bad' : '' }, fmt.date(task.due),
+    late ? el('span', { class: 'muted small' }, ' overdue') : null);
+}
+
+/* -- editing ----------------------------------------------------------- */
+
+function taskFields(data, task) {
+  const deliverables = data.deliverables.map((d) => ({
+    value: String(d.row),
+    label: `${d.project_number} — ${d.name}${d.date ? ` (${d.date})` : ''}`,
+  }));
+  return [
+    { name: 'name', label: 'Task', full: true },
+    { name: 'definition', label: 'What it is', type: 'textarea', full: true,
+      hint: 'the definition of the task' },
+    { name: 'assignees', label: 'Assigned to', type: 'checks', full: true,
+      options: data.engineers,
+      hint: 'more than one shares the hours between them' },
+    { name: 'required_hours', label: 'Required hours', type: 'number', step: '0.5',
+      min: '0' },
+    { name: 'actual_hours', label: 'Actual hours taken', type: 'number', step: '0.5',
+      min: '0', hint: 'typed here, not from the timesheet' },
+    { name: 'project_number', label: 'Project', type: 'select',
+      options: [{ value: '', label: '—' },
+        ...data.projects.map((p) => ({ value: p.number, label: p.number }))] },
+    { name: 'deliverable_row', label: 'Feeds deliverable', type: 'select',
+      options: [{ value: '', label: '—' }, ...deliverables] },
+    { name: 'start', label: 'Start', type: 'date' },
+    { name: 'due', label: 'Due', type: 'date' },
+    { name: 'status', label: 'Status', type: 'select', options: data.statuses },
+    { name: 'kind', label: 'Kind', type: 'select', options: data.kinds },
+    { name: 'notes', label: 'Notes', type: 'textarea', full: true },
+  ];
+}
+
+function openTaskModal(task) {
+  const data = state.tasks;
+  const values = task ? {
+    ...task,
+    deliverable_row: task.deliverable_row === null ? '' : String(task.deliverable_row),
+    project_number: task.project_number || '',
+  } : { status: data.statuses[0], kind: data.kinds[0] };
+
+  openModal(task ? `Task ${task.id}` : 'New task', taskFields(data, task),
+    async () => {
+      const body = modalValues();
+      const chosen = data.deliverables.find(
+        (d) => String(d.row) === String(body.deliverable_row));
+      body.deliverable_name = chosen ? chosen.name : '';
+      if (chosen && !body.project_number) body.project_number = chosen.project_number;
+      const path = task ? `/api/tasks/${task.id}` : '/api/tasks';
+      const result = await api(path, { method: task ? 'PUT' : 'POST', body });
+      markSaved(result.save);
+      closeModal();
+      toast(task ? 'Task updated.' : 'Task added.', 'ok');
+      await loadTasks();
+    }, values);
+}
+
+async function toggleTaskDone(task) {
+  try {
+    const result = await api(`/api/tasks/${task.id}`, {
+      method: 'PUT',
+      body: { ...task, status: task.done ? 'In progress' : 'Done' },
+    });
+    markSaved(result.save);
+    await loadTasks();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function deleteTask(task) {
+  const series = task.series
+    && window.confirm(
+      `${task.name}\n\nThis task is part of a generated series `
+      + `(${task.series}). Delete the whole series?\n\n`
+      + 'Cancel deletes only this one.');
+  try {
+    const result = series
+      ? await api('/api/tasks/series/delete',
+        { method: 'POST', body: { series: task.series } })
+      : await api(`/api/tasks/${task.id}`, { method: 'DELETE' });
+    markSaved(result.save);
+    toast(series ? `${result.deleted} task(s) deleted.` : 'Task deleted.', 'ok');
+    await loadTasks();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+/* -- the things nobody should type fifty times ------------------------- */
+
+function openWorkingDayModal() {
+  const data = state.tasks;
+  const settings = data.settings;
+  openModal('The working day', [
+    { name: 'day_start', label: 'Day starts', type: 'time' },
+    { name: 'day_end', label: 'Day ends', type: 'time',
+      hint: 'anything past this is overtime, so it is not counted as capacity' },
+    { name: 'work_days', label: 'Working days', type: 'checks', full: true,
+      options: data.weekdays.map((name, index) => ({ value: String(index), label: name })) },
+    { name: 'horizon_weeks', label: 'Load window (weeks)', type: 'number', min: '1',
+      max: '52' },
+    { name: 'submission_lead_days', label: 'Run-up to a deliverable (days)',
+      type: 'number', min: '1', max: '60' },
+    { name: 'submission_hours_per_day', label: 'Submission hours a day',
+      type: 'number', step: '0.5', min: '0' },
+    { name: 'meeting_hours', label: 'Weekly meeting hours', type: 'number',
+      step: '0.5', min: '0' },
+    { name: 'meeting_weeks', label: 'Meeting series (weeks)', type: 'number',
+      min: '1', max: '104' },
+  ], async () => {
+    const body = modalValues();
+    body.work_days = (body.work_days || []).map(Number);
+    const result = await api('/api/tasks/settings', { method: 'PUT', body });
+    markSaved(result.save);
+    closeModal();
+    toast('Working day saved.', 'ok');
+    await loadTasks();
+  }, { ...settings, work_days: (settings.work_days || []).map(String) });
+}
+
+function openSubmissionModal() {
+  const data = state.tasks;
+  const dated = data.deliverables.filter((d) => d.date);
+  openModal('Submission tasks', [
+    { name: 'deliverable_row', label: 'Deliverable', type: 'select', full: true,
+      hint: 'or leave on every deliverable still ahead',
+      options: [{ value: '', label: 'Every deliverable still ahead' },
+        ...dated.map((d) => ({
+          value: String(d.row), label: `${d.project_number} — ${d.name} (${d.date})`,
+        }))] },
+    { name: 'include_past', label: 'Include dates already past', type: 'checks',
+      full: true, options: [{ value: 'yes', label: 'Yes, generate for past dates too' }] },
+  ], async () => {
+    const body = modalValues();
+    body.include_past = (body.include_past || []).length > 0;
+    const result = await api('/api/tasks/generate/submissions',
+      { method: 'POST', body });
+    markSaved(result.save);
+    closeModal();
+    toast(result.added
+      ? `${result.added} task(s) added across ${result.deliverables} deliverable(s).`
+      : (result.past_deliverables
+        ? `Nothing to add — every dated deliverable is already past `
+          + `(${result.past_deliverables} of them). Tick the box to include those.`
+        : 'Nothing to add — every dated deliverable already has its week.'),
+    result.added ? 'ok' : 'warn');
+    await loadTasks();
+  }, { deliverable_row: '' });
+}
+
+function openMeetingModal() {
+  const data = state.tasks;
+  const settings = data.settings;
+  const monday = new Date();
+  openModal('Weekly meeting', [
+    { name: 'project_number', label: 'For', type: 'select', full: true,
+      options: [{ value: '', label: 'The unit as a whole' },
+        ...data.projects.map((p) => ({
+          value: p.number, label: `${p.number} — ${p.name}`,
+        }))] },
+    { name: 'weekday', label: 'Every', type: 'select',
+      options: data.weekdays.map((name, index) => ({
+        value: String(index), label: name,
+      })) },
+    { name: 'hours', label: 'Hours', type: 'number', step: '0.5', min: '0' },
+    { name: 'weeks', label: 'For how many weeks', type: 'number', min: '1',
+      max: '104' },
+    { name: 'start', label: 'Starting', type: 'date',
+      hint: 'the series starts on the first such day from here' },
+  ], async () => {
+    const result = await api('/api/tasks/generate/meetings',
+      { method: 'POST', body: modalValues() });
+    markSaved(result.save);
+    closeModal();
+    toast(result.added
+      ? `${result.added} weekly meeting(s) added from ${fmt.date(result.from)}.`
+      : 'That series is already in the list.', result.added ? 'ok' : 'warn');
+    await loadTasks();
+  }, {
+    project_number: '',
+    weekday: String(settings.meeting_weekday),
+    hours: settings.meeting_hours,
+    weeks: settings.meeting_weeks,
+    start: monday.toISOString().slice(0, 10),
+  });
 }

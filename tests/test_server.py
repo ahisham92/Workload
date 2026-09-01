@@ -797,3 +797,77 @@ class TestTheStackIsWidenedOnOpen:
         assert first._stack_raised_to == 25000
         again = WorkloadService(workbook_copy)
         assert again._stack_raised_to is None
+
+
+class TestTasks:
+    """The task tab's endpoints. Nothing here may touch the model's figures."""
+
+    def test_the_list_carries_everything_the_tab_needs(self, server):
+        status, data = call(server, "/api/tasks")
+        assert status == 200
+        assert data["tasks"] == []
+        assert data["engineers"] == ["Ahmed", "Osama", "Kirolos"]
+        assert data["statuses"][0] == "Not started"
+        assert data["settings"]["day_end"] == "17:30"
+        assert data["load"]["hours_per_day"] == 8.5
+        assert data["deliverables"] and "date" in data["deliverables"][0]
+
+    def test_a_task_can_be_added_changed_and_dropped(self, server):
+        status, added = call(server, "/api/tasks", "POST", {
+            "name": "Check the mooring loads", "assignees": ["Osama", "Kirolos"],
+            "required_hours": 10, "due": "2026-09-18",
+        })
+        assert status == 200
+        assert added["task"]["hours_each"] == 5.0
+        assert added["task"]["shared"] is True
+
+        task_id = added["task"]["id"]
+        status, changed = call(server, f"/api/tasks/{task_id}", "PUT", {
+            "name": "Check the mooring loads", "assignees": ["Osama"],
+            "required_hours": 10, "actual_hours": 12, "status": "Done",
+        })
+        assert status == 200 and changed["task"]["done"] is True
+
+        status, gone = call(server, f"/api/tasks/{task_id}", "DELETE")
+        assert status == 200 and gone["remaining"] == 0
+
+    def test_a_rejected_task_says_why(self, server):
+        status, body = call(server, "/api/tasks", "POST",
+                            {"name": "", "assignees": ["Nobody"]})
+        assert status == 422
+        assert any("needs a name" in e for e in body["errors"])
+        assert any("Nobody" in e for e in body["errors"])
+
+    def test_the_working_day_is_stored_and_checked(self, server):
+        status, saved = call(server, "/api/tasks/settings", "PUT",
+                             {"day_end": "18:00", "work_days": [6, 0, 1, 2, 3]})
+        assert status == 200
+        assert saved["settings"]["day_end"] == "18:00"
+        assert saved["settings"]["work_days"] == [0, 1, 2, 3, 6]
+
+        status, body = call(server, "/api/tasks/settings", "PUT",
+                            {"day_start": "half nine"})
+        assert status == 422 and body["errors"]
+
+    def test_the_weekly_meeting_button_fills_the_series(self, server):
+        status, made = call(server, "/api/tasks/generate/meetings", "POST",
+                            {"start": "2026-09-07", "weeks": 4})
+        assert status == 200 and made["added"] == 4
+        _status, data = call(server, "/api/tasks")
+        assert len(data["tasks"]) == 4
+        assert all(t["kind"] == "Meeting" for t in data["tasks"])
+
+        _status, series = call(server, "/api/tasks/series/delete", "POST",
+                               {"series": made["series"]})
+        assert series["deleted"] == 4
+
+    def test_submission_tasks_come_from_a_deliverable_date(self, server):
+        _status, deliverables = call(server, "/api/deliverables")
+        target = deliverables["deliverables"][0]
+        call(server, f"/api/deliverables/{target['row']}", "PUT",
+             {**target, "status_date": "2027-01-20"})
+        status, made = call(server, "/api/tasks/generate/submissions", "POST", {})
+        assert status == 200 and made["added"] > 0
+        _status, data = call(server, "/api/tasks")
+        assert all(t["deliverable_row"] == target["row"] for t in data["tasks"])
+        assert all(t["kind"] == "Submission" for t in data["tasks"])
