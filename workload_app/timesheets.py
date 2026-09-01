@@ -46,6 +46,8 @@ class ParsedTimesheet:
     headers: List[str]
     rows: List[List[CellValue]]           # in TS sheet column order
     mapped: Dict[str, str] = field(default_factory=dict)   # export -> TS header
+    dropped: List[Dict[str, Any]] = field(default_factory=list)
+    dropped_rows: int = 0
     unmapped_export_headers: List[str] = field(default_factory=list)
     missing_ts_headers: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -78,6 +80,8 @@ class ParsedTimesheet:
             "engineer": self.engineer,
             "source_name": self.source_name,
             "row_count": len(self.rows),
+            "dropped_rows": self.dropped_rows,
+            "dropped": self.dropped,
             "mapped_columns": len(self.mapped),
             "unmapped_export_headers": self.unmapped_export_headers,
             "missing_ts_headers": self.missing_ts_headers,
@@ -225,8 +229,16 @@ def _coerce_number(value: Any) -> Optional[float]:
 
 def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
           *, name_pattern: Optional[str] = None,
-          known_job_numbers: Optional[Iterable[str]] = None) -> ParsedTimesheet:
-    """Parse an export and line it up with the TS sheet's own column order."""
+          known_job_numbers: Optional[Iterable[str]] = None,
+          registered_only: bool = False,
+          keep_job_types: Optional[Iterable[str]] = None) -> ParsedTimesheet:
+    """Parse an export and line it up with the TS sheet's own column order.
+
+    With ``registered_only`` the rows are narrowed to work the workbook can
+    actually account for -- the projects in the register, the non-project
+    charge codes, and proposal effort -- which is what keeps the consolidated
+    sheet inside the row limit the workbook imposes.
+    """
     grid = read_grid(filename, data)
     if not grid:
         raise ImportError_(f"{filename!r} is empty.")
@@ -291,8 +303,62 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
         result.errors.append("No data rows found below the header row.")
         return result
 
+    if registered_only:
+        _narrow_to_registered(result, known_job_numbers or (), keep_job_types)
+
+    if not result.rows:
+        result.errors.append(
+            "Every row was for a job number outside the project register, so "
+            "there is nothing to import. Add the projects first, or turn the "
+            "filter off."
+        )
+        return result
+
     _summarise(result, name_pattern, known_job_numbers)
     return result
+
+
+def _narrow_to_registered(result: ParsedTimesheet, known: Iterable[str],
+                          keep_job_types: Optional[Iterable[str]]) -> None:
+    """Drop rows the workbook has no project for, and say what went."""
+    index = {h: i for i, h in enumerate(result.headers)}
+    col_job = index[cfg.TS_KEY_FIELDS["job_number"]]
+    col_type = index.get(cfg.TS_KEY_FIELDS["job_type"])
+    col_hours = index[cfg.TS_KEY_FIELDS["total_hours"]]
+    keep_codes = {str(code).strip() for code in known if str(code).strip()}
+    keep_types = {str(t) for t in (keep_job_types or ())}
+
+    kept: List[List[CellValue]] = []
+    dropped: Dict[str, Dict[str, Any]] = {}
+    for row in result.rows:
+        code = row[col_job]
+        code = code.strip() if isinstance(code, str) else ""
+        job_type = row[col_type] if col_type is not None else None
+        if code in keep_codes or (job_type in keep_types if job_type else False):
+            kept.append(row)
+            continue
+        entry = dropped.setdefault(code or "(no job number)",
+                                   {"code": code or "(no job number)",
+                                    "rows": 0, "hours": 0.0})
+        entry["rows"] += 1
+        hours = row[col_hours]
+        if isinstance(hours, (int, float)):
+            entry["hours"] += float(hours)
+
+    result.dropped_rows = len(result.rows) - len(kept)
+    result.dropped = sorted(
+        ({**entry, "hours": round(entry["hours"], 2)} for entry in dropped.values()),
+        key=lambda item: -item["rows"],
+    )
+    result.rows = kept
+    if result.dropped_rows:
+        top = ", ".join(f"{d['code']} ({d['rows']})" for d in result.dropped[:6])
+        more = "" if len(result.dropped) <= 6 else f", and {len(result.dropped) - 6} more"
+        result.warnings.append(
+            f"{result.dropped_rows:,} row(s) left out because their job number is "
+            f"not in the project register: {top}{more}. They would not have rolled "
+            f"up to any project anyway."
+        )
 
 
 def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],

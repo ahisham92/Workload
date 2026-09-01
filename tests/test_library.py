@@ -55,30 +55,63 @@ class TestValidation:
         assert "Timesheet Raw" in missing
 
 
-class TestRecent:
-    def test_a_workbook_is_remembered_and_comes_back_first(self, workbook_copy, tmp_path):
-        second = tmp_path / "Another.xlsx"
+class TestUnits:
+    """A unit is a name and the workbook that belongs to it."""
+
+    def test_a_unit_keeps_the_name_it_was_given(self, workbook_copy):
+        library.save_unit("Marine Structures", workbook_copy)
+        unit = library.units()[0]
+        assert unit["name"] == "Marine Structures"
+        assert unit["workbook"] == str(workbook_copy)
+        assert unit["file_name"] == workbook_copy.name
+        assert unit["exists"] is True
+
+    def test_several_units_sit_side_by_side(self, workbook_copy, tmp_path):
+        second = tmp_path / "Ports.xlsx"
         second.write_bytes(workbook_copy.read_bytes())
-        library.remember(workbook_copy)
-        library.remember(second)
-        assert [r["path"] for r in library.recent()][0] == str(second)
+        library.save_unit("Marine Structures", workbook_copy)
+        library.save_unit("Ports and Coastal", second)
+        assert {u["name"] for u in library.units()} == {
+            "Marine Structures", "Ports and Coastal"}
 
-    def test_remembering_the_same_file_twice_does_not_duplicate_it(self, workbook_copy):
-        library.remember(workbook_copy)
-        library.remember(workbook_copy)
-        assert len(library.recent()) == 1
+    def test_the_most_recently_opened_comes_first(self, workbook_copy, tmp_path):
+        second = tmp_path / "Ports.xlsx"
+        second.write_bytes(workbook_copy.read_bytes())
+        library.save_unit("Marine Structures", workbook_copy)
+        library.save_unit("Ports and Coastal", second)
+        assert library.units()[0]["name"] == "Ports and Coastal"
+        library.touch_unit(library.units()[-1]["id"])
+        assert library.units()[0]["name"] == "Marine Structures"
 
-    def test_a_file_that_has_gone_away_drops_out_of_the_list(self, tmp_path):
+    def test_saving_the_same_unit_twice_does_not_duplicate_it(self, workbook_copy):
+        library.save_unit("Marine Structures", workbook_copy)
+        library.save_unit("Marine Structures", workbook_copy)
+        assert len(library.units()) == 1
+
+    def test_a_unit_whose_file_has_gone_is_kept_but_flagged(self, tmp_path):
         gone = tmp_path / "gone.xlsx"
         gone.write_bytes(b"x")
-        library.remember(gone)
+        library.save_unit("Gone", gone)
         gone.unlink()
-        assert library.recent() == []
+        unit = library.units()[0]
+        assert unit["exists"] is False
+        assert unit["name"] == "Gone"
 
-    def test_forget_removes_one(self, workbook_copy):
-        library.remember(workbook_copy)
-        library.forget(workbook_copy)
-        assert library.recent() == []
+    def test_forgetting_a_unit_leaves_the_workbook_alone(self, workbook_copy):
+        unit = library.save_unit("Marine Structures", workbook_copy)
+        library.forget_unit(unit["id"])
+        assert library.units() == []
+        assert workbook_copy.is_file()
+
+    def test_a_unit_can_be_renamed(self, workbook_copy):
+        unit = library.save_unit("Marnie Structures", workbook_copy)
+        library.rename_unit(unit["id"], "Marine Structures")
+        assert library.units()[0]["name"] == "Marine Structures"
+
+    def test_find_unit(self, workbook_copy):
+        unit = library.save_unit("Marine Structures", workbook_copy)
+        assert library.find_unit(unit["id"])["name"] == "Marine Structures"
+        assert library.find_unit("nope") is None
 
 
 class TestLookingAround:

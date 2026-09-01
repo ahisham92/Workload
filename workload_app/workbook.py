@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -115,9 +116,8 @@ class Project:
     cac_override: Optional[float] = None
     notes: str = ""
     manual_percent: Optional[float] = None
-    manual_share_ahmed: Optional[float] = None
-    manual_share_osama: Optional[float] = None
-    manual_share_kirolos: Optional[float] = None
+    #: Fallback split, engineer short name -> fraction.
+    manual_shares: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -131,9 +131,7 @@ class Project:
             "cac_override": self.cac_override,
             "notes": self.notes,
             "manual_percent": self.manual_percent,
-            "manual_share_ahmed": self.manual_share_ahmed,
-            "manual_share_osama": self.manual_share_osama,
-            "manual_share_kirolos": self.manual_share_kirolos,
+            "manual_shares": dict(self.manual_shares),
         }
 
 
@@ -146,9 +144,8 @@ class Deliverable:
     phase_weight: Optional[float] = None
     step_no: Optional[int] = None
     status_date: Optional[_dt.date] = None
-    share_ahmed: Optional[float] = None
-    share_osama: Optional[float] = None
-    share_kirolos: Optional[float] = None
+    #: Engineer short name -> fraction of this deliverable.
+    shares: Dict[str, Optional[float]] = field(default_factory=dict)
     notes: str = ""
     ts_phase: Optional[int] = None
     actual_start: Optional[_dt.date] = None
@@ -167,9 +164,7 @@ class Deliverable:
             "phase_weight": self.phase_weight,
             "step_no": self.step_no,
             "status_date": iso(self.status_date),
-            "share_ahmed": self.share_ahmed,
-            "share_osama": self.share_osama,
-            "share_kirolos": self.share_kirolos,
+            "shares": dict(self.shares),
             "notes": self.notes,
             "ts_phase": self.ts_phase,
         }
@@ -327,18 +322,85 @@ class WorkloadWorkbook:
         return lookup.get((type_code, step_no))
 
     def engineers(self) -> List[Engineer]:
+        """The team, read from Work Calendar rather than assumed.
+
+        A workbook set up for another unit names different people, so nothing
+        here may depend on who they are or how many of them there are.
+        """
+        return self._cached("engineers", self._read_engineers)
+
+    def _read_engineers(self) -> List[Engineer]:
         cols = cfg.ENGINEER_COLUMNS
         years = self._availability_years()
+        availability_rows = self._availability_rows()
         out: List[Engineer] = []
-        for short_name, row in cfg.ENGINEER_ROWS.items():
+        for offset in range(cfg.ENGINEER_MAX_ROWS):
+            row = cfg.ENGINEER_FIRST_ROW + offset
             name = self._wb.get_text(cfg.SHEET_CALENDAR, f"{cols['short_name']}{row}")
+            if not name:
+                break
             out.append(Engineer(
-                short_name=name or short_name,
-                pattern=self._wb.get_text(cfg.SHEET_CALENDAR, f"{cols['pattern']}{row}"),
+                short_name=name,
+                pattern=self._wb.get_text(cfg.SHEET_CALENDAR, f"{cols['pattern']}{row}")
+                or f"*{name}*",
                 available_hours=self._wb.get_number(
                     cfg.SHEET_CALENDAR, f"{cols['available_hours']}{row}"),
-                availability=self._availability_for(short_name, years),
+                availability=self._availability_for(
+                    availability_rows.get(name), years),
             ))
+        return out
+
+    def engineer_names(self) -> List[str]:
+        return [e.short_name for e in self.engineers()]
+
+    def ts_sheets(self) -> "OrderedDict[str, str]":
+        """Short name -> paste-target sheet, in the order they are stacked.
+
+        Matched by name where the sheet is called ``TS <short name>``, and
+        otherwise by position, so a renamed sheet still lines up.
+        """
+        return self._cached("ts_sheets", self._read_ts_sheets)
+
+    def _read_ts_sheets(self) -> "OrderedDict[str, str]":
+        available = [name for name in self._wb.sheet_names
+                     if name.startswith(cfg.TS_SHEET_PREFIX)]
+        stacked = [name for name in capacity.stack_order(self._wb)
+                   if name in available]
+        ordered = stacked + [n for n in available if n not in stacked]
+        mapping: "OrderedDict[str, str]" = OrderedDict()
+        spare = list(ordered)
+        for engineer in self.engineers():
+            wanted = f"{cfg.TS_SHEET_PREFIX}{engineer.short_name}"
+            if wanted in spare:
+                mapping[engineer.short_name] = wanted
+                spare.remove(wanted)
+            else:
+                mapping[engineer.short_name] = None      # filled in below
+        for short_name, sheet in list(mapping.items()):
+            if sheet is None:
+                mapping[short_name] = spare.pop(0) if spare else None
+        return OrderedDict(
+            (name, sheet) for name, sheet in mapping.items() if sheet
+        )
+
+    def ts_sheet(self, engineer: str) -> str:
+        sheets = self.ts_sheets()
+        if engineer not in sheets:
+            raise ValidationError([
+                f"{engineer!r} is not one of this workbook's engineers "
+                f"({', '.join(sheets) or 'none found'})."
+            ])
+        return sheets[engineer]
+
+    def _availability_rows(self) -> Dict[str, int]:
+        """Name -> its row in the team availability block on Inputs."""
+        out: Dict[str, int] = {}
+        for offset in range(cfg.AVAILABILITY_MAX_ROWS):
+            row = cfg.AVAILABILITY_FIRST_ROW + offset
+            name = self._wb.get_text(cfg.SHEET_INPUTS, f"A{row}")
+            if not name:
+                break
+            out[name] = row
         return out
 
     def _availability_years(self) -> Dict[str, int]:
@@ -354,8 +416,8 @@ class WorkloadWorkbook:
                 years[col] = int(value)
         return years
 
-    def _availability_for(self, short_name: str, years: Dict[str, int]) -> Dict[int, float]:
-        row = cfg.AVAILABILITY_ROWS.get(short_name)
+    def _availability_for(self, row: Optional[int], years: Dict[str, int]
+                          ) -> Dict[int, float]:
         if row is None:
             return {}
         out: Dict[int, float] = {}
@@ -417,8 +479,52 @@ class WorkloadWorkbook:
             "capacity": {
                 "projects": cfg.PROJECT_LAST_ROW - cfg.PROJECT_FIRST_ROW + 1,
                 "deliverables": cfg.DELIVERABLE_LAST_ROW - cfg.DELIVERABLE_FIRST_ROW + 1,
+                "project_types": (cfg.PROJECT_TYPES_LAST_ROW
+                                  - cfg.PROJECT_TYPES_FIRST_ROW + 1),
+                "credit_steps": cfg.RULES_LAST_ROW - cfg.RULES_FIRST_ROW + 1,
             },
         }
+
+    # -- engineer splits -------------------------------------------------
+    def _read_shares(self, sheet: str, row: int, columns: Sequence[str]
+                     ) -> Dict[str, Optional[float]]:
+        """Read a split into ``{engineer: fraction}``, by column position."""
+        names = self.engineer_names()
+        out: Dict[str, Optional[float]] = {}
+        for name, col in zip(names, columns):
+            out[name] = self._wb.get_number(sheet, f"{col}{row}")
+        return out
+
+    def _write_shares(self, sheet: str, row: int, columns: Sequence[str],
+                      shares: Dict[str, Optional[float]]) -> None:
+        for name, col in zip(self.engineer_names(), columns):
+            self._set(sheet, f"{col}{row}", shares.get(name))
+
+    def _validate_shares(self, data: Dict[str, Any], label: str,
+                         errors: List[str]) -> Dict[str, Optional[float]]:
+        """Coerce a submitted split and check it adds up.
+
+        Accepts ``{"shares": {...}}`` or a flat ``share_<name>`` per engineer,
+        so the same payload shape works whoever the team happens to be.
+        """
+        raw = data.get("shares") if isinstance(data.get("shares"), dict) else {}
+        out: Dict[str, Optional[float]] = {}
+        for name in self.engineer_names():
+            value = raw.get(name)
+            if value is None:
+                value = data.get(f"share_{name.lower()}")
+            share = as_fraction(value)
+            if share is not None and not 0 <= share <= 1:
+                errors.append(f"{name}'s share must be between 0% and 100%.")
+            out[name] = share
+        total = sum(v for v in out.values() if v)
+        if total and abs(total - 1.0) > 1e-4:
+            errors.append(
+                f"{label} must total 100% across "
+                f"{', '.join(self.engineer_names())} "
+                f"(it totals {total * 100:.1f}%)."
+            )
+        return out
 
     # -- projects --------------------------------------------------------
     def projects(self) -> List[Project]:
@@ -444,12 +550,8 @@ class WorkloadWorkbook:
                 notes=self._wb.get_text(cfg.SHEET_INPUTS, f"{cols['notes']}{row}"),
                 manual_percent=self._wb.get_number(
                     cfg.SHEET_INPUTS, f"{cols['manual_percent']}{row}"),
-                manual_share_ahmed=self._wb.get_number(
-                    cfg.SHEET_INPUTS, f"{cols['manual_share_ahmed']}{row}"),
-                manual_share_osama=self._wb.get_number(
-                    cfg.SHEET_INPUTS, f"{cols['manual_share_osama']}{row}"),
-                manual_share_kirolos=self._wb.get_number(
-                    cfg.SHEET_INPUTS, f"{cols['manual_share_kirolos']}{row}"),
+                manual_shares=self._read_shares(
+                    cfg.SHEET_INPUTS, row, cfg.PROJECT_MANUAL_SHARE_COLUMNS),
             ))
         return out
 
@@ -513,19 +615,19 @@ class WorkloadWorkbook:
         if manual_percent is not None and not 0 <= manual_percent <= 1:
             errors.append("Manual % complete must be between 0% and 100%.")
 
-        shares = {
-            key: as_fraction(data.get(f"manual_share_{key}"))
-            for key in ("ahmed", "osama", "kirolos")
-        }
-        for key, value in shares.items():
-            if value is not None and not 0 <= value <= 1:
-                errors.append(f"{key.title()}'s fallback share must be 0-100%.")
-        given = [v for v in shares.values() if v]
-        if given and abs(sum(given) - 1.0) > 1e-4:
-            errors.append(
-                "The fallback split must total 100% (it is used only while the "
-                "deliverables carry no split of their own)."
-            )
+        manual = dict(data)
+        if isinstance(data.get("manual_shares"), dict):
+            manual["shares"] = data["manual_shares"]
+        else:
+            manual["shares"] = {
+                name: data.get(f"manual_share_{name.lower()}")
+                for name in self.engineer_names()
+            }
+        shares = self._validate_shares(
+            manual,
+            "The fallback split (used only while the deliverables carry none)",
+            errors,
+        )
 
         project = Project(
             row=row or 0,
@@ -538,9 +640,7 @@ class WorkloadWorkbook:
             cac_override=as_number(data.get("cac_override")),
             notes=as_text(data.get("notes")),
             manual_percent=manual_percent,
-            manual_share_ahmed=shares["ahmed"],
-            manual_share_osama=shares["osama"],
-            manual_share_kirolos=shares["kirolos"],
+            manual_shares=shares,
         )
         return project, errors
 
@@ -557,12 +657,11 @@ class WorkloadWorkbook:
             "cac_override": project.cac_override,
             "notes": project.notes,
             "manual_percent": project.manual_percent,
-            "manual_share_ahmed": project.manual_share_ahmed,
-            "manual_share_osama": project.manual_share_osama,
-            "manual_share_kirolos": project.manual_share_kirolos,
         }
         for name, col in cols.items():
             self._set(cfg.SHEET_INPUTS, f"{col}{row}", values[name])
+        self._write_shares(cfg.SHEET_INPUTS, row,
+                           cfg.PROJECT_MANUAL_SHARE_COLUMNS, project.manual_shares)
 
     def add_project(self, data: Dict[str, Any]) -> Project:
         row = self._next_project_row()
@@ -608,6 +707,8 @@ class WorkloadWorkbook:
             self._clear_deliverable_row(deliverable.row)
         for col in cfg.PROJECT_INPUT_COLUMNS.values():
             self._set(cfg.SHEET_INPUTS, f"{col}{existing.row}", None)
+        for col in cfg.PROJECT_MANUAL_SHARE_COLUMNS:
+            self._set(cfg.SHEET_INPUTS, f"{col}{existing.row}", None)
         return {"row": existing.row, "deliverables_removed": len(attached)}
 
     # -- deliverables ----------------------------------------------------
@@ -641,12 +742,8 @@ class WorkloadWorkbook:
                 step_no=int(step) if step is not None else None,
                 status_date=self._wb.get_date(
                     cfg.SHEET_DELIVERABLES, f"{cols['status_date']}{row}"),
-                share_ahmed=self._wb.get_number(
-                    cfg.SHEET_DELIVERABLES, f"{cols['share_ahmed']}{row}"),
-                share_osama=self._wb.get_number(
-                    cfg.SHEET_DELIVERABLES, f"{cols['share_osama']}{row}"),
-                share_kirolos=self._wb.get_number(
-                    cfg.SHEET_DELIVERABLES, f"{cols['share_kirolos']}{row}"),
+                shares=self._read_shares(
+                    cfg.SHEET_DELIVERABLES, row, cfg.DELIVERABLE_SHARE_COLUMNS),
                 notes=self._wb.get_text(cfg.SHEET_DELIVERABLES, f"{cols['notes']}{row}"),
             )
             if row <= actuals_end:
@@ -694,13 +791,21 @@ class WorkloadWorkbook:
         self._cache.clear()
         return new_last
 
-    def validate_deliverable(self, data: Dict[str, Any], *, row: Optional[int] = None
+    def validate_deliverable(self, data: Dict[str, Any], *,
+                             row: Optional[int] = None,
+                             pending_project: Optional[str] = None
                              ) -> Tuple[Deliverable, List[str]]:
+        """Check a deliverable.
+
+        ``pending_project`` names a project being created in the same call, so
+        its deliverables are not rejected for belonging to a project that is
+        not in the register yet.
+        """
         errors: List[str] = []
         project_number = as_text(data.get("project_number"))
         if not project_number:
             errors.append("Pick the project this deliverable belongs to.")
-        elif self.project(project_number) is None:
+        elif project_number != pending_project and self.project(project_number) is None:
             errors.append(
                 f"{project_number!r} is not in the project register; add the "
                 "project first."
@@ -739,19 +844,7 @@ class WorkloadWorkbook:
                     f"{', '.join(str(s) for s in allowed) or 'none'})."
                 )
 
-        shares = {
-            key: as_fraction(data.get(f"share_{key}"))
-            for key in ("ahmed", "osama", "kirolos")
-        }
-        for key, value in shares.items():
-            if value is not None and not 0 <= value <= 1:
-                errors.append(f"{key.title()}'s share must be between 0% and 100%.")
-        total = sum(v for v in shares.values() if v)
-        if total and abs(total - 1.0) > 1e-4:
-            errors.append(
-                f"Ahmed / Osama / Kirolos must total 100% on a deliverable "
-                f"(they total {total * 100:.1f}%)."
-            )
+        shares = self._validate_shares(data, "The engineer split", errors)
 
         status_date = as_date(data.get("status_date"))
         if data.get("status_date") and status_date is None:
@@ -768,9 +861,7 @@ class WorkloadWorkbook:
             phase_weight=weight,
             step_no=step_no,
             status_date=status_date,
-            share_ahmed=shares["ahmed"],
-            share_osama=shares["osama"],
-            share_kirolos=shares["kirolos"],
+            shares=shares,
             notes=as_text(data.get("notes")),
             ts_phase=ts_phase,
         )
@@ -792,13 +883,12 @@ class WorkloadWorkbook:
             "phase_weight": deliverable.phase_weight,
             "step_no": deliverable.step_no,
             "status_date": deliverable.status_date,
-            "share_ahmed": deliverable.share_ahmed,
-            "share_osama": deliverable.share_osama,
-            "share_kirolos": deliverable.share_kirolos,
             "notes": deliverable.notes,
         }
         for name, col in cols.items():
             self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", values[name])
+        self._write_shares(cfg.SHEET_DELIVERABLES, row,
+                           cfg.DELIVERABLE_SHARE_COLUMNS, deliverable.shares)
 
         self.ensure_actuals_capacity(row)
         acols = cfg.ACTUALS_INPUT_COLUMNS
@@ -829,6 +919,8 @@ class WorkloadWorkbook:
     def _clear_deliverable_row(self, row: int) -> None:
         for col in cfg.DELIVERABLE_INPUT_COLUMNS.values():
             self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", None)
+        for col in cfg.DELIVERABLE_SHARE_COLUMNS:
+            self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", None)
         if row <= self.actuals_last_row():
             for col in cfg.ACTUALS_INPUT_COLUMNS.values():
                 self._set(cfg.SHEET_ACTUALS, f"{col}{row}", None)
@@ -838,6 +930,189 @@ class WorkloadWorkbook:
             raise ValidationError([f"No deliverable on Deliverables row {row}."])
         self._clear_deliverable_row(row)
         return {"row": row}
+
+    # -- a project and its deliverables, saved together ------------------
+    def save_project_with_deliverables(
+        self, number: Optional[str], project_data: Dict[str, Any],
+        deliverables: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Save a project together with its whole deliverable set.
+
+        Editing the set as a whole is what makes the 100% rule workable: a
+        deliverable added on its own would leave the project short of 100%
+        every time, whereas a set can be checked before any of it is written.
+        """
+        errors: List[str] = []
+        existing = self.project(number) if number else None
+        if number and existing is None:
+            raise ValidationError([f"No project numbered {number!r} in the register."])
+
+        project, project_errors = self.validate_project(
+            project_data, row=existing.row if existing else None)
+        errors.extend(project_errors)
+
+        # Deliverables are validated against the project number being saved,
+        # which may differ from the one on the sheet if it is being renamed.
+        checked: List[Deliverable] = []
+        for position, item in enumerate(deliverables, start=1):
+            data = dict(item)
+            data["project_number"] = project.number
+            deliverable, item_errors = self.validate_deliverable(
+                data, row=item.get("row"), pending_project=project.number)
+            label = as_text(item.get("name")) or f"deliverable {position}"
+            errors.extend(f"{label}: {message}" for message in item_errors)
+            checked.append(deliverable)
+
+        total_weight = sum(d.phase_weight or 0.0 for d in checked)
+        if checked and abs(total_weight - 1.0) > 1e-4:
+            errors.append(
+                f"The phase weights total {total_weight * 100:.1f}%, not 100%. "
+                f"A project's deliverables have to account for all of its scope "
+                f"before it can be saved."
+            )
+        if errors:
+            raise ValidationError(errors)
+
+        # Write the project first so the deliverables have somewhere to point.
+        if existing is None:
+            project.row = self._next_project_row()
+        else:
+            project.row = existing.row
+        self._write_project(project)
+
+        # Rows matter beyond tidiness: Deliverable Actuals is aligned to them,
+        # so a deliverable that moved rows would inherit another one's
+        # milestone dates.  Keep the row it already has wherever possible.
+        owners = {project.number, existing.number if existing else project.number}
+        current_rows = {
+            d.row: d for d in self.deliverables() if d.project_number in owners
+        }
+        by_name = {
+            (d.name or "").strip().lower(): d.row
+            for d in current_rows.values() if (d.name or "").strip()
+        }
+        taken: set = set()
+        for deliverable in checked:
+            if deliverable.row in current_rows and deliverable.row not in taken:
+                taken.add(deliverable.row)
+                continue
+            matched = by_name.get((deliverable.name or "").strip().lower())
+            if matched and matched not in taken:
+                deliverable.row = matched
+                taken.add(matched)
+            else:
+                deliverable.row = None
+
+        removed = 0
+        for row in current_rows:
+            if row not in taken:
+                self._clear_deliverable_row(row)
+                removed += 1
+
+        written: List[Deliverable] = []
+        for deliverable in checked:
+            if not deliverable.row:
+                deliverable.row = self._next_deliverable_row()
+            self._write_deliverable(deliverable)
+            written.append(deliverable)
+
+        return {
+            "project": project.to_dict(),
+            "deliverables": [d.to_dict() for d in written],
+            "removed": removed,
+            "weight_total": round(total_weight, 6),
+        }
+
+    # -- reference tables ------------------------------------------------
+    def save_reference(self, project_types: Optional[Sequence[Dict[str, Any]]],
+                       credit_steps: Optional[Sequence[Dict[str, Any]]]
+                       ) -> Dict[str, Any]:
+        """Rewrite Project Types and Rules of Credit from the app."""
+        errors: List[str] = []
+        types = list(project_types or [])
+        steps = list(credit_steps or [])
+
+        capacity_types = cfg.PROJECT_TYPES_LAST_ROW - cfg.PROJECT_TYPES_FIRST_ROW + 1
+        capacity_steps = cfg.RULES_LAST_ROW - cfg.RULES_FIRST_ROW + 1
+        if len(types) > capacity_types:
+            errors.append(
+                f"Project Types has room for {capacity_types} rows, not {len(types)}.")
+        if len(steps) > capacity_steps:
+            errors.append(
+                f"Rules of Credit has room for {capacity_steps} rows, not "
+                f"{len(steps)}.")
+
+        codes: List[str] = []
+        for position, item in enumerate(types, start=1):
+            code = as_text(item.get("code"))
+            if not code:
+                errors.append(f"Project type {position} has no type code.")
+            elif code in codes:
+                errors.append(f"Type code {code!r} appears more than once.")
+            else:
+                codes.append(code)
+            weight = as_number(item.get("portfolio_weight"))
+            if weight is not None and weight < 0:
+                errors.append(f"{code or position}: portfolio weight cannot be negative.")
+
+        seen: set = set()
+        for position, item in enumerate(steps, start=1):
+            code = as_text(item.get("type_code"))
+            step_raw = as_number(item.get("step_no"))
+            if not code:
+                errors.append(f"Credit step {position} has no type code.")
+            elif codes and code not in codes:
+                errors.append(
+                    f"Credit step {position} is for type {code!r}, which is not "
+                    f"in Project Types.")
+            if step_raw is None:
+                errors.append(f"Credit step {position} has no step number.")
+            else:
+                key = (code, int(step_raw))
+                if key in seen:
+                    errors.append(f"{code} step {int(step_raw)} appears twice.")
+                seen.add(key)
+            credit = as_fraction(item.get("credit"))
+            if credit is None:
+                errors.append(f"Credit step {position} has no credit percentage.")
+            elif not 0 <= credit <= 1:
+                errors.append(
+                    f"{code} step {position}: credit must be between 0% and 100%.")
+        if errors:
+            raise ValidationError(errors)
+
+        cols = cfg.PROJECT_TYPE_COLUMNS
+        for offset in range(capacity_types):
+            row = cfg.PROJECT_TYPES_FIRST_ROW + offset
+            item = types[offset] if offset < len(types) else {}
+            values = {
+                "code": as_text(item.get("code")) or None,
+                "name": as_text(item.get("name")) or None,
+                "basis": as_text(item.get("basis")) or None,
+                "trigger": as_text(item.get("trigger")) or None,
+                "portfolio_weight": as_number(item.get("portfolio_weight")),
+                "include_in_cpi": as_text(item.get("include_in_cpi")) or None,
+                "notes": as_text(item.get("notes")) or None,
+            }
+            for field_name, col in cols.items():
+                self._set(cfg.SHEET_PROJECT_TYPES, f"{col}{row}", values[field_name])
+
+        cols = cfg.RULES_COLUMNS
+        for offset in range(capacity_steps):
+            row = cfg.RULES_FIRST_ROW + offset
+            item = steps[offset] if offset < len(steps) else {}
+            step_raw = as_number(item.get("step_no"))
+            values = {
+                "type_code": as_text(item.get("type_code")) or None,
+                "step_no": int(step_raw) if step_raw is not None else None,
+                "step_name": as_text(item.get("step_name")) or None,
+                "credit": as_fraction(item.get("credit")),
+                "data_source": as_text(item.get("data_source")) or None,
+            }
+            for field_name, col in cols.items():
+                self._set(cfg.SHEET_RULES, f"{col}{row}", values[field_name])
+
+        return {"project_types": len(types), "credit_steps": len(steps)}
 
     # -- phase weight helper ---------------------------------------------
     def weight_by_project(self) -> Dict[str, float]:
@@ -852,7 +1127,7 @@ class WorkloadWorkbook:
 
     # -- timesheets ------------------------------------------------------
     def timesheet_headers(self, engineer: str) -> List[str]:
-        sheet = cfg.TS_SHEETS[engineer]
+        sheet = self.ts_sheet(engineer)
         headers: List[str] = []
         for index in range(1, col_to_index(cfg.TS_LAST_COLUMN) + 1):
             col = index_to_col(index)
@@ -863,7 +1138,7 @@ class WorkloadWorkbook:
                        columns: Optional[Iterable[str]] = None
                        ) -> List[Dict[str, CellValue]]:
         """Read one engineer's pasted export."""
-        sheet = cfg.TS_SHEETS[engineer]
+        sheet = self.ts_sheet(engineer)
         cols = list(columns) if columns is not None else [
             index_to_col(i) for i in range(1, col_to_index(cfg.TS_LAST_COLUMN) + 1)
         ]
@@ -877,8 +1152,7 @@ class WorkloadWorkbook:
     def replace_timesheet(self, engineer: str, rows: Sequence[Sequence[CellValue]]
                           ) -> Dict[str, Any]:
         """Replace every data row on an engineer's sheet with ``rows``."""
-        if engineer not in cfg.TS_SHEETS:
-            raise ValidationError([f"{engineer!r} is not one of the three engineers."])
+        sheet_name = self.ts_sheet(engineer)
         width = col_to_index(cfg.TS_LAST_COLUMN)
         limit = cfg.TS_MAX_DATA_ROW - cfg.TS_FIRST_DATA_ROW + 1
         if len(rows) > limit:
@@ -900,7 +1174,7 @@ class WorkloadWorkbook:
                 style = cfg.TS_DATE_STYLE if index == date_col_index else None
                 cells.append(build_cell(f"{col}{row_no}", value, style))
             xml_rows.append(f'<row r="{row_no}" spans="1:{width}">{"".join(cells)}</row>')
-        sheet = self._wb.sheet(cfg.TS_SHEETS[engineer])
+        sheet = self._wb.sheet(sheet_name)
         sheet.replace_rows_from(cfg.TS_FIRST_DATA_ROW, xml_rows)
         last_row = cfg.TS_FIRST_DATA_ROW + len(xml_rows) - 1
         sheet.set_dimension(
@@ -930,7 +1204,7 @@ class WorkloadWorkbook:
     def rows_per_engineer(self) -> Dict[str, int]:
         """Dated rows on each TS sheet -- what the VSTACK actually stacks."""
         counts: Dict[str, int] = {}
-        for short_name in cfg.TS_SHEETS:
+        for short_name in self.ts_sheets():
             counts[short_name] = sum(
                 1 for row in self.timesheet_rows(short_name, ["L"])
                 if isinstance(row.get("L"), (int, float)) and row["L"] > 0
@@ -978,7 +1252,7 @@ class WorkloadWorkbook:
         last_date: Optional[_dt.date] = None
         unmatched = 0
 
-        for short_name, sheet in cfg.TS_SHEETS.items():
+        for short_name, sheet in self.ts_sheets().items():
             rows = self.timesheet_rows(short_name, ["B", "C", "L", "P"])
             hours = 0.0
             dates: List[_dt.date] = []
@@ -1013,7 +1287,7 @@ class WorkloadWorkbook:
 
         known = {p.number for p in self.projects()} | set(self.non_project_codes())
         unknown_codes: Dict[str, int] = {}
-        for short_name in cfg.TS_SHEETS:
+        for short_name in self.ts_sheets():
             for row in self.timesheet_rows(short_name, ["B"]):
                 code = as_text(row.get("B"))
                 if code and code not in known:
@@ -1092,10 +1366,7 @@ class WorkloadWorkbook:
                         f"register."
                     ),
                 })
-            total = sum(
-                v for v in (deliverable.share_ahmed, deliverable.share_osama,
-                            deliverable.share_kirolos) if v
-            )
+            total = sum(v for v in deliverable.shares.values() if v)
             if total and abs(total - 1.0) > 1e-4:
                 issues.append({
                     "level": "error",

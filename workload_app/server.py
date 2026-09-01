@@ -43,10 +43,12 @@ class WorkloadService:
 
     def __init__(self, path: Optional[Path] = None, *, autosave: bool = True):
         self.path: Optional[Path] = None
+        self.unit: Optional[Dict[str, Any]] = None
         self.autosave = autosave
         self._lock = threading.RLock()
         self._wb: Optional[WorkloadWorkbook] = None
         self._staged: Dict[str, ParsedTimesheet] = {}
+        self._unlocked = False
         if path is not None:
             self.open(path)
 
@@ -65,7 +67,8 @@ class WorkloadService:
             )
         return self._wb
 
-    def open(self, path: Union[str, Path]) -> Dict[str, Any]:
+    def open(self, path: Union[str, Path], *, name: Optional[str] = None,
+             remember: bool = True) -> Dict[str, Any]:
         with self._lock:
             resolved = library.validate(Path(path))
             if self._wb is not None and self._wb.dirty:
@@ -73,8 +76,23 @@ class WorkloadService:
             self._wb = WorkloadWorkbook(resolved)
             self.path = resolved
             self._staged.clear()
-            library.remember(resolved)
+            self._unlocked = False
+            if remember:
+                self.unit = library.save_unit(name or resolved.stem, resolved)
             return self.status()
+
+    def open_unit(self, unit_id: str) -> Dict[str, Any]:
+        unit = library.find_unit(unit_id)
+        if unit is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is no longer saved.")
+        result = self.open(unit["workbook"], name=unit["name"])
+        library.touch_unit(unit_id)
+        return result
+
+    def pick_file(self) -> Dict[str, Any]:
+        """Ask the operating system for a file, on its own dialog."""
+        chosen = library.pick_file()
+        return {"path": chosen, "cancelled": chosen is None}
 
     def close(self) -> Dict[str, Any]:
         with self._lock:
@@ -82,12 +100,14 @@ class WorkloadService:
                 self._wb.save()
             self._wb = None
             self.path = None
+            self.unit = None
+            self._unlocked = False
             self._staged.clear()
             return self.status()
 
     def library(self, folder: Optional[str] = None) -> Dict[str, Any]:
         data: Dict[str, Any] = {
-            "recent": library.recent(),
+            "units": library.units(),
             "suggestions": library.candidates(),
             "cwd": str(Path.cwd()),
             "home": str(Path.home()),
@@ -110,10 +130,13 @@ class WorkloadService:
     def status(self) -> Dict[str, Any]:
         with self._lock:
             if self._wb is None:
-                return {"open": False, "workbook": None,
+                return {"open": False, "workbook": None, "unit": None,
                         "autosave": self.autosave}
             return {
                 "open": True,
+                "unit": self.unit,
+                "reference_unlocked": self._unlocked,
+                "engineers": self._wb.engineer_names(),
                 "workbook": str(self.path),
                 "workbook_name": self.path.name,
                 "folder": str(self.path.parent),
@@ -189,6 +212,36 @@ class WorkloadService:
             deliverable = self.workbook.update_deliverable(row, body)
             return {"deliverable": deliverable.to_dict(), "save": self._commit()}
 
+    def save_project_with_deliverables(self, number: Optional[str],
+                                       body: Dict[str, Any]) -> Dict[str, Any]:
+        """Save a project and its whole deliverable set in one go."""
+        with self._lock:
+            result = self.workbook.save_project_with_deliverables(
+                number, body.get("project", {}), body.get("deliverables", []))
+            result["save"] = self._commit()
+            return result
+
+    def project_detail(self, number: str) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            project = wb.project(number)
+            if project is None:
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               f"No project numbered {number!r}.")
+            index = metrics.TimesheetIndex(wb)
+            rows = {m["row"]: m for m in metrics.deliverable_rows(wb, index)}
+            attached = [d for d in wb.deliverables()
+                        if d.project_number == project.number]
+            figures = [m for m in metrics.project_rows(wb, index)
+                       if m["number"] == project.number]
+            return {
+                "project": project.to_dict(),
+                "metrics": figures[0] if figures else None,
+                "deliverables": [
+                    {**d.to_dict(), "computed": rows.get(d.row)} for d in attached
+                ],
+            }
+
     def delete_deliverable(self, row: int) -> Dict[str, Any]:
         with self._lock:
             result = self.workbook.delete_deliverable(row)
@@ -208,21 +261,24 @@ class WorkloadService:
             return self.status()
 
     # -- timesheets ------------------------------------------------------
-    def stage_timesheet(self, engineer: str, filename: str, data: bytes
-                        ) -> Dict[str, Any]:
+    def stage_timesheet(self, engineer: str, filename: str, data: bytes,
+                        *, registered_only: bool = True) -> Dict[str, Any]:
         with self._lock:
-            if engineer not in cfg.TS_SHEETS:
+            wb = self.workbook
+            if engineer not in wb.ts_sheets():
                 raise ApiError(
                     HTTPStatus.BAD_REQUEST,
-                    f"{engineer!r} is not one of {', '.join(cfg.TS_SHEETS)}.",
+                    f"{engineer!r} is not one of this workbook's engineers "
+                    f"({', '.join(wb.ts_sheets())}).",
                 )
-            wb = self.workbook
             engineers = {e.short_name: e for e in wb.engineers()}
             pattern = engineers[engineer].pattern if engineer in engineers else None
             parsed = timesheets.parse(
                 engineer, filename, data, wb.timesheet_headers(engineer),
                 name_pattern=pattern,
                 known_job_numbers=self._known_job_numbers(),
+                registered_only=registered_only,
+                keep_job_types=cfg.PROPOSAL_JOB_TYPES,
             )
             existing = self._existing_rows(engineer)
             duplicates = timesheets.find_duplicates(
@@ -274,6 +330,37 @@ class WorkloadService:
             result["data_check"] = wb.data_check()
             return result
 
+    # -- reference tables ------------------------------------------------
+    def unlock(self, password: str) -> Dict[str, Any]:
+        """Open the reference tables for editing.
+
+        A deterrent against a stray keystroke changing a credit percentage,
+        not a security control: the same values are editable in Excel by
+        anyone who can open the file.
+        """
+        with self._lock:
+            if password != cfg.REFERENCE_PASSWORD:
+                raise ApiError(HTTPStatus.FORBIDDEN, "That password is not right.")
+            self._unlocked = True
+            return {"unlocked": True}
+
+    def lock(self) -> Dict[str, Any]:
+        with self._lock:
+            self._unlocked = False
+            return {"unlocked": False}
+
+    def save_reference(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            if not self._unlocked:
+                raise ApiError(
+                    HTTPStatus.FORBIDDEN,
+                    "The reference tables are locked. Unlock them first.",
+                )
+            result = self.workbook.save_reference(
+                body.get("project_types"), body.get("credit_steps"))
+            result["save"] = self._commit()
+            return result
+
     def extend_capacity(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -305,10 +392,18 @@ def build_routes(service: WorkloadService) -> List[Route]:
     """``(method, pattern, handler)``; ``{}`` in a pattern captures a segment."""
     return [
         ("GET", "/api/status", lambda q, b: service.status()),
-        ("GET", "/api/workbooks",
+        ("GET", "/api/units",
          lambda q, b: service.library(q.get("folder", [None])[0])),
-        ("POST", "/api/workbooks/open", lambda q, b: service.open(b.get("path", ""))),
-        ("POST", "/api/workbooks/close", lambda q, b: service.close()),
+        ("POST", "/api/units/pick", lambda q, b: service.pick_file()),
+        ("POST", "/api/units/open",
+         lambda q, b: (service.open_unit(b["unit_id"]) if b.get("unit_id")
+                       else service.open(b.get("path", ""), name=b.get("name")))),
+        ("POST", "/api/units/close", lambda q, b: service.close()),
+        ("DELETE", "/api/units/{}", lambda q, b, unit_id: _forget(unit_id)),
+        ("POST", "/api/reference/unlock",
+         lambda q, b: service.unlock(b.get("password", ""))),
+        ("POST", "/api/reference/lock", lambda q, b: service.lock()),
+        ("PUT", "/api/reference", lambda q, b: service.save_reference(b)),
         ("GET", "/api/reference", lambda q, b: service.reference()),
         ("GET", "/api/overview", lambda q, b: service.overview(_year(q))),
         ("GET", "/api/projects", lambda q, b: service.projects()),
@@ -317,6 +412,11 @@ def build_routes(service: WorkloadService) -> List[Route]:
         ("DELETE", "/api/projects/{}",
          lambda q, b, number: service.delete_project(number, _flag(q, "cascade"))),
         ("GET", "/api/deliverables", lambda q, b: service.deliverables()),
+        ("GET", "/api/projects/{}", lambda q, b, number: service.project_detail(number)),
+        ("POST", "/api/projects/full",
+         lambda q, b: service.save_project_with_deliverables(None, b)),
+        ("PUT", "/api/projects/{}/full",
+         lambda q, b, number: service.save_project_with_deliverables(number, b)),
         ("POST", "/api/deliverables", lambda q, b: service.add_deliverable(b)),
         ("PUT", "/api/deliverables/{}",
          lambda q, b, row: service.update_deliverable(_int(row), b)),
@@ -332,6 +432,11 @@ def build_routes(service: WorkloadService) -> List[Route]:
         ("POST", "/api/save", lambda q, b: service.save()),
         ("POST", "/api/reload", lambda q, b: service.reload()),
     ]
+
+
+def _forget(unit_id: str) -> Dict[str, Any]:
+    library.forget_unit(unit_id)
+    return {"forgotten": unit_id}
 
 
 def _year(query: Dict[str, List[str]]) -> Optional[int]:
@@ -371,7 +476,10 @@ def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:
             HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
             f"That file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
         )
-    return service.stage_timesheet(engineer, filename, data)
+    return service.stage_timesheet(
+        engineer, filename, data,
+        registered_only=bool(body.get("registered_only", True)),
+    )
 
 
 class Handler(BaseHTTPRequestHandler):

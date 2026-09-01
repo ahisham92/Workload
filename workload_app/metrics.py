@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
 from .workbook import Deliverable, WorkloadWorkbook, as_text
@@ -26,8 +26,8 @@ from .xlsx_io import from_serial
 
 #: Job Type values the Phasing sheet uses to pick up proposal effort.
 PROPOSAL_JOB_TYPES = {
-    "chargeable": "2-Proposals Chargeable",
-    "regular": "3-Proposals Regular",
+    "chargeable": cfg.PROPOSAL_JOB_TYPES[0],
+    "regular": cfg.PROPOSAL_JOB_TYPES[1],
 }
 
 
@@ -40,7 +40,7 @@ class TimesheetIndex:
 
     def __init__(self, wb: WorkloadWorkbook):
         self.rows: List[Dict[str, Any]] = []
-        for engineer in cfg.TS_SHEETS:
+        for engineer in wb.ts_sheets():
             for raw in wb.timesheet_rows(engineer, ["A", "B", "C", "J", "K", "L", "M", "P"]):
                 date = raw.get("L")
                 hours = raw.get("P")
@@ -130,35 +130,32 @@ def project_progress(deliverables: Iterable[Deliverable],
     return earned_weight / total_weight, total_weight, earned_weight
 
 
-def engineer_shares(deliverables: List[Deliverable], credit_lookup
-                    ) -> Dict[str, Optional[float]]:
+def engineer_shares(deliverables: List[Deliverable], credit_lookup,
+                    names: Sequence[str]) -> Dict[str, Optional[float]]:
     """The person split the workbook derives for a project.
 
     Weighted by earned progress where there is any, and by scope weight before
     the project has earned anything -- exactly what Deliverables W:Y do.
     """
-    fields = {
-        "Ahmed": "share_ahmed", "Osama": "share_osama", "Kirolos": "share_kirolos",
-    }
     earned_total = 0.0
     weight_total = 0.0
-    earned_parts: Dict[str, float] = {k: 0.0 for k in fields}
-    weight_parts: Dict[str, float] = {k: 0.0 for k in fields}
+    earned_parts: Dict[str, float] = {name: 0.0 for name in names}
+    weight_parts: Dict[str, float] = {name: 0.0 for name in names}
     for deliverable in deliverables:
         weight = deliverable.phase_weight or 0.0
         credit = credit_lookup(deliverable.type_code, deliverable.step_no) or 0.0
         earned = weight * credit
         earned_total += earned
         weight_total += weight
-        for name, attr in fields.items():
-            share = getattr(deliverable, attr) or 0.0
+        for name in names:
+            share = deliverable.shares.get(name) or 0.0
             earned_parts[name] += earned * share
             weight_parts[name] += weight * share
     if earned_total > 0:
-        return {k: earned_parts[k] / earned_total for k in fields}
+        return {name: earned_parts[name] / earned_total for name in names}
     if weight_total > 0:
-        return {k: weight_parts[k] / weight_total for k in fields}
-    return {k: None for k in fields}
+        return {name: weight_parts[name] / weight_total for name in names}
+    return {name: None for name in names}
 
 
 def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, Any]]:
@@ -171,6 +168,7 @@ def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, 
             return None
         return steps.get((type_code, step_no))
 
+    names = wb.engineer_names()
     by_project: Dict[str, List[Deliverable]] = defaultdict(list)
     for deliverable in wb.deliverables():
         by_project[deliverable.project_number].append(deliverable)
@@ -185,14 +183,14 @@ def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, 
             actual_hours = index.hours_for_proposal(project.number)
             per_engineer = {
                 name: index.hours_for_proposal(project.number, engineer=name)
-                for name in cfg.TS_SHEETS
+                for name in wb.ts_sheets()
             }
             first = last = None
         else:
             actual_hours = index.hours_for_job(project.number)
             per_engineer = {
                 name: index.hours_for_job(project.number, engineer=name)
-                for name in cfg.TS_SHEETS
+                for name in wb.ts_sheets()
             }
             first, last = index.dates_for_job(project.number)
 
@@ -208,13 +206,9 @@ def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, 
             cost_at_completion = budget
         cpi = (earned_mm / actual_mm) if (earned_mm is not None and actual_mm) else None
 
-        shares = engineer_shares(attached, credit_lookup)
+        shares = engineer_shares(attached, credit_lookup, names)
         if all(v is None for v in shares.values()):
-            shares = {
-                "Ahmed": project.manual_share_ahmed,
-                "Osama": project.manual_share_osama,
-                "Kirolos": project.manual_share_kirolos,
-            }
+            shares = dict(project.manual_shares)
 
         out.append({
             "row": project.row,
@@ -291,15 +285,9 @@ def deliverable_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[s
             "actual_mm": _round(hours / hours_per_mm if hours_per_mm else 0.0, 3),
             "first_charge": first.isoformat() if first else None,
             "last_charge": last.isoformat() if last else None,
-            "shares": {
-                "Ahmed": deliverable.share_ahmed,
-                "Osama": deliverable.share_osama,
-                "Kirolos": deliverable.share_kirolos,
-            },
-            "split_ok": abs(sum(
-                v for v in (deliverable.share_ahmed, deliverable.share_osama,
-                            deliverable.share_kirolos) if v
-            ) - 1.0) <= 1e-4,
+            "shares": dict(deliverable.shares),
+            "split_ok": abs(
+                sum(v for v in deliverable.shares.values() if v) - 1.0) <= 1e-4,
         })
     return out
 

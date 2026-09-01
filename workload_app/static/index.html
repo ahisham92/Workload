@@ -3,61 +3,84 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Workload Input</title>
+<title>Workload</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="mark">W</span>
-    <div>
-      <h1>Workload Input</h1>
-      <p id="workbook-path" class="muted">loading…</p>
-    </div>
-  </div>
-  <div class="topbar-actions">
-    <span id="save-state" class="pill pill-ok">saved</span>
-    <button id="btn-save" class="btn btn-ghost" type="button">Save now</button>
-    <button id="btn-reload" class="btn btn-ghost" type="button">Reload file</button>
-    <button id="btn-change" class="btn btn-ghost" type="button">Change workbook</button>
-  </div>
-</header>
 
-<nav class="tabs" role="tablist">
-  <button class="tab is-active" data-view="overview" role="tab">Overview</button>
-  <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
-  <button class="tab" data-view="projects" role="tab">Projects</button>
-  <button class="tab" data-view="deliverables" role="tab">Deliverables</button>
-</nav>
-
+<!-- ===================================================== unit chooser -->
 <section id="chooser" class="chooser" hidden>
   <div class="chooser-card">
-    <h2>Choose your Workload workbook</h2>
-    <p class="muted">
-      The app edits the file in place, so point it at the workbook you actually use.
-      Close it in Excel first — Excel keeps its own copy in memory and would overwrite
-      anything written while it is open.
-    </p>
-    <label class="field full">
-      <span>Full path to the file</span>
-      <div class="row" style="margin-bottom:0">
-        <input type="text" id="chooser-path" class="grow"
-               placeholder="C:\Users\you\Documents\Workload.xlsx" spellcheck="false">
-        <button class="btn btn-primary" id="chooser-open" type="button">Open</button>
+    <header class="chooser-head">
+      <span class="mark mark-lg">W</span>
+      <div>
+        <h1>Workload</h1>
+        <p class="muted">Workload, efficiency and delivery planning</p>
       </div>
-    </label>
-    <div id="chooser-error"></div>
-    <div id="chooser-recent"></div>
-    <div id="chooser-suggestions"></div>
-    <details id="chooser-browse-wrap">
-      <summary>Browse folders</summary>
-      <div id="chooser-browse"></div>
+    </header>
+
+    <div id="unit-list"></div>
+
+    <details id="add-unit" class="add-unit">
+      <summary>Add a unit</summary>
+      <div class="add-unit-body">
+        <p class="muted">
+          A unit is a name and the workbook that belongs to it. Close that file in
+          Excel first — Excel keeps its own copy in memory and would overwrite
+          anything written while it is open.
+        </p>
+        <div class="row">
+          <label class="field grow">
+            <span>Unit name</span>
+            <input type="text" id="unit-name" placeholder="Marine Structures" spellcheck="false">
+          </label>
+        </div>
+        <div class="row">
+          <label class="field grow">
+            <span>Workbook</span>
+            <input type="text" id="unit-path" placeholder="No file chosen" spellcheck="false">
+          </label>
+          <button class="btn" id="btn-pick" type="button">Choose file…</button>
+          <button class="btn btn-primary" id="btn-add-unit" type="button">Add unit</button>
+        </div>
+        <div id="chooser-error"></div>
+        <div id="chooser-suggestions"></div>
+        <details id="chooser-browse-wrap">
+          <summary>Browse folders</summary>
+          <div id="chooser-browse"></div>
+        </details>
+      </div>
     </details>
   </div>
 </section>
 
-<main id="main">
-  <!-- OVERVIEW -->
+<!-- ============================================================ shell -->
+<header class="topbar" id="topbar" hidden>
+  <div class="brand">
+    <span class="mark">W</span>
+    <div class="brand-text">
+      <h1 id="unit-title">Workload</h1>
+      <p id="workbook-path" class="muted"></p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="save-state" class="pill pill-ok">saved</span>
+    <button id="btn-save" class="btn btn-ghost btn-sm" type="button">Save</button>
+    <button id="btn-reload" class="btn btn-ghost btn-sm" type="button">Reload</button>
+    <button id="btn-change" class="btn btn-sm" type="button">Switch unit</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist" hidden>
+  <button class="tab is-active" data-view="overview" role="tab">Overview</button>
+  <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
+  <button class="tab" data-view="projects" role="tab">Projects</button>
+  <button class="tab" data-view="reference" role="tab">Reference</button>
+</nav>
+
+<main id="main" hidden>
+
+  <!-- ------------------------------------------------------- overview -->
   <section class="view is-active" id="view-overview">
     <div class="view-head">
       <div>
@@ -82,22 +105,22 @@
       </section>
     </div>
     <section class="panel">
-      <h3>Register checks</h3>
+      <h3>Things to fix</h3>
       <div id="issues"></div>
     </section>
   </section>
 
-  <!-- TIMESHEETS -->
+  <!-- ----------------------------------------------------- timesheets -->
   <section class="view" id="view-timesheets">
     <div class="view-head"><h2>Monthly timesheets</h2></div>
-    <p class="muted">
-      Upload each engineer's export. Columns are matched to the TS sheet by heading name,
-      so the order of the export does not matter, and its own header rows are skipped.
-    </p>
     <div id="ts-capacity"></div>
     <div id="ts-cards" class="cards cards-3"></div>
-    <section class="panel" id="ts-import-panel">
+    <section class="panel">
       <h3>Import an export</h3>
+      <p class="muted">
+        Columns are matched to the sheet by heading name, so the order of the export
+        does not matter and its own header rows are skipped.
+      </p>
       <div class="row">
         <label class="field">
           <span>Engineer</span>
@@ -109,46 +132,52 @@
         </label>
         <button class="btn btn-primary" id="btn-ts-check" type="button">Check file</button>
       </div>
+      <label class="check">
+        <input type="checkbox" id="ts-registered" checked>
+        <span>Only rows for projects in the register
+          <span class="hint">— leaves out work the workbook has no project for, which is what keeps the sheet inside its row limit</span>
+        </span>
+      </label>
       <div id="ts-result"></div>
     </section>
   </section>
 
-  <!-- PROJECTS -->
+  <!-- ------------------------------------------------------- projects -->
   <section class="view" id="view-projects">
-    <div class="view-head">
-      <h2>Project register</h2>
-      <button class="btn btn-primary" id="btn-new-project" type="button">Add project</button>
+    <div id="projects-list">
+      <div class="view-head">
+        <h2>Projects</h2>
+        <button class="btn btn-primary" id="btn-new-project" type="button">Add project</button>
+      </div>
+      <div class="row">
+        <label class="field">
+          <span>Project</span>
+          <select id="project-filter"></select>
+        </label>
+        <label class="field">
+          <span>Status</span>
+          <select id="project-status-filter"></select>
+        </label>
+        <input type="search" id="project-search" class="grow" placeholder="Filter by number or name…">
+      </div>
+      <div class="table-wrap"><table id="projects-table"></table></div>
     </div>
-    <div class="row">
-      <label class="field">
-        <span>Project</span>
-        <select id="project-filter"></select>
-      </label>
-      <label class="field">
-        <span>Status</span>
-        <select id="project-status-filter"></select>
-      </label>
-      <input type="search" id="project-search" class="grow" placeholder="Filter by number or name…">
-    </div>
-    <div class="table-wrap"><table id="projects-table"></table></div>
+
+    <div id="project-detail" hidden></div>
   </section>
 
-  <!-- DELIVERABLES -->
-  <section class="view" id="view-deliverables">
+  <!-- ------------------------------------------------------ reference -->
+  <section class="view" id="view-reference">
     <div class="view-head">
-      <h2>Deliverable register</h2>
-      <button class="btn btn-primary" id="btn-new-deliverable" type="button">Add deliverable</button>
+      <div>
+        <h2>Reference tables</h2>
+        <p class="muted">The project types and the rules of credit every deliverable is measured against.</p>
+      </div>
+      <div id="reference-lock"></div>
     </div>
-    <div class="row">
-      <label class="field">
-        <span>Project</span>
-        <select id="deliverable-project-filter"></select>
-      </label>
-      <input type="search" id="deliverable-search" class="search grow" placeholder="Filter by deliverable, type or step…">
-    </div>
-    <div id="weight-warnings"></div>
-    <div class="table-wrap"><table id="deliverables-table"></table></div>
+    <div id="reference-body"></div>
   </section>
+
 </main>
 
 <div class="modal-backdrop" id="modal-backdrop" hidden>

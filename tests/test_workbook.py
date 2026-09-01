@@ -164,7 +164,8 @@ class TestDeliverables:
         assert stored.name == "Concept"
         assert stored.phase_weight == pytest.approx(1.0)
         assert stored.ts_phase == 3
-        assert stored.share_ahmed == pytest.approx(0.5)
+        assert stored.shares["Ahmed"] == pytest.approx(0.5)
+        assert stored.shares["Osama"] == pytest.approx(0.5)
 
     def test_milestone_dates_are_stored(self, wb):
         self._project(wb)
@@ -292,3 +293,194 @@ class TestChecks:
         assert check["rows_not_matching_pattern"] == 0
         assert check["verdict"] == "All rows matched to an engineer."
         assert set(check["per_engineer"]) == {"Ahmed", "Osama", "Kirolos"}
+
+
+class TestAnotherUnitsTeam:
+    """Nothing may assume who the engineers are, or how many there are.
+
+    A workbook set up for a different discipline names different people and
+    different paste-target sheets; the app has to read both from the file.
+    """
+
+    @pytest.fixture
+    def renamed(self, workbook_copy):
+        from workload_app.xlsx_io import Workbook
+        from workload_app.workbook import WorkloadWorkbook
+
+        raw = Workbook(workbook_copy)
+        swaps = [("Ahmed", "Nadia"), ("Osama", "Tarek"), ("Kirolos", "Mina")]
+        for row, (_old, new) in zip((20, 21, 22), swaps):
+            raw.sheet(cfg.SHEET_CALENDAR).set_value(f"A{row}", new)
+            raw.sheet(cfg.SHEET_CALENDAR).set_value(f"B{row}", f"*{new}*")
+        for row, (_old, new) in zip((91, 92, 93), swaps):
+            raw.sheet(cfg.SHEET_INPUTS).set_value(f"A{row}", new)
+        workbook_xml = raw._entries["xl/workbook.xml"].decode()
+        sheet = raw.sheet(cfg.SHEET_TS_RAW)
+        for old, new in swaps:
+            workbook_xml = workbook_xml.replace(f'name="TS {old}"', f'name="TS {new}"')
+            sheet.xml = sheet.xml.replace(f"'TS {old}'!", f"'TS {new}'!")
+        raw._entries["xl/workbook.xml"] = workbook_xml.encode()
+        raw.save()
+        return WorkloadWorkbook(workbook_copy)
+
+    def test_the_engineers_come_from_the_workbook(self, renamed):
+        assert renamed.engineer_names() == ["Nadia", "Tarek", "Mina"]
+
+    def test_the_paste_targets_are_found_by_name(self, renamed):
+        assert dict(renamed.ts_sheets()) == {
+            "Nadia": "TS Nadia", "Tarek": "TS Tarek", "Mina": "TS Mina"}
+
+    def test_the_stack_order_follows_the_formula(self, renamed):
+        assert renamed.timesheet_capacity()["stack_order"] == [
+            "Nadia", "Tarek", "Mina"]
+
+    def test_splits_are_keyed_by_the_new_names(self, renamed):
+        assert set(renamed.deliverables()[0].shares) == {"Nadia", "Tarek", "Mina"}
+
+    def test_a_split_is_validated_against_the_new_names(self, renamed):
+        renamed.add_project({"number": "U2-0100D", "name": "T", "budget_mm": 1,
+                             "status": "Active"})
+        deliverable = renamed.add_deliverable({
+            "project_number": "U2-0100D", "name": "Phase", "type_code": "FS",
+            "phase_weight": 1, "step_no": 1, "ts_phase": 1,
+            "shares": {"Nadia": 0.5, "Mina": 0.5},
+        })
+        stored = renamed.deliverable(deliverable.row)
+        assert stored.shares["Nadia"] == pytest.approx(0.5)
+        assert stored.shares["Mina"] == pytest.approx(0.5)
+
+    def test_the_data_check_reports_the_new_team(self, renamed):
+        assert set(renamed.data_check()["per_engineer"]) == {"Nadia", "Tarek", "Mina"}
+
+
+class TestProjectWithItsDeliverables:
+    """Saving a project and its deliverables as one set."""
+
+    PROJECT = {"number": "SET-0100D", "name": "Together", "budget_mm": 3,
+               "status": "Active"}
+
+    def _item(self, **overrides):
+        item = {"name": "Phase", "type_code": "DD", "phase_weight": 1.0,
+                "ts_phase": 1, "shares": {"Ahmed": 1.0}}
+        item.update(overrides)
+        return item
+
+    def test_a_new_project_carries_its_deliverables_in(self, wb):
+        result = wb.save_project_with_deliverables(None, self.PROJECT, [
+            self._item(name="A", phase_weight=0.3),
+            self._item(name="B", phase_weight=0.7),
+        ])
+        assert result["weight_total"] == 1.0
+        assert len(wb.deliverables()) == 66
+
+    def test_the_deliverables_are_not_rejected_for_a_project_being_created(self, wb):
+        # The project is not in the register until this same call writes it.
+        wb.save_project_with_deliverables(None, self.PROJECT, [self._item()])
+        assert wb.project("SET-0100D") is not None
+
+    def test_weights_that_do_not_add_up_stop_the_whole_save(self, wb):
+        before = len(wb.projects())
+        with pytest.raises(ValidationError, match="not 100%"):
+            wb.save_project_with_deliverables(None, self.PROJECT,
+                                              [self._item(phase_weight=0.5)])
+        assert len(wb.projects()) == before
+
+    def test_a_bad_deliverable_names_itself_in_the_error(self, wb):
+        with pytest.raises(ValidationError) as exc:
+            wb.save_project_with_deliverables(None, self.PROJECT, [
+                self._item(name="Concept", step_no=9)])
+        assert any(message.startswith("Concept:") for message in exc.value.errors)
+
+    def test_renaming_the_project_carries_its_deliverables(self, wb):
+        wb.save_project_with_deliverables(None, self.PROJECT, [self._item()])
+        wb.save_project_with_deliverables(
+            "SET-0100D", {**self.PROJECT, "number": "SET-0200D"}, [self._item()])
+        assert wb.project("SET-0100D") is None
+        assert [d.project_number for d in wb.deliverables()].count("SET-0200D") == 1
+
+    def test_a_deliverable_keeps_its_row_so_its_actuals_stay_with_it(self, wb):
+        wb.save_project_with_deliverables(None, self.PROJECT, [
+            self._item(name="A", phase_weight=0.5),
+            self._item(name="B", phase_weight=0.5),
+        ])
+        rows = {d.name: d.row for d in wb.deliverables()
+                if d.project_number == "SET-0100D"}
+        wb.save_project_with_deliverables("SET-0100D", self.PROJECT, [
+            self._item(name="A", phase_weight=0.4),
+            self._item(name="B", phase_weight=0.6),
+        ])
+        after = {d.name: d.row for d in wb.deliverables()
+                 if d.project_number == "SET-0100D"}
+        assert after == rows
+
+    def test_dropping_one_clears_its_row_on_both_sheets(self, wb):
+        wb.save_project_with_deliverables(None, self.PROJECT, [
+            self._item(name="Keep", phase_weight=0.5),
+            self._item(name="Drop", phase_weight=0.5),
+        ])
+        dropped = next(d for d in wb.deliverables() if d.name == "Drop")
+        result = wb.save_project_with_deliverables(
+            "SET-0100D", self.PROJECT, [self._item(name="Keep", phase_weight=1.0)])
+        assert result["removed"] == 1
+        assert wb.raw.get_value(cfg.SHEET_ACTUALS, f"E{dropped.row}") is None
+
+
+class TestReferenceTables:
+    def test_a_credit_can_be_rewritten(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        steps = [
+            {"type_code": s.type_code, "step_no": s.step_no,
+             "step_name": s.step_name, "credit": s.credit,
+             "data_source": s.data_source}
+            for s in wb.credit_steps()
+        ]
+        for step in steps:
+            if step["type_code"] == "DD" and step["step_no"] == 1:
+                step["credit"] = 0.2
+        wb.save_reference(types, steps)
+        assert wb.credit_for("DD", 1) == pytest.approx(0.2)
+
+    def test_a_type_can_be_reweighted(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        for item in types:
+            if item["code"] == "CD":
+                item["portfolio_weight"] = 1.4
+        wb.save_reference(types, None)
+        assert [t.portfolio_weight for t in wb.project_types()
+                if t.code == "CD"] == [1.4]
+
+    def test_removing_a_step_clears_its_row(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        steps = [
+            {"type_code": s.type_code, "step_no": s.step_no,
+             "step_name": s.step_name, "credit": s.credit}
+            for s in wb.credit_steps() if not (s.type_code == "DD" and s.step_no == 5)
+        ]
+        wb.save_reference(types, steps)
+        assert wb.credit_for("DD", 5) is None
+
+    def test_more_rows_than_the_sheet_holds_are_refused(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        with pytest.raises(ValidationError, match="room for"):
+            wb.save_reference(types * 3, None)
+
+    def test_a_duplicate_type_code_is_refused(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        types[1] = {**types[1], "code": types[0]["code"]}
+        with pytest.raises(ValidationError, match="more than once"):
+            wb.save_reference(types, None)
+
+    def test_a_credit_outside_zero_to_one_hundred_is_refused(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        steps = [{"type_code": "DD", "step_no": 1, "step_name": "x", "credit": 150}]
+        with pytest.raises(ValidationError, match="between 0% and 100%"):
+            wb.save_reference(types, steps)
+
+    def test_a_credit_may_be_given_as_a_percentage_or_a_fraction(self, wb):
+        types = [t.__dict__ for t in wb.project_types()]
+        wb.save_reference(types, [
+            {"type_code": "DD", "step_no": 1, "step_name": "a", "credit": 25},
+            {"type_code": "DD", "step_no": 2, "step_name": "b", "credit": 0.5},
+        ])
+        assert wb.credit_for("DD", 1) == pytest.approx(0.25)
+        assert wb.credit_for("DD", 2) == pytest.approx(0.5)

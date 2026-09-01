@@ -19,12 +19,10 @@ SHEET_RULES = "Rules of Credit"
 SHEET_CALENDAR = "Work Calendar"
 SHEET_PROFIT_PLAN = "Profit Plan"
 
-#: Short name -> the per-engineer paste target sheet.
-TS_SHEETS: Dict[str, str] = {
-    "Ahmed": "TS Ahmed",
-    "Osama": "TS Osama",
-    "Kirolos": "TS Kirolos",
-}
+#: Paste-target sheets are found by this prefix rather than by name, so a
+#: workbook set up for another unit -- different people, different sheet names
+#: -- works without a code change.
+TS_SHEET_PREFIX = "TS "
 
 # -- Inputs: the project register -----------------------------------------
 PROJECT_FIRST_ROW = 6
@@ -42,10 +40,11 @@ PROJECT_INPUT_COLUMNS: Dict[str, str] = {
     "cac_override": "H",
     "notes": "N",
     "manual_percent": "O",
-    "manual_share_ahmed": "W",
-    "manual_share_osama": "X",
-    "manual_share_kirolos": "Y",
 }
+
+#: The fallback split, one column per engineer in Work Calendar order.  Keyed by
+#: position rather than by name so another unit's team lands in the right cells.
+PROJECT_MANUAL_SHARE_COLUMNS = ["W", "X", "Y"]
 
 #: field name -> column letter, for cells the workbook calculates.
 PROJECT_CALC_COLUMNS: Dict[str, str] = {
@@ -74,7 +73,9 @@ PROJECT_IN_SCOPE_STATUSES = {"Active", "Not Started"}
 AVAILABILITY_HEADER_ROW = 90
 AVAILABILITY_FIRST_COL = "B"
 AVAILABILITY_LAST_COL = "F"
-AVAILABILITY_ROWS: Dict[str, int] = {"Ahmed": 91, "Osama": 92, "Kirolos": 93}
+#: The availability block is read from this row until the names run out.
+AVAILABILITY_FIRST_ROW = 91
+AVAILABILITY_MAX_ROWS = 12
 MONTHS_PER_QUARTER_CELL = "B94"
 AS_AT_DATE_CELL = "B96"
 
@@ -89,11 +90,11 @@ DELIVERABLE_INPUT_COLUMNS: Dict[str, str] = {
     "phase_weight": "E",
     "step_no": "F",
     "status_date": "J",
-    "share_ahmed": "K",
-    "share_osama": "L",
-    "share_kirolos": "M",
     "notes": "O",
 }
+
+#: Each deliverable's split, one column per engineer in Work Calendar order.
+DELIVERABLE_SHARE_COLUMNS = ["K", "L", "M"]
 
 DELIVERABLE_CALC_COLUMNS: Dict[str, str] = {
     "project_name": "B",
@@ -131,6 +132,10 @@ ACTUALS_DATE_FIELDS = [
 #: Columns whose ``$X$5:$X$68`` ranges must grow with the block.
 ACTUALS_RANGE_END = ACTUALS_DEFAULT_LAST_ROW
 
+#: Proposal effort is kept on import even though no project number covers it:
+#: the Proposals sheet and the utilisation figures both need it.
+PROPOSAL_JOB_TYPES = ["2-Proposals Chargeable", "3-Proposals Regular"]
+
 # -- Reference tables ------------------------------------------------------
 PROJECT_TYPES_FIRST_ROW = 5
 PROJECT_TYPES_LAST_ROW = 13
@@ -152,7 +157,9 @@ WORKING_WEEK_COLUMNS = {"weekday": "A", "day": "B", "working": "C"}
 HOURS_PER_DAY_CELL = "B14"
 ANALYSIS_START_CELL = "B15"
 ANALYSIS_END_CELL = "B16"
-ENGINEER_ROWS: Dict[str, int] = {"Ahmed": 20, "Osama": 21, "Kirolos": 22}
+#: The engineer block on Work Calendar, read until the short names run out.
+ENGINEER_FIRST_ROW = 20
+ENGINEER_MAX_ROWS = 12
 ENGINEER_COLUMNS = {"short_name": "A", "pattern": "B", "available_hours": "C"}
 HOLIDAY_FIRST_ROW = 6
 HOLIDAY_LAST_ROW = 200
@@ -232,3 +239,14 @@ TS_RAW_LIMIT_PROBE = (SHEET_CALENDAR, "B34")
 
 #: Warn once free rows fall below this.
 TS_RAW_HEADROOM_WARNING = 500
+
+
+#: Proposal effort is kept on import even though no project number covers it:
+#: the Proposals sheet and the utilisation figures both need it.
+PROPOSAL_JOB_TYPES = ["2-Proposals Chargeable", "3-Proposals Regular"]
+
+# -- Reference tables ------------------------------------------------------
+#: Guards the Project Types and Rules of Credit tables against a stray edit.
+#: Not a security control -- the same cells are editable in Excel by anyone who
+#: can open the file -- so it is deliberately kept simple and in plain sight.
+REFERENCE_PASSWORD = "2026"

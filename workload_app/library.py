@@ -18,14 +18,17 @@ from typing import Any, Dict, List, Optional
 from . import config as cfg
 
 SETTINGS_FILE = Path.home() / ".workload_app.json"
-MAX_RECENT = 10
 MAX_CANDIDATES = 40
+#: How long to leave the native file dialog open before giving up on it.
+PICKER_TIMEOUT_SECONDS = 300
 
 #: A file has to have these to be a Workload workbook rather than any old xlsx.
+#: The paste-target sheets are not listed by name -- another unit's copy names
+#: them after its own people -- but at least one has to be there.
 REQUIRED_SHEETS = [
     cfg.SHEET_INPUTS, cfg.SHEET_DELIVERABLES, cfg.SHEET_ACTUALS,
     cfg.SHEET_PROJECT_TYPES, cfg.SHEET_RULES, cfg.SHEET_CALENDAR,
-    cfg.SHEET_TS_RAW, *cfg.TS_SHEETS.values(),
+    cfg.SHEET_TS_RAW,
 ]
 
 
@@ -64,7 +67,10 @@ def check(path: Path) -> List[str]:
         m.group(1).replace("&amp;", "&")
         for m in re.finditer(r'<sheet[^>]*\bname="([^"]*)"', workbook_xml)
     }
-    return [sheet for sheet in REQUIRED_SHEETS if sheet not in names]
+    missing = [sheet for sheet in REQUIRED_SHEETS if sheet not in names]
+    if not any(name.startswith(cfg.TS_SHEET_PREFIX) for name in names):
+        missing.append(f"{cfg.TS_SHEET_PREFIX}<engineer>")
+    return missing
 
 
 def validate(path: Path) -> Path:
@@ -88,8 +94,12 @@ def validate(path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------
-# remembering
+# units
 # --------------------------------------------------------------------------
+#
+# A unit is a name and the workbook that belongs to it -- Marine Structures and
+# its file, another discipline and its own.  Keeping them side by side is what
+# lets you put one down, work on another, and come back to the first.
 
 def _load() -> Dict[str, Any]:
     try:
@@ -105,29 +115,147 @@ def _store(data: Dict[str, Any]) -> None:
         pass          # remembering is a convenience, never a reason to fail
 
 
-def recent() -> List[Dict[str, Any]]:
-    """Recently opened workbooks that are still on disk."""
+def _unit_id(name: str, path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha1(f"{name}|{path}".encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def units() -> List[Dict[str, Any]]:
+    """Saved units, most recently opened first, with their file's state."""
     out: List[Dict[str, Any]] = []
-    for entry in _load().get("recent", []):
-        path = Path(entry)
-        if path.is_file():
-            out.append(describe(path))
+    for entry in _load().get("units", []):
+        path = Path(entry.get("workbook", ""))
+        record = {
+            "id": entry.get("id") or _unit_id(entry.get("name", ""), path),
+            "name": entry.get("name") or path.stem,
+            "workbook": str(path),
+            "opened": entry.get("opened"),
+            "exists": path.is_file(),
+        }
+        if record["exists"]:
+            try:
+                # Only the file's own details; the unit keeps the name you gave it.
+                details = describe(path)
+                record.update({k: details[k] for k in
+                               ("folder", "size_mb", "modified")})
+                record["file_name"] = details["name"]
+            except OSError:
+                record["exists"] = False
+        out.append(record)
+    out.sort(key=lambda u: (u["opened"] or ""), reverse=True)
     return out
 
 
-def remember(path: Path) -> None:
+def find_unit(unit_id: str) -> Optional[Dict[str, Any]]:
+    for unit in units():
+        if unit["id"] == unit_id:
+            return unit
+    return None
+
+
+def save_unit(name: str, path: Path) -> Dict[str, Any]:
+    """Add or update a unit, and mark it as the one just opened."""
+    name = (name or path.stem).strip()
     data = _load()
-    entries = [str(path)] + [
-        e for e in data.get("recent", []) if e != str(path)
+    entries = [
+        e for e in data.get("units", [])
+        if not (e.get("workbook") == str(path) and e.get("name") == name)
     ]
-    data["recent"] = entries[:MAX_RECENT]
+    record = {
+        "id": _unit_id(name, path),
+        "name": name,
+        "workbook": str(path),
+        # Microseconds, not seconds: two units opened in the same second would
+        # otherwise tie and the order would stop meaning anything.
+        "opened": _dt.datetime.now().isoformat(),
+    }
+    data["units"] = [record] + entries
     _store(data)
+    return record
 
 
-def forget(path: Path) -> None:
+def touch_unit(unit_id: str) -> None:
+    """Mark a unit as the one just opened, so it sorts to the front."""
     data = _load()
-    data["recent"] = [e for e in data.get("recent", []) if e != str(path)]
+    entries = data.get("units", [])
+    for entry in entries:
+        if entry.get("id") == unit_id:
+            entry["opened"] = _dt.datetime.now().isoformat()
+    data["units"] = (
+        [e for e in entries if e.get("id") == unit_id]
+        + [e for e in entries if e.get("id") != unit_id]
+    )
     _store(data)
+
+
+def forget_unit(unit_id: str) -> None:
+    """Remove a unit from the list.  The workbook itself is left alone."""
+    data = _load()
+    data["units"] = [e for e in data.get("units", []) if e.get("id") != unit_id]
+    _store(data)
+
+
+def rename_unit(unit_id: str, name: str) -> None:
+    data = _load()
+    for entry in data.get("units", []):
+        if entry.get("id") == unit_id:
+            entry["name"] = name.strip() or entry.get("name")
+    _store(data)
+
+
+# --------------------------------------------------------------------------
+# the operating system's own file dialog
+# --------------------------------------------------------------------------
+
+_PICKER_SCRIPT = """
+import sys
+try:
+    import tkinter
+    from tkinter import filedialog
+except Exception:
+    sys.exit(3)
+root = tkinter.Tk()
+root.withdraw()
+root.attributes('-topmost', True)
+path = filedialog.askopenfilename(
+    title='Choose your Workload workbook',
+    filetypes=[('Excel workbook', '*.xlsx *.xlsm'), ('All files', '*.*')],
+)
+root.destroy()
+sys.stdout.write(path or '')
+"""
+
+
+def pick_file() -> Optional[str]:
+    """Open the operating system's file dialog and return what was chosen.
+
+    Runs in a subprocess: the toolkit insists on owning the main thread, which
+    the web server already has.  ``None`` means the dialog was cancelled;
+    a missing toolkit raises, so the caller can fall back to typing a path.
+    """
+    import subprocess
+    import sys
+
+    try:
+        finished = subprocess.run(
+            [sys.executable, "-c", _PICKER_SCRIPT],
+            capture_output=True, text=True, timeout=PICKER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise NotAWorkbook("The file dialog was left open too long.")
+    except OSError as exc:
+        raise NotAWorkbook(f"Could not open a file dialog ({exc}).")
+    if finished.returncode == 3:
+        raise NotAWorkbook(
+            "This Python has no file dialog available (tkinter is missing). "
+            "Paste the full path instead, or use Browse folders below."
+        )
+    if finished.returncode != 0:
+        raise NotAWorkbook("The file dialog could not be opened.")
+    chosen = finished.stdout.strip()
+    return chosen or None
 
 
 # --------------------------------------------------------------------------

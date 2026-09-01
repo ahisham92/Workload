@@ -60,7 +60,7 @@ class TestStaticAndRouting:
     def test_the_page_is_served(self, server):
         with urllib.request.urlopen(server + "/") as response:
             assert response.status == 200
-            assert b"Workload Input" in response.read()
+            assert b"Workload" in response.read()
 
     @pytest.mark.parametrize("path", ["/app.css", "/app.js"])
     def test_assets_are_served(self, server, path):
@@ -262,12 +262,15 @@ class TestTimesheetEndpoints:
         assert status == 400
 
 
-class TestChoosingAWorkbook:
+class TestChoosingAUnit:
+    """A unit is a name and the workbook behind it; nothing opens until one is."""
+
     def test_it_starts_with_none_open(self, empty_server):
         status, body = call(empty_server, "/api/status")
         assert status == 200
         assert body["open"] is False
         assert body["workbook"] is None
+        assert body["unit"] is None
 
     def test_the_registers_are_refused_until_one_is_chosen(self, empty_server):
         for path in ("/api/projects", "/api/deliverables", "/api/reference",
@@ -280,30 +283,57 @@ class TestChoosingAWorkbook:
         with urllib.request.urlopen(empty_server + "/") as response:
             assert response.status == 200
 
-    def test_the_library_lists_somewhere_to_start(self, empty_server):
-        status, body = call(empty_server, "/api/workbooks")
+    def test_the_list_starts_empty_with_somewhere_to_look(self, empty_server):
+        status, body = call(empty_server, "/api/units")
         assert status == 200
-        assert body["recent"] == []
+        assert body["units"] == []
         assert "cwd" in body and "suggestions" in body
 
-    def test_opening_one_makes_everything_work(self, empty_server, workbook_copy):
-        status, body = call(empty_server, "/api/workbooks/open", "POST",
-                            {"path": str(workbook_copy)})
+    def test_opening_one_names_it_and_makes_everything_work(self, empty_server,
+                                                            workbook_copy):
+        status, body = call(empty_server, "/api/units/open", "POST",
+                            {"path": str(workbook_copy), "name": "Marine Structures"})
         assert status == 200
         assert body["open"] is True
+        assert body["unit"]["name"] == "Marine Structures"
         assert body["projects"] == 40
+        assert body["engineers"] == ["Ahmed", "Osama", "Kirolos"]
         status, body = call(empty_server, "/api/projects")
         assert status == 200 and len(body["projects"]) == 40
 
-    def test_an_opened_workbook_is_remembered(self, empty_server, workbook_copy):
-        call(empty_server, "/api/workbooks/open", "POST", {"path": str(workbook_copy)})
-        _status, body = call(empty_server, "/api/workbooks")
-        assert [r["path"] for r in body["recent"]] == [str(workbook_copy.resolve())]
+    def test_an_opened_unit_is_remembered_and_can_be_reopened_by_id(
+            self, empty_server, workbook_copy):
+        call(empty_server, "/api/units/open", "POST",
+             {"path": str(workbook_copy), "name": "Marine Structures"})
+        _status, body = call(empty_server, "/api/units")
+        assert [u["name"] for u in body["units"]] == ["Marine Structures"]
+        unit_id = body["units"][0]["id"]
+
+        call(empty_server, "/api/units/close", "POST")
+        status, body = call(empty_server, "/api/units/open", "POST",
+                            {"unit_id": unit_id})
+        assert status == 200 and body["unit"]["name"] == "Marine Structures"
+
+    def test_a_unit_that_is_no_longer_saved_is_reported(self, empty_server):
+        status, body = call(empty_server, "/api/units/open", "POST",
+                            {"unit_id": "nope"})
+        assert status == 404
+        assert "no longer saved" in body["error"]
+
+    def test_forgetting_a_unit(self, empty_server, workbook_copy):
+        call(empty_server, "/api/units/open", "POST",
+             {"path": str(workbook_copy), "name": "Marine Structures"})
+        _status, body = call(empty_server, "/api/units")
+        unit_id = body["units"][0]["id"]
+        status, _ = call(empty_server, f"/api/units/{unit_id}", "DELETE")
+        assert status == 200
+        _status, body = call(empty_server, "/api/units")
+        assert body["units"] == []
 
     def test_the_wrong_file_is_refused_with_a_reason(self, empty_server, tmp_path):
         other = tmp_path / "notes.txt"
         other.write_text("hello")
-        status, body = call(empty_server, "/api/workbooks/open", "POST",
+        status, body = call(empty_server, "/api/units/open", "POST",
                             {"path": str(other)})
         assert status == 422
         assert "not an .xlsx file" in body["error"]
@@ -311,14 +341,14 @@ class TestChoosingAWorkbook:
     def test_closing_saves_and_lets_you_pick_again(self, server):
         call(server, "/api/projects", "POST", {
             "number": "CLOSE-0100D", "name": "x", "budget_mm": 1, "status": "Active"})
-        status, body = call(server, "/api/workbooks/close", "POST")
+        status, body = call(server, "/api/units/close", "POST")
         assert status == 200 and body["open"] is False
         status, _ = call(server, "/api/projects")
         assert status == 409
 
     def test_browsing_a_folder(self, empty_server, workbook_copy):
         folder = str(workbook_copy.parent)
-        _status, body = call(empty_server, f"/api/workbooks?folder={folder}")
+        _status, body = call(empty_server, f"/api/units?folder={folder}")
         assert body["browse"]["folder"] == folder
         assert any(f["name"] == workbook_copy.name for f in body["browse"]["files"])
 
@@ -350,3 +380,251 @@ class TestCapacityEndpoint:
                             {"raw_last_row": 90000})
         assert status == 422
         assert any("beyond what the stack" in m for m in body["errors"])
+
+
+class TestProjectWithDeliverables:
+    """Deliverables live inside their project and are saved with it."""
+
+    PROJECT = {"number": "SET-0100D", "name": "One go", "budget_mm": 4,
+               "status": "Active"}
+
+    def _deliverable(self, **overrides):
+        item = {"name": "Phase", "type_code": "DD", "phase_weight": 1.0,
+                "ts_phase": 1, "shares": {"Ahmed": 1.0}}
+        item.update(overrides)
+        return item
+
+    def test_a_project_and_its_deliverables_are_created_together(self, server):
+        status, body = call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [
+                self._deliverable(name="Design", phase_weight=0.4),
+                self._deliverable(name="Report", phase_weight=0.6, ts_phase=2),
+            ],
+        })
+        assert status == 200
+        assert body["project"]["number"] == "SET-0100D"
+        assert [d["name"] for d in body["deliverables"]] == ["Design", "Report"]
+        assert body["weight_total"] == 1.0
+
+    def test_weights_short_of_one_hundred_are_refused(self, server):
+        status, body = call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(phase_weight=0.4)],
+        })
+        assert status == 422
+        assert any("total 40.0%, not 100%" in m for m in body["errors"])
+
+    def test_weights_over_one_hundred_are_refused(self, server):
+        status, body = call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(phase_weight=0.7),
+                             self._deliverable(name="Two", phase_weight=0.7)],
+        })
+        assert status == 422
+        assert any("140.0%" in m for m in body["errors"])
+
+    def test_a_project_with_no_deliverables_yet_can_still_be_saved(self, server):
+        status, _ = call(server, "/api/projects/full", "POST",
+                         {"project": self.PROJECT, "deliverables": []})
+        assert status == 200
+
+    def test_a_deliverable_split_is_named_per_engineer(self, server):
+        call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(shares={"Ahmed": 0.25, "Osama": 0.75})],
+        })
+        _status, body = call(server, "/api/projects/SET-0100D")
+        shares = body["deliverables"][0]["shares"]
+        assert shares["Ahmed"] == 0.25 and shares["Osama"] == 0.75
+
+    def test_a_split_that_misses_one_hundred_is_refused(self, server):
+        status, body = call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(shares={"Ahmed": 0.6, "Osama": 0.3})],
+        })
+        assert status == 422
+        assert any("must total 100%" in m for m in body["errors"])
+
+    def test_the_detail_view_carries_its_figures(self, server):
+        _status, body = call(server, "/api/projects/N25185-0100D")
+        assert body["project"]["number"] == "N25185-0100D"
+        assert body["metrics"]["progress"] == pytest.approx(0.316, abs=0.001)
+        assert len(body["deliverables"]) == 22
+
+    def test_editing_keeps_each_deliverable_on_its_own_row(self, server):
+        _status, before = call(server, "/api/projects/N25178-0100D")
+        row = before["deliverables"][0]["row"]
+        status, body = call(server, "/api/projects/N25178-0100D/full", "PUT", {
+            "project": before["project"],
+            "deliverables": [{**before["deliverables"][0], "name": "Renamed"}],
+        })
+        assert status == 200
+        assert body["deliverables"][0]["row"] == row
+
+    def test_a_removed_deliverable_is_cleared(self, server):
+        call(server, "/api/projects/full", "POST", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(name="Keep", phase_weight=0.5),
+                             self._deliverable(name="Drop", phase_weight=0.5)],
+        })
+        status, body = call(server, "/api/projects/SET-0100D/full", "PUT", {
+            "project": self.PROJECT,
+            "deliverables": [self._deliverable(name="Keep", phase_weight=1.0)],
+        })
+        assert status == 200 and body["removed"] == 1
+        _status, detail = call(server, "/api/projects/SET-0100D")
+        assert [d["name"] for d in detail["deliverables"]] == ["Keep"]
+
+    def test_an_unknown_project_is_a_404(self, server):
+        status, _ = call(server, "/api/projects/GHOST-0100D")
+        assert status == 404
+
+
+class TestReferenceLock:
+    """The reference tables are a deterrent against a stray edit, not a vault."""
+
+    def test_they_are_locked_to_begin_with(self, server):
+        _status, body = call(server, "/api/status")
+        assert body["reference_unlocked"] is False
+
+    def test_saving_while_locked_is_refused(self, server):
+        status, body = call(server, "/api/reference", "PUT", {"project_types": []})
+        assert status == 403
+        assert "locked" in body["error"]
+
+    def test_the_wrong_password_does_not_unlock(self, server):
+        status, body = call(server, "/api/reference/unlock", "POST",
+                            {"password": "1234"})
+        assert status == 403
+        assert "not right" in body["error"]
+        _status, status_body = call(server, "/api/status")
+        assert status_body["reference_unlocked"] is False
+
+    def _unlock(self, server):
+        status, _ = call(server, "/api/reference/unlock", "POST",
+                         {"password": "2026"})
+        assert status == 200
+
+    def test_the_right_password_unlocks(self, server):
+        self._unlock(server)
+        _status, body = call(server, "/api/status")
+        assert body["reference_unlocked"] is True
+
+    def _tables(self, server):
+        _status, ref = call(server, "/api/reference")
+        steps = [dict(s, type_code=code)
+                 for code, items in ref["credit_steps"].items() for s in items]
+        return ref["project_types"], steps
+
+    def test_a_credit_can_be_changed_and_comes_back(self, server):
+        self._unlock(server)
+        types, steps = self._tables(server)
+        for step in steps:
+            if step["type_code"] == "DD" and step["step_no"] == 1:
+                step["credit"] = 0.15
+        status, _ = call(server, "/api/reference", "PUT",
+                         {"project_types": types, "credit_steps": steps})
+        assert status == 200
+        _status, ref = call(server, "/api/reference")
+        assert [s["credit"] for s in ref["credit_steps"]["DD"]
+                if s["step_no"] == 1] == [0.15]
+
+    def test_a_portfolio_weight_can_be_changed(self, server):
+        self._unlock(server)
+        types, steps = self._tables(server)
+        for item in types:
+            if item["code"] == "CD":
+                item["portfolio_weight"] = 1.25
+        call(server, "/api/reference", "PUT",
+             {"project_types": types, "credit_steps": steps})
+        _status, ref = call(server, "/api/reference")
+        assert [t["portfolio_weight"] for t in ref["project_types"]
+                if t["code"] == "CD"] == [1.25]
+
+    def test_a_step_for_an_unknown_type_is_refused(self, server):
+        self._unlock(server)
+        types, steps = self._tables(server)
+        steps[0] = {**steps[0], "type_code": "ZZ"}
+        status, body = call(server, "/api/reference", "PUT",
+                            {"project_types": types, "credit_steps": steps})
+        assert status == 422
+        assert any("not in Project Types" in m for m in body["errors"])
+
+    def test_a_duplicated_step_is_refused(self, server):
+        self._unlock(server)
+        types, steps = self._tables(server)
+        steps[1] = {**steps[1], "type_code": steps[0]["type_code"],
+                    "step_no": steps[0]["step_no"]}
+        status, body = call(server, "/api/reference", "PUT",
+                            {"project_types": types, "credit_steps": steps})
+        assert status == 422
+        assert any("appears twice" in m for m in body["errors"])
+
+    def test_locking_again_closes_it(self, server):
+        self._unlock(server)
+        call(server, "/api/reference/lock", "POST")
+        status, _ = call(server, "/api/reference", "PUT", {"project_types": []})
+        assert status == 403
+
+
+class TestImportFilter:
+    """Narrowing an import to registered projects is what keeps the sheet small."""
+
+    def _export(self, readonly_wb, job_numbers):
+        openpyxl = pytest.importorskip("openpyxl")
+        headers = readonly_wb.timesheet_headers("Kirolos")
+        book = openpyxl.Workbook()
+        sheet = book.active
+        sheet.append(headers)
+        index = {h: i for i, h in enumerate(headers)}
+        for position, job in enumerate(job_numbers):
+            row = [None] * len(headers)
+            row[index["Job Type"]] = "1-Projects"
+            row[index["JobNumber"]] = job
+            row[index["FullName"]] = "Kirolos Nabil"
+            row[index["Date"]] = dt.date(2026, 9, (position % 28) + 1)
+            row[index["Phase"]] = 1
+            row[index["TotalHours"]] = 8.0
+            sheet.append(row)
+        buffer = io.BytesIO()
+        book.save(buffer)
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    def test_unregistered_rows_are_left_out(self, server, readonly_wb):
+        content = self._export(readonly_wb,
+                               ["N25185-0100D"] * 3 + ["MYSTERY-0100D"] * 2)
+        _status, staged = call(server, "/api/timesheets/stage", "POST", {
+            "engineer": "Kirolos", "filename": "k.xlsx",
+            "content_base64": content, "registered_only": True,
+        })
+        assert staged["row_count"] == 3
+        assert staged["dropped_rows"] == 2
+        assert staged["dropped"][0]["code"] == "MYSTERY-0100D"
+
+    def test_turning_the_filter_off_keeps_everything(self, server, readonly_wb):
+        content = self._export(readonly_wb,
+                               ["N25185-0100D"] * 3 + ["MYSTERY-0100D"] * 2)
+        _status, staged = call(server, "/api/timesheets/stage", "POST", {
+            "engineer": "Kirolos", "filename": "k.xlsx",
+            "content_base64": content, "registered_only": False,
+        })
+        assert staged["row_count"] == 5
+        assert staged["dropped_rows"] == 0
+
+    def test_absence_codes_are_kept(self, server, readonly_wb):
+        content = self._export(readonly_wb, ["LEAVE", "HOLIDAY", "N25185-0100D"])
+        _status, staged = call(server, "/api/timesheets/stage", "POST", {
+            "engineer": "Kirolos", "filename": "k.xlsx",
+            "content_base64": content, "registered_only": True,
+        })
+        assert staged["row_count"] == 3
+        assert staged["dropped_rows"] == 0
+
+    def test_an_export_with_nothing_registered_says_so(self, server, readonly_wb):
+        content = self._export(readonly_wb, ["MYSTERY-0100D"] * 3)
+        _status, staged = call(server, "/api/timesheets/stage", "POST", {
+            "engineer": "Kirolos", "filename": "k.xlsx",
+            "content_base64": content, "registered_only": True,
+        })
+        assert any("nothing to import" in m for m in staged["errors"])
