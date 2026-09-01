@@ -24,7 +24,7 @@ The app carries no workbook of its own: it edits the file you point it at, in
 place. Close that file in Excel first — Excel keeps its own copy in memory and
 would overwrite anything written while it is open.
 
-## What it does
+## What it does:
 
 **Timesheets** — upload each engineer's monthly export (`.xlsx` or `.csv`).
 Columns are matched to the TS sheet by heading name rather than by position, so
