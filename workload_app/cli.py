@@ -8,11 +8,9 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from . import __version__, config as cfg
+from . import __version__, config as cfg, library
+from .library import NotAWorkbook
 from .server import make_server
-
-DEFAULT_WORKBOOK = Path("data/Workload.xlsx")
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -23,8 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "-w", "--workbook", type=Path, default=DEFAULT_WORKBOOK,
-        help=f"path to the workbook (default: {DEFAULT_WORKBOOK})",
+        "-w", "--workbook", type=Path, default=None,
+        help="path to your Workload workbook; omit it and the app opens a "
+             "chooser in the browser",
     )
     parser.add_argument("--host", default="127.0.0.1",
                         help="interface to listen on (default: 127.0.0.1)")
@@ -45,15 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    workbook = args.workbook.expanduser()
-    if not workbook.is_file():
-        print(f"error: no workbook at {workbook}", file=sys.stderr)
-        print("Point the app at your copy with --workbook path/to/Workload.xlsx",
-              file=sys.stderr)
-        return 2
+
+    workbook = None
+    if args.workbook is not None:
+        try:
+            workbook = library.validate(args.workbook)
+        except NotAWorkbook as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
     try:
-        server = make_server(workbook.resolve(), args.host, args.port,
+        server = make_server(workbook, args.host, args.port,
                              autosave=not args.no_autosave, quiet=args.quiet)
     except OSError as exc:
         print(f"error: cannot listen on {args.host}:{args.port} ({exc})",
@@ -62,8 +63,11 @@ def main(argv=None) -> int:
 
     url = f"http://{args.host}:{args.port}/"
     print(f"Workload input app {__version__}")
-    print(f"  workbook : {workbook.resolve()}")
-    print(f"  backups  : {workbook.resolve().parent / cfg.BACKUP_DIRNAME}")
+    if workbook is None:
+        print("  workbook : none yet — choose one in the browser")
+    else:
+        print(f"  workbook : {workbook}")
+        print(f"  backups  : {workbook.parent / cfg.BACKUP_DIRNAME}")
     print(f"  autosave : {'on' if not args.no_autosave else 'off'}")
     print(f"  open     : {url}")
     print("Press Ctrl+C to stop.")
@@ -75,9 +79,10 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
-        result = server.service.save()               # type: ignore[attr-defined]
+        service = server.service                     # type: ignore[attr-defined]
+        result = service.save()
         if result.get("saved"):
-            print(f"Saved pending changes to {workbook}")
+            print(f"Saved pending changes to {service.path}")
         server.server_close()
     return 0
 
