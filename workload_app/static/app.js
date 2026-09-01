@@ -297,80 +297,153 @@ function showModalErrors(errors) {
 
 function renderOverview() {
   const data = state.overview;
-  if (!data) return;
-  const p = data.portfolio;
+  const report = state.report;
+  if (!data || !report) return;
 
   const yearSelect = $('#overview-year');
   if (yearSelect.options.length === 0) {
     yearSelect.append(el('option', { value: 'all' }, 'All years'));
-    for (const year of (data.available_years || []).slice().reverse()) {
+    for (const year of (report.periods.years || []).slice().reverse()) {
       yearSelect.append(el('option', { value: year }, year));
     }
     yearSelect.value = state.year === null ? 'all' : String(state.year);
   }
 
+  const t = report.team;
+  const inHand = report.by_status
+    .filter((s) => s.in_scope)
+    .reduce((sum, s) => sum + (s.budget_mm || 0), 0);
+  const label = report.period.label;
+
+  // Everything here is for the period chosen above, not life-to-date.
   const cards = [
-    ['In-hand budget', fmt.mm(p.budget_mm), `${p.in_scope_projects} active / not started`],
-    ['Actual MM booked', fmt.mm(p.actual_mm),
-      `${fmt.hours(p.actual_mm * data.hours_per_man_month)} hours`],
-    ['Earned MM', fmt.mm(p.earned_mm), 'budget × progress'],
-    ['Profit / (loss)', fmt.mm(p.profit_mm), 'earned − actual'],
-    ['Efficiency (CPI)', fmt.ratio(p.cpi),
-      p.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
-    ['Register', `${p.projects} / ${p.deliverables}`, 'projects / deliverables'],
+    ['In-hand budget', num(inHand), `active and not started, ${label.toLowerCase()}`],
+    ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
+    ['Actual MM booked', num(t.actual_mm), `${fmt.hours(t.actual_mm * report.hours_per_man_month)} hours`],
+    ['Earned MM', num(t.earned_mm), 'value delivered'],
+    ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
+    ['Utilisation', fmt.pct(t.utilisation), `of ${num(t.capacity_to_date_mm)} MM capacity to date`],
+    ['Efficiency (CPI)', fmt.ratio(t.cpi), t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
+    ['Projects live', fmt.int(t.projects_live), `${t.projects_active} active or not started`],
   ];
-  $('#overview-cards').replaceChildren(...cards.map(([label, value, sub]) =>
+  $('#overview-cards').replaceChildren(...cards.map(([label_, value, sub]) =>
     el('div', { class: 'card' },
-      el('div', { class: 'label' }, label),
+      el('div', { class: 'label' }, label_),
       el('div', { class: 'value' }, value),
       el('div', { class: 'sub' }, sub))));
 
+  renderHeroes(report);
+
   $('#engineer-cards').replaceChildren(
-    ...Object.entries(data.engineers).map(([name, e]) => engineerBlock(name, e)));
+    ...report.engineers.map((name) => engineerBlock(name, report, data)));
 
   renderDataCheck(data.data_check);
   renderIssues(data.issues || []);
+  renderDefinitions(report.definitions || []);
 }
 
-function engineerBlock(name, e) {
-  const months = e.months || [];
-  const peak = Math.max(1, ...months.map((m) => m.total || 0),
-    e.available_hours_per_month || 0);
-  const width = Math.max(14, Math.floor(760 / Math.max(months.length, 1)));
-  const bars = el('div', { class: 'bars' }, months.map((m) => {
-    const over = (m.utilisation || 0) > 1;
-    return el('div', {
-      class: `bar ${over ? 'over' : ''}`,
-      style: `flex-basis:${width}px;`
-        + (m.capacity ? `--cap:${Math.min(100, Math.round((m.capacity / peak) * 100))}%` : ''),
-      title: `${m.month}: ${fmt.hours(m.total)} h of ${fmt.hours(m.capacity)} `
-        + `(${fmt.pct(m.utilisation)}) — ${fmt.hours(m.projects)} h projects, `
-        + `${fmt.hours(m.proposals)} h proposals, ${fmt.hours(m.absence)} h absence`,
-    }, el('span', { style: `height:${Math.max(2, Math.round((m.total / peak) * 100))}%` }));
-  }));
-  const labels = el('div', { class: 'bar-labels' }, months.map((m) => el('div', {
-    style: `flex-basis:${width}px`,
-  }, months.length > 24 ? m.month.slice(2, 7) : m.month.slice(5))));
-  const util = e.average_utilisation;
+/** The month's and the year's top performer, by the same weighted scorecard. */
+function renderHeroes(report) {
+  const heroes = report.heroes || {};
+  const month = heroes.month;
+  const year = heroes.year;
+  const strip = $('#hero-strip');
+  if (!month && !year) { strip.replaceChildren(); return; }
+
+  const wins = heroes.wins || {};
+  strip.className = 'hero-strip';
+  strip.replaceChildren(
+    month
+      ? el('div', { class: 'hero' },
+          el('span', { class: 'medal' }, '🏅'),
+          el('div', { class: 'who' },
+            el('div', { class: 'label' }, `Hero of ${month.label}`),
+            el('div', { class: 'name' }, month.hero || '—'),
+            el('div', { class: 'why' },
+              `scored ${num(month.hero_score, 1)} of 100 · strongest on `
+              + `${(month.hero_strongest || '').toLowerCase()}`)))
+      : el('div', { class: 'hero' },
+          el('span', { class: 'medal' }, '🏅'),
+          el('div', { class: 'who' },
+            el('div', { class: 'label' }, 'Hero of the month'),
+            el('div', { class: 'hero-empty' },
+              'No completed month with booked time in this period yet.'))),
+    year
+      ? el('div', { class: 'hero hero-year' },
+          el('span', { class: 'medal' }, '🏆'),
+          el('div', { class: 'who' },
+            el('div', { class: 'label' }, `Hero of ${report.period.label.toLowerCase()}`),
+            el('div', { class: 'name' }, year.engineer || '—'),
+            el('div', { class: 'why' },
+              `scored ${num(year.score, 1)} of 100 · `
+              + `won ${year.months_won} of ${heroes.months_scored} month(s) scored`)))
+      : null,
+    Object.keys(wins).length
+      ? el('div', { class: 'hero', style: 'border-left-color: var(--series-3)' },
+          el('span', { class: 'medal' }, '📅'),
+          el('div', { class: 'who' },
+            el('div', { class: 'label' }, 'Months won'),
+            el('div', { class: 'why', style: 'margin-top:4px' },
+              Object.entries(wins)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, count]) => `${name} ${count}`).join(' · '))))
+      : null);
+}
+
+function renderDefinitions(definitions) {
+  $('#definitions-body').replaceChildren(
+    el('div', { class: 'defs' }, definitions.map((d) => el('div', { class: 'def' },
+      el('b', {}, d.field),
+      el('p', {}, d.means),
+      d.how ? el('p', { class: 'how' }, d.how) : null))));
+}
+
+/** One engineer's standing in the period, in the workbook's own measures.
+ *
+ *  Raw hours say very little on their own; man-months against capacity, and
+ *  value earned against effort spent, are what the workbook is built on.
+ */
+function engineerBlock(name, report, overview) {
+  const e = report.per_engineer[name];
+  const hours = overview.engineers[name] || {};
+  const util = e.utilisation;
   const pill = util === null ? 'pill-info'
     : util > 1.05 ? 'pill-bad' : util < 0.7 ? 'pill-warn' : 'pill-ok';
+  const won = (report.heroes && report.heroes.wins && report.heroes.wins[name]) || 0;
+
+  const measure = (label, value, hint) => el('div', { class: 'measure' },
+    el('span', { class: 'measure-label', title: hint }, label),
+    el('span', { class: 'measure-value' }, value));
+
   return el('div', { class: 'eng' },
     el('div', { class: 'eng-head' },
-      el('span', { class: 'eng-name' }, name),
+      el('span', { class: 'eng-name' },
+        el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
+        name,
+        won ? el('span', { class: 'pill pill-info', title: 'months won in this period' },
+          `🏅 ${won}`) : null),
       el('span', { class: `pill ${pill}` }, `${fmt.pct(util)} utilised`)),
-    el('div', { class: 'muted' },
-      `${fmt.hours(e.total_hours)} h total · ${fmt.hours(e.project_hours)} h on projects · `
-      + `${fmt.hours(e.proposal_hours)} h proposals · ${fmt.hours(e.absence_hours)} h absence · `
-      + `${fmt.hours(e.overtime_hours)} h overtime`),
-    months.length
-      ? el('div', { class: 'chart' }, bars, labels)
-      : el('p', { class: 'muted' }, 'No hours in this period.'),
-    months.length
-      ? el('div', { class: 'chart-legend' },
-          el('span', {}, `bar = hours booked (tallest ${fmt.hours(peak)} h)`),
-          el('span', {}, 'dashed line = monthly capacity'),
-          el('span', {}, 'red = over capacity'))
-      : null);
+
+    el('div', { class: 'meter' },
+      el('span', {
+        style: `width:${Math.min(100, Math.round((util || 0) * 100))}%;`
+          + `background:${util > 1.05 ? 'var(--bad)' : 'var(--ok)'}`,
+      })),
+
+    el('div', { class: 'measures' },
+      measure('Actual MM', num(e.actual_mm), 'Effort really spent in this period'),
+      measure('Capacity MM', num(e.capacity_to_date_mm),
+        'Availability × months, pro-rated to the as-at date'),
+      measure('Earned MM', num(e.earned_mm), 'Value delivered, budget × progress'),
+      measure('CPI', fmt.ratio(e.cpi), 'Earned ÷ actual. Above 1.00 is good'),
+      measure('Plan adherence', fmt.pct(e.plan_adherence),
+        'Actual against what was planned to date'),
+      measure('Projects', fmt.int(e.projects_worked), 'Projects booked to in this period')),
+
+    el('div', { class: 'muted', style: 'margin-top:6px' },
+      `${fmt.hours(hours.total_hours)} h booked in total`
+      + (hours.absence_hours ? ` · ${fmt.hours(hours.absence_hours)} h absence` : '')
+      + (hours.overtime_hours ? ` · ${fmt.hours(hours.overtime_hours)} h overtime` : '')));
 }
 
 function renderDataCheck(check) {
@@ -1046,6 +1119,8 @@ function renderReference() {
       project_types: (state.reference.project_types || []).map((t) => ({ ...t })),
       credit_steps: Object.entries(state.reference.credit_steps || {})
         .flatMap(([code, steps]) => steps.map((s) => ({ ...s, type_code: code }))),
+      scorecard_factors: (state.reference.scorecard_factors || [])
+        .map((f) => ({ ...f })),
     };
   }
   const draft = state.referenceDraft;
@@ -1124,7 +1199,52 @@ function renderReference() {
           el('td', {}, unlocked
             ? el('button', { class: 'btn btn-sm btn-danger', type: 'button',
                 onclick: () => { draft.credit_steps.splice(i, 1); renderReference(); } }, '✕')
-            : ''))))))));
+            : ''))))))),
+
+    scorecardPanel(draft, unlocked, cell));
+}
+
+/** The factors the team scorecard ranks on — weights, scoring and targets. */
+function scorecardPanel(draft, unlocked, cell) {
+  const factors = draft.scorecard_factors || [];
+  const total = factors.reduce((sum, f) => sum + (Number(f.weight) || 0), 0);
+  const balanced = Math.abs(total - 1) <= 1e-4;
+
+  const directionCell = (factor) => unlocked
+    ? (() => {
+        const select = el('select', {
+          onchange: (e) => { factor.direction = e.target.value; renderReference(); },
+        },
+          el('option', { value: 'higher' }, 'vs best performer'),
+          el('option', { value: 'target' }, 'vs a target'));
+        select.value = factor.direction || 'higher';
+        return select;
+      })()
+    : (factor.direction === 'target' ? 'vs a target' : 'vs best performer');
+
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, 'Scorecard factors'),
+        el('p', { class: 'muted' },
+          'What the team ranking is built from, and how much each factor counts. '
+          + 'The weights have to total 100% or one period\u2019s ranking cannot be '
+          + 'read against another\u2019s.')),
+      el('span', { class: `pill ${balanced ? 'pill-ok' : 'pill-bad'}` },
+        `weights ${fmt.pct(total)}`)),
+    el('div', { class: 'table-wrap' }, el('table', { class: unlocked ? 'edit-table' : '' },
+      el('thead', {}, el('tr', {},
+        ['Factor', 'Weight', 'Scored', 'Target', 'Measured on']
+          .map((h, i) => el('th', { class: [1, 3].includes(i) ? 'num' : '' }, h)))),
+      el('tbody', {}, factors.map((factor) => el('tr', {},
+        el('td', { class: 'wide' }, cell(factor, 'factor')),
+        el('td', { class: 'num' }, cell(factor, 'weight',
+          { type: 'number', percent: true, step: '5', min: '0', max: '100' })),
+        el('td', {}, directionCell(factor)),
+        el('td', { class: 'num' }, factor.direction === 'target'
+          ? cell(factor, 'target', { type: 'number', step: '0.05', number: true })
+          : '—'),
+        el('td', { class: 'muted' }, factor.key || '—')))))));
 }
 
 async function unlockReference() {
@@ -1154,7 +1274,8 @@ async function saveReference() {
       method: 'PUT', body: state.referenceDraft,
     });
     markSaved(result.save);
-    toast(`Saved ${result.project_types} types and ${result.credit_steps} steps.`, 'ok');
+    toast(`Saved ${result.project_types} types, ${result.credit_steps} steps `
+      + `and ${result.factors} scorecard factor(s).`, 'ok');
     state.referenceDraft = null;
     state.reference = await api('/api/reference');
     await refreshAll();
@@ -1185,11 +1306,11 @@ async function refreshAll() {
   $('#workbook-path').title = `${status.workbook} — backups in ${status.backups}`;
   markSaved({ saved: !status.unsaved_changes, pending: status.unsaved_changes });
 
-  renderOverview();
   renderTimesheets();
   renderProjects();
   renderReference();
   await setupReports();
+  if (state.team) await loadTeam();
 }
 
 async function setupReports() {
@@ -1198,6 +1319,7 @@ async function setupReports() {
     // First load: fetch once to learn which years the workbook covers.
     const first = await api('/api/reports?period=year');
     state.report = first;
+    state.year = first.period.year;
     if (!state.reportMember) state.reportMember = first.engineers[0];
     const yearSelect = $('#report-year');
     yearSelect.replaceChildren(...first.periods.years.map(
@@ -1207,12 +1329,15 @@ async function setupReports() {
       (q) => el('option', { value: q }, q)));
     $('#report-quarter-field').hidden = true;
     renderReports();
+    renderOverview();
   } else {
     await loadReport();
+    renderOverview();
   }
 }
 
 function switchView(view) {
+  if (view === 'team' && !state.team) loadTeam();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
@@ -1225,16 +1350,27 @@ function wire() {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
   }
   $('#overview-year').addEventListener('change', async (event) => {
-    state.year = event.target.value === 'all' ? null : Number(event.target.value);
-    state.overview = await api(`/api/overview?year=${event.target.value}`);
+    // One year drives both the portfolio figures and the workload charts, so
+    // the page can never show one year's effort beside another's budget.
+    const value = event.target.value;
+    state.year = value === 'all' ? null : Number(value);
+    const query = value === 'all' ? 'period=all' : `period=year&year=${value}`;
+    [state.overview, state.report] = await Promise.all([
+      api(`/api/overview?year=${value}`),
+      api(`/api/reports?${query}`),
+    ]);
+    $('#report-period').value = value === 'all' ? 'all' : 'year';
+    if (value !== 'all') $('#report-year').value = value;
     renderOverview();
     renderTimesheets();
+    renderReports();
   });
   $('#project-search').addEventListener('input', renderProjects);
   $('#project-filter').addEventListener('change', renderProjects);
   $('#project-status-filter').addEventListener('change', renderProjects);
   $('#btn-new-project').addEventListener('click', newProject);
   $('#btn-ts-check').addEventListener('click', checkTimesheetFile);
+  $('#btn-add-engineer').addEventListener('click', () => openEngineerModal(null));
   $('#btn-pick').addEventListener('click', pickFile);
   $('#btn-add-unit').addEventListener('click', addUnit);
   $('#unit-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') addUnit(); });
@@ -1724,4 +1860,136 @@ function renderReview(data) {
         : el('div', { class: 'msg msg-ok' },
             'Every project accounts for 100% of its scope and every deliverable '
             + 'splits 100% between the team.')));
+}
+
+/* ---------------------------------------------------------------- team */
+
+state.team = null;
+
+async function loadTeam() {
+  state.team = await api('/api/team');
+  renderTeam();
+}
+
+function renderTeam() {
+  const data = state.team;
+  if (!data) return;
+  const years = data.years || [];
+  const room = data.max_engineers - data.engineers.length;
+
+  $('#btn-add-engineer').disabled = room <= 0;
+  $('#btn-add-engineer').title = room > 0 ? ''
+    : `A unit can hold ${data.max_engineers} engineers.`;
+
+  $('#team-body').replaceChildren(
+    el('div', { class: 'msg msg-info' },
+      'Adding someone gives them a timesheet sheet of their own, a place in the '
+      + 'stack that builds Timesheet Raw, a column for their share of every '
+      + 'deliverable, and a row in the availability table. '
+      + `Room for ${room} more.`),
+
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {},
+        ['#', 'Engineer', 'Timesheet name pattern', 'Hours / month',
+         ...years.map(String), 'Timesheet rows', ''].map((h, i) =>
+          el('th', { class: i === 0 || i >= 3 ? 'num' : '' }, h)))),
+      el('tbody', {}, data.engineers.map(
+        (person, position) => engineerRow(person, position, years))))));
+}
+
+function engineerRow(person, position, years) {
+  const actions = el('div', { class: 'row-actions' },
+    el('button', {
+      class: 'btn btn-sm', type: 'button',
+      onclick: () => openEngineerModal(person),
+    }, 'Edit'),
+    el('button', {
+      class: 'btn btn-sm btn-danger', type: 'button',
+      onclick: () => removeEngineer(person),
+    }, 'Remove'));
+
+  return el('tr', {},
+    el('td', { class: 'num muted', title: `slot ${person.slot}` }, position + 1),
+    el('td', {}, el('span', { class: 'eng-name' },
+      el('span', {
+        class: 'swatch',
+        style: `background:var(--series-${(person.slot % 6) + 1})`,
+      }),
+      el('b', {}, person.short_name))),
+    el('td', { class: 'code' }, person.pattern),
+    el('td', { class: 'num' }, fmt.int(person.available_hours)),
+    ...years.map((year) => el('td', { class: 'num' },
+      fmt.pct0((person.availability || {})[year]))),
+    el('td', { class: 'num' },
+      el('span', {}, fmt.int(person.rows)),
+      el('span', { class: 'slot-note' }, ` · ${person.sheet || 'no sheet'}`)),
+    el('td', {}, actions));
+}
+
+function openEngineerModal(person) {
+  const years = state.team.years || [];
+  const editing = Boolean(person);
+  const fields = [
+    { name: 'short_name', label: 'Short name',
+      hint: 'also names their timesheet sheet' },
+    { name: 'pattern', label: 'Timesheet name pattern',
+      hint: 'matched against FullName in the export, e.g. *Nadia*' },
+    { name: 'available_hours', label: 'Available hours per month',
+      type: 'number', step: '1', min: '1' },
+    ...years.map((year) => ({
+      name: `availability_${year}`, label: `Availability ${year} %`,
+      type: 'number', step: '5', min: '0', max: '200',
+    })),
+  ];
+  const values = editing ? {
+    short_name: person.short_name, pattern: person.pattern,
+    available_hours: person.available_hours,
+    ...Object.fromEntries(years.map((y) => [
+      `availability_${y}`, toPercent((person.availability || {})[y])])),
+  } : {
+    available_hours: 185,
+    ...Object.fromEntries(years.map((y) => [`availability_${y}`, 100])),
+  };
+
+  openModal(editing ? `Edit ${person.short_name}` : 'Add engineer', fields,
+    async () => {
+      const raw = modalValues();
+      const body = {
+        short_name: raw.short_name, pattern: raw.pattern,
+        available_hours: raw.available_hours,
+        availability: Object.fromEntries(years.map((y) => [
+          y, fromPercent(raw[`availability_${y}`])])),
+      };
+      const result = editing
+        ? await api(`/api/team/${encodeURIComponent(person.short_name)}`,
+            { method: 'PUT', body })
+        : await api('/api/team', { method: 'POST', body });
+      markSaved(result.save);
+      toast(editing
+        ? `${result.engineer} updated.`
+        : `${result.engineer} added, with ${result.sheet}.`, 'ok');
+      state.reportMember = null;
+      await refreshAll();
+      await loadTeam();
+    }, values);
+}
+
+async function removeEngineer(person) {
+  if (!window.confirm(
+    `Remove ${person.short_name} from this unit?\n\n`
+    + `Their ${person.sheet} sheet goes with them, along with their column of `
+    + `every deliverable's split (${fmt.int(person.rows)} timesheet rows).\n\n`
+    + 'A backup of the workbook is taken first.')) return;
+  try {
+    const result = await api(`/api/team/${encodeURIComponent(person.short_name)}`,
+      { method: 'DELETE' });
+    markSaved(result.save);
+    toast(`${result.engineer} removed (${result.deliverables_cleared} `
+      + 'deliverable split(s) cleared).', 'ok');
+    state.reportMember = null;
+    await refreshAll();
+    await loadTeam();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
 }

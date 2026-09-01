@@ -47,6 +47,8 @@ PROJECT_INPUT_COLUMNS: Dict[str, str] = {
 #: The fallback split, one column per engineer in Work Calendar order.  Keyed by
 #: position rather than by name so another unit's team lands in the right cells.
 PROJECT_MANUAL_SHARE_COLUMNS = ["W", "X", "Y"]
+#: Columns for a fourth engineer onwards, in free space to the right.
+PROJECT_MANUAL_SHARE_EXTRA_FIRST_COL = "AB"
 
 #: field name -> column letter, for cells the workbook calculates.
 PROJECT_CALC_COLUMNS: Dict[str, str] = {
@@ -75,9 +77,9 @@ PROJECT_IN_SCOPE_STATUSES = {"Active", "Not Started"}
 AVAILABILITY_HEADER_ROW = 90
 AVAILABILITY_FIRST_COL = "B"
 AVAILABILITY_LAST_COL = "F"
-#: The availability block is read from this row until the names run out.
+#: The availability block, and the continuation used past the third engineer.
 AVAILABILITY_FIRST_ROW = 91
-AVAILABILITY_MAX_ROWS = 12
+AVAILABILITY_EXTRA_FIRST_ROW = 100
 MONTHS_PER_QUARTER_CELL = "B94"
 AS_AT_DATE_CELL = "B96"
 
@@ -97,6 +99,9 @@ DELIVERABLE_INPUT_COLUMNS: Dict[str, str] = {
 
 #: Each deliverable's split, one column per engineer in Work Calendar order.
 DELIVERABLE_SHARE_COLUMNS = ["K", "L", "M"]
+#: Columns for a fourth engineer onwards.  The workbook's own formulas only
+#: know about the first three; the app reads and writes all of them.
+DELIVERABLE_SHARE_EXTRA_FIRST_COL = "AG"
 
 DELIVERABLE_CALC_COLUMNS: Dict[str, str] = {
     "project_name": "B",
@@ -159,9 +164,13 @@ WORKING_WEEK_COLUMNS = {"weekday": "A", "day": "B", "working": "C"}
 HOURS_PER_DAY_CELL = "B14"
 ANALYSIS_START_CELL = "B15"
 ANALYSIS_END_CELL = "B16"
-#: The engineer block on Work Calendar, read until the short names run out.
+#: The engineer block on Work Calendar, as the workbook ships it: three rows,
+#: with the next heading immediately below.
 ENGINEER_FIRST_ROW = 20
-ENGINEER_MAX_ROWS = 12
+ENGINEER_BUILT_IN_SLOTS = 3
+#: A fourth engineer onwards goes here instead, well clear of everything the
+#: workbook uses, so nothing has to be inserted and no formula shifts.
+ENGINEER_EXTRA_FIRST_ROW = 100
 ENGINEER_COLUMNS = {"short_name": "A", "pattern": "B", "available_hours": "C"}
 HOLIDAY_FIRST_ROW = 6
 HOLIDAY_LAST_ROW = 200
@@ -268,3 +277,30 @@ PHASING_LAST_COL = "X"
 #: a value is typed into the override block, which starts here (one row per
 #: project, aligned with Inputs).
 PHASING_OVERRIDE_FIRST_ROW = 95
+
+
+#: How many engineers a unit may have.  Well past any real team, and bounded so
+#: a typo cannot walk the slots off the end of the sheet.
+MAX_ENGINEERS = 12
+
+# -- Scorecard: the factors the ranking is built from ----------------------
+SHEET_SCORECARD = "Scorecard"
+SCORECARD_FIRST_ROW = 6
+SCORECARD_LAST_ROW = 11
+SCORECARD_COLUMNS = {
+    "factor": "A", "weight": "B", "direction": "C", "target": "D",
+    "how": "E",
+}
+#: What each factor is measured on.  The sheet names the factor in words; this
+#: is the figure behind it, matched in row order.
+SCORECARD_KEYS = [
+    "type_weighted_cpi", "utilisation", "plan_adherence",
+    "type_weighted_earned_mm", "actual_mm", "projects_worked",
+]
+SCORECARD_DIRECTION_HIGHER = "Higher is better"
+SCORECARD_DIRECTION_TARGET = "Target band"
+
+# -- Definitions: the glossary shown beside the measures -------------------
+SHEET_DEFINITIONS = "Definitions"
+DEFINITIONS_COLUMNS = {"field": "A", "where": "B", "means": "C", "how": "D"}
+DEFINITIONS_LAST_ROW = 40

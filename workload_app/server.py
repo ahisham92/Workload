@@ -181,6 +181,35 @@ class WorkloadService:
                 "actuals_last_row": wb.actuals_last_row(),
             }
 
+    # -- the team --------------------------------------------------------
+    def team(self) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            return {
+                "engineers": wb.team(),
+                "years": sorted(wb._availability_years().values()),
+                "max_engineers": cfg.MAX_ENGINEERS,
+                "built_in_slots": cfg.ENGINEER_BUILT_IN_SLOTS,
+            }
+
+    def add_engineer(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.add_engineer(body)
+            result["save"] = self._commit()
+            return result
+
+    def update_engineer(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.update_engineer(engineer, body)
+            result["save"] = self._commit()
+            return result
+
+    def remove_engineer(self, engineer: str) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.remove_engineer(engineer)
+            result["save"] = self._commit()
+            return result
+
     def reports(self, kind: str, year: Optional[int],
                 quarter: Optional[str]) -> Dict[str, Any]:
         """Every report figure for one period, computed in a single pass."""
@@ -191,6 +220,8 @@ class WorkloadService:
             data["periods"] = self._periods(wb)
             data["unit"] = self.unit
             data["issues"] = wb.register_issues()
+            data["definitions"] = wb.definitions()
+            data["data_check"] = wb.data_check()
             return data
 
     def _periods(self, wb) -> Dict[str, Any]:
@@ -378,8 +409,11 @@ class WorkloadService:
                     HTTPStatus.FORBIDDEN,
                     "The reference tables are locked. Unlock them first.",
                 )
-            result = self.workbook.save_reference(
+            wb = self.workbook
+            result = wb.save_reference(
                 body.get("project_types"), body.get("credit_steps"))
+            if body.get("scorecard_factors") is not None:
+                result.update(wb.save_scorecard_factors(body["scorecard_factors"]))
             result["save"] = self._commit()
             return result
 
@@ -444,6 +478,10 @@ def build_routes(service: WorkloadService) -> List[Route]:
          lambda q, b, row: service.update_deliverable(_int(row), b)),
         ("DELETE", "/api/deliverables/{}",
          lambda q, b, row: service.delete_deliverable(_int(row))),
+        ("GET", "/api/team", lambda q, b: service.team()),
+        ("POST", "/api/team", lambda q, b: service.add_engineer(b)),
+        ("PUT", "/api/team/{}", lambda q, b, name: service.update_engineer(name, b)),
+        ("DELETE", "/api/team/{}", lambda q, b, name: service.remove_engineer(name)),
         ("GET", "/api/reports",
          lambda q, b: service.reports(
              q.get("period", ["year"])[0], _year(q), q.get("quarter", [None])[0])),

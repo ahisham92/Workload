@@ -76,6 +76,7 @@
   <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
   <button class="tab" data-view="projects" role="tab">Projects</button>
   <button class="tab" data-view="reports" role="tab">Reports</button>
+  <button class="tab" data-view="team" role="tab">Team</button>
   <button class="tab" data-view="reference" role="tab">Reference</button>
 </nav>
 
@@ -86,7 +87,7 @@
     <div class="view-head">
       <div>
         <h2>Portfolio and team</h2>
-        <p class="muted">Portfolio figures are life-to-date, as the workbook reports them. The year below filters the workload charts only.</p>
+        <p class="muted">Everything on this page is for the year chosen on the right — the budget in hand, what has been booked against it, and how the team is tracking.</p>
       </div>
       <label class="field inline">
         <span>Workload year</span>
@@ -94,10 +95,11 @@
       </label>
     </div>
     <div id="overview-cards" class="cards"></div>
+    <div id="hero-strip"></div>
     <div class="split">
       <section class="panel">
         <h3>Workload by engineer</h3>
-        <p class="muted">Hours booked against the availability set on Work Calendar and Inputs.</p>
+        <p class="muted">Effort in man-months against the capacity each person has in this period.</p>
         <div id="engineer-cards"></div>
       </section>
       <section class="panel">
@@ -109,6 +111,10 @@
       <h3>Things to fix</h3>
       <div id="issues"></div>
     </section>
+    <details class="panel" id="definitions-panel">
+      <summary><b>What these measures mean</b></summary>
+      <div id="definitions-body"></div>
+    </details>
   </section>
 
   <!-- ----------------------------------------------------- timesheets -->
@@ -198,6 +204,18 @@
     <div class="subtabs no-print" id="report-subtabs"></div>
     <div id="report-header" class="print-only"></div>
     <div id="report-body"></div>
+  </section>
+
+  <!-- ----------------------------------------------------------- team -->
+  <section class="view" id="view-team">
+    <div class="view-head">
+      <div>
+        <h2>Team</h2>
+        <p class="muted">Who this unit's engineers are. Everything follows from here — the timesheet sheets, the split on each deliverable, capacity and the scorecard.</p>
+      </div>
+      <button class="btn btn-primary" id="btn-add-engineer" type="button">Add engineer</button>
+    </div>
+    <div id="team-body"></div>
   </section>
 
   <!-- ------------------------------------------------------ reference -->
