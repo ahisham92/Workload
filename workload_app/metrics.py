@@ -411,7 +411,7 @@ def overview(wb: WorkloadWorkbook, year: Optional[int] = None) -> Dict[str, Any]
                 all_earned / all_actual if all_actual else None, 3),
         },
         "engineers": workload,
-        "data_check": wb.data_check(),
+        "data_check": wb.data_check(year),
         "issues": wb.register_issues(),
     }
 

@@ -290,6 +290,11 @@ MAX_ENGINEERS = 12
 SHEET_SCORECARD = "Scorecard"
 SCORECARD_FIRST_ROW = 6
 SCORECARD_LAST_ROW = 11
+#: A project has to have had real effort booked to it in the period before its
+#: CPI means anything -- a quarter of a man-month is about forty hours.  Below
+#: that, two hours of touch-up on a finished job would win the year.
+CHAMPION_MIN_ACTUAL_MM = 0.25
+
 SCORECARD_COLUMNS = {
     "factor": "A", "weight": "B", "direction": "C", "target": "D",
     "how": "E",

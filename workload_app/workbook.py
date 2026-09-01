@@ -1608,12 +1608,20 @@ class WorkloadWorkbook:
         return result
 
     # -- health ----------------------------------------------------------
-    def data_check(self) -> Dict[str, Any]:
-        """The equivalent of the Work Calendar DATA CHECK block, computed live."""
+    def data_check(self, year: Optional[int] = None) -> Dict[str, Any]:
+        """The equivalent of the Work Calendar DATA CHECK block, computed live.
+
+        ``year`` narrows the counts to one year, the way the Overview does with
+        everything else on the page.  The row counts the capacity report needs
+        stay whole, because the sheets hold every year at once whichever one is
+        being looked at.
+        """
         engineers = {e.short_name: e for e in self.engineers()}
         per_engineer: Dict[str, Any] = {}
         total_rows = 0
         total_hours = 0.0
+        year_rows = 0
+        year_hours = 0.0
         first_date: Optional[_dt.date] = None
         last_date: Optional[_dt.date] = None
         unmatched = 0
@@ -1621,22 +1629,31 @@ class WorkloadWorkbook:
         for short_name, sheet in self.ts_sheets().items():
             rows = self.timesheet_rows(short_name, ["B", "C", "L", "P"])
             hours = 0.0
+            in_year_rows = 0
+            in_year_hours = 0.0
             dates: List[_dt.date] = []
             bad_names = 0
             pattern = engineers.get(short_name)
             regex = _pattern_to_regex(pattern.pattern if pattern else f"*{short_name}*")
             for row in rows:
                 value = row.get("P")
-                if isinstance(value, (int, float)):
-                    hours += float(value)
+                booked = float(value) if isinstance(value, (int, float)) else 0.0
+                hours += booked
                 serial = row.get("L")
-                if isinstance(serial, (int, float)) and serial > 0:
-                    dates.append(from_serial(float(serial)))
+                date = (from_serial(float(serial))
+                        if isinstance(serial, (int, float)) and serial > 0 else None)
+                if date:
+                    dates.append(date)
+                if year is not None and date and date.year == year:
+                    in_year_rows += 1
+                    in_year_hours += booked
                 name = row.get("C")
                 if not (isinstance(name, str) and regex.match(name)):
                     bad_names += 1
             total_rows += len(rows)
             total_hours += hours
+            year_rows += in_year_rows
+            year_hours += in_year_hours
             unmatched += bad_names
             if dates:
                 low, high = min(dates), max(dates)
@@ -1644,8 +1661,10 @@ class WorkloadWorkbook:
                 last_date = high if last_date is None else max(last_date, high)
             per_engineer[short_name] = {
                 "sheet": sheet,
-                "rows": len(rows),
-                "hours": round(hours, 2),
+                "rows": in_year_rows if year is not None else len(rows),
+                "hours": round(in_year_hours if year is not None else hours, 2),
+                "all_time_rows": len(rows),
+                "all_time_hours": round(hours, 2),
                 "first_date": iso(min(dates)) if dates else None,
                 "last_date": iso(max(dates)) if dates else None,
                 "rows_not_matching_pattern": bad_names,
@@ -1654,10 +1673,17 @@ class WorkloadWorkbook:
         known = {p.number for p in self.projects()} | set(self.non_project_codes())
         unknown_codes: Dict[str, int] = {}
         for short_name in self.ts_sheets():
-            for row in self.timesheet_rows(short_name, ["B"]):
+            for row in self.timesheet_rows(short_name, ["B", "L"]):
                 code = as_text(row.get("B"))
-                if code and code not in known:
-                    unknown_codes[code] = unknown_codes.get(code, 0) + 1
+                if not code or code in known:
+                    continue
+                serial = row.get("L")
+                if year is not None:
+                    if not isinstance(serial, (int, float)) or serial <= 0:
+                        continue
+                    if from_serial(float(serial)).year != year:
+                        continue
+                unknown_codes[code] = unknown_codes.get(code, 0) + 1
 
         if total_rows == 0:
             verdict = "No timesheet data - import each engineer's export."
@@ -1675,8 +1701,11 @@ class WorkloadWorkbook:
             verdict = capacity_warnings[0]["message"]
 
         return {
-            "rows": total_rows,
-            "hours": round(total_hours, 2),
+            "year": year,
+            "rows": year_rows if year is not None else total_rows,
+            "hours": round(year_hours if year is not None else total_hours, 2),
+            "all_time_rows": total_rows,
+            "all_time_hours": round(total_hours, 2),
             "first_date": iso(first_date),
             "last_date": iso(last_date),
             "rows_not_matching_pattern": unmatched,
