@@ -1,0 +1,4 @@
+# The app reads and writes the workbook itself; openpyxl is only needed to read
+# the timesheet exports people upload and to translate formulas when the
+# Deliverable Actuals block has to grow.
+openpyxl>=3.1

@@ -1,0 +1,158 @@
+# Workload Input
+
+An input application for the **Workload & Profit Plan** workbook. It gives the
+three monthly jobs a proper front end — pasting each engineer's timesheet,
+adding a project, and adding a project's deliverables — while the workbook
+itself stays the calculation engine and the place you read results.
+
+The workbook is edited in place. It is not exported, rebuilt or re-saved by a
+spreadsheet library: only the cells you change are rewritten, so all 14 charts,
+the drawings, the threaded comments, the conditional formatting, the data
+validations and every formula come through untouched.
+
+```
+pip install -r requirements.txt
+python -m workload_app --workbook path/to/Workload.xlsx
+```
+
+Your browser opens on <http://127.0.0.1:8765/>. Stop it with Ctrl+C.
+
+## What it does
+
+**Timesheets** — upload each engineer's monthly export (`.xlsx` or `.csv`).
+Columns are matched to the TS sheet by heading name rather than by position, so
+the export's own column order does not matter and a title block above the
+headings is skipped. Before anything is written you see the row count, the date
+range, the total hours, and warnings for rows with no date, no hours or no
+Phase, and for job numbers charged that are not in the project register. An
+export belonging to someone else is refused outright rather than landing on the
+wrong sheet. Then choose **Replace** (the monthly routine) or **Append**.
+
+**Projects** — add, edit and remove rows of the `Inputs` register: number, name,
+budget MM, start and end, status, the manual % fallback, the cost-at-completion
+override and the fallback engineer split. Renaming a project number carries its
+deliverables with it. Removing one asks before clearing its deliverables too.
+
+**Deliverables** — add, edit and remove rows of the `Deliverables` register,
+plus the inputs that live alongside them on `Deliverable Actuals`: the TS Phase,
+and the real milestone dates (actual start and finish, submitted, comments
+received, resubmitted, completed). The step dropdown is filtered to the steps
+`Rules of Credit` defines for the chosen type, and shows the credit each one
+earns.
+
+**Overview** — the portfolio position (budget, actual MM, earned MM, profit,
+CPI), each engineer's monthly hours against their capacity, the `Work Calendar`
+data check, and any register problems.
+
+## Rules it enforces
+
+These are the workbook's own rules, checked before a cell is written rather than
+found later in a red cell:
+
+- project numbers are unique, budget MM is positive, the end date is not before
+  the start, and the status is one the register allows;
+- a deliverable belongs to a project that exists;
+- its type code is in `Project Types`, and its step number is a step
+  `Rules of Credit` defines *for that type*;
+- Ahmed / Osama / Kirolos total 100% on each deliverable;
+- phase weights total 100% per project (flagged, since it is only meaningful
+  once a project's deliverables are all entered);
+- an engineer's sheet only ever holds that engineer's rows.
+
+## Safety
+
+- **Every write is preceded by a timestamped backup** in `backups/` beside the
+  workbook. Nothing is overwritten in place without one.
+- Formula cells are protected: a write aimed at one raises rather than silently
+  deleting part of the model.
+- The workbook is saved with a full-recalculation flag, so Excel recomputes
+  everything the next time it is opened.
+- **Close the workbook in Excel before running the app.** Excel holds its own
+  copy in memory and will overwrite whatever the app wrote when you next save.
+
+Run with `--no-autosave` to hold changes in memory and write them only when you
+press **Save now**.
+
+## Growing the Deliverable Actuals block
+
+`Deliverable Actuals` ships covering rows 5–68 — exactly the 64 deliverables the
+workbook already has, so there is no room for a 65th. When you add one, the app
+extends the block: it clones the last data row, translates its formulas down
+(resolving Excel's shared and array formulas into explicit ones), and grows
+every range anchored to the old last row, including the conditional-formatting
+ranges and the x14 extension list. The calculation chain is dropped so Excel
+rebuilds it. This happens automatically; there is nothing to do by hand.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `workload_app/xlsx_io.py` | Reads and writes cells directly in the spreadsheet XML |
+| `workload_app/config.py` | Where every input lives — sheets, rows, columns |
+| `workload_app/workbook.py` | The registers as a domain model, and the validation |
+| `workload_app/actuals_block.py` | Growing the `Deliverable Actuals` block |
+| `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
+| `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
+| `workload_app/server.py` | The local HTTP server and JSON API |
+| `workload_app/static/` | The single-page front end (no build step) |
+| `data/Workload.xlsx` | The working copy the app opens by default |
+
+If the workbook is restructured, `config.py` is the file to edit — the code
+reads its sheet names, row ranges and column letters from there.
+
+### Why the figures are recomputed rather than read
+
+The workbook caches the result of every formula, and those caches go stale the
+moment the app writes a change — they only refresh when Excel next opens the
+file. Reading them would show you yesterday's answer. So `metrics.py`
+recomputes from the timesheet rows and the registers, following the workbook's
+own definitions: actual MM is timesheet hours over hours-per-MM, progress is
+phase weight times rules-of-credit credit, earned MM is budget times progress,
+CPI is earned over actual. The test suite checks these against the values Excel
+last calculated, so the two stay in step.
+
+## Command line
+
+```
+python -m workload_app [-w WORKBOOK] [--host HOST] [-p PORT]
+                       [--no-autosave] [--no-browser] [-q]
+```
+
+The app binds to `127.0.0.1` — it is reachable only from your own machine. It
+has no authentication, so do not put it on a shared interface.
+
+## Tests
+
+```
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+148 tests, run against the real workbook on a throw-away copy. They cover the
+XML surgery (including a check that every sheet reassembles byte for byte and
+that only the intended parts of the file change), the validation rules, the
+import, and the arithmetic — cross-checked against the values the workbook
+itself last calculated.
+
+## A note on `data/Workload.xlsx`
+
+The workbook is committed so the app has something to open and the tests have
+something real to run against. It contains live project data; if that should not
+live in the repository, delete it and point the app at your own copy with
+`--workbook`. Nothing else depends on the file being there — the tests skip
+themselves if it is missing.
+
+## The monthly routine
+
+1. Close the workbook in Excel.
+2. Start the app.
+3. **Timesheets** — upload each engineer's export, check the summary, Replace.
+4. **Overview** — check the data check reads "All rows matched to an engineer",
+   and look at what the unknown job numbers are.
+5. **Deliverables** — move each deliverable's step on, and fill in the milestone
+   dates that have happened.
+6. Stop the app and open the workbook to read `Delivery Sequence`, `Profit Plan`
+   and `Mgmt Review`.
+
+Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
+are already automatic; the workbook reads them from the timesheet.
