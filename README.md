@@ -17,7 +17,7 @@ python -m workload_app --workbook path/to/Workload.xlsx
 
 Your browser opens on <http://127.0.0.1:8765/>. Stop it with Ctrl+C.
 
-## What it does
+## What it does:
 
 **Timesheets** — upload each engineer's monthly export (`.xlsx` or `.csv`).
 Columns are matched to the TS sheet by heading name rather than by position, so
