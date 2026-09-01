@@ -317,3 +317,63 @@ def _put_cell(sheet, ref: str, cell_xml: str) -> None:
     else:
         body = sheet._insert_cell(body, col, cell_xml)
     sheet._rows[position][1] = open_tag + body + "</row>"
+
+
+# --------------------------------------------------------------------------
+# the stack itself
+# --------------------------------------------------------------------------
+
+def _rewrite_stack(wb: Workbook, rewrite) -> None:
+    """Apply ``rewrite`` to the VSTACK formula that builds the consolidated view."""
+    sheet = wb.sheet(cfg.SHEET_TS_RAW)
+    cell = sheet.find_cell("A4")
+    if not cell:
+        raise XlsxError(f"{cfg.SHEET_TS_RAW}!A4 is empty; nothing builds the stack")
+    m = re.search(r"(<f[^>]*>)(.*?)(</f>)", cell, re.S)
+    if not m:
+        raise XlsxError(f"{cfg.SHEET_TS_RAW}!A4 holds no formula")
+    formula = rewrite(_xml_unescape(m.group(2)))
+    updated = cell[:m.start(2)] + _xml_escape(formula) + cell[m.end(2):]
+    # Written straight into the row: set_value would refuse to touch a formula.
+    row = sheet.row_xml(4)
+    sheet.replace_rows_from(4, [row.replace(cell, updated)])
+
+
+def add_to_stack(wb: Workbook, sheet_name: str) -> None:
+    """Include a new paste-target sheet in the consolidated view."""
+    order = stack_order(wb)
+    if sheet_name in order:
+        return
+    last = order[-1]
+
+    def rewrite(formula: str) -> str:
+        m = re.search(
+            r"'%s'!(\$[A-Z]{1,2}\$\d+:\$[A-Z]{1,2}\$\d+)" % re.escape(last),
+            formula,
+        )
+        if not m:
+            raise XlsxError(
+                f"cannot see how {cfg.SHEET_TS_RAW} stacks its sheets, so a new "
+                f"one cannot be added automatically"
+            )
+        block = m.group(0)
+        addition = f"'{sheet_name}'!{m.group(1)}"
+        return formula.replace(block, f"{block},{addition}", 1)
+
+    _rewrite_stack(wb, rewrite)
+
+
+def remove_from_stack(wb: Workbook, sheet_name: str) -> None:
+    """Drop a paste-target sheet from the consolidated view."""
+    def rewrite(formula: str) -> str:
+        pattern = re.compile(
+            r",?\s*'%s'!\$[A-Z]{1,2}\$\d+:\$[A-Z]{1,2}\$\d+"
+            % re.escape(sheet_name)
+        )
+        return pattern.sub("", formula, count=1)
+
+    _rewrite_stack(wb, rewrite)
+
+
+def rename_in_stack(wb: Workbook, old: str, new: str) -> None:
+    _rewrite_stack(wb, lambda formula: formula.replace(f"'{old}'!", f"'{new}'!"))

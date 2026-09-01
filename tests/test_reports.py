@@ -209,3 +209,85 @@ class TestAnotherPeriod:
         whole = reports.build(readonly_wb, "all")
         year = reports.build(readonly_wb, "year", 2026)
         assert whole.team["actual_mm"] >= year.team["actual_mm"]
+
+
+class TestScorecardFactorsComeFromTheWorkbook:
+    def test_they_are_read_from_the_scorecard_sheet(self, readonly_wb):
+        factors = readonly_wb.scorecard_factors()
+        assert [f["factor"] for f in factors][:2] == [
+            "Efficiency (CPI, type-weighted)", "Utilisation vs capacity"]
+        assert factors[0]["direction"] == "higher"
+        assert factors[1]["direction"] == "target"
+        assert factors[1]["target"] == 1.0
+        assert sum(f["weight"] for f in factors) == pytest.approx(1.0)
+
+    def test_changing_a_weight_changes_the_ranking(self, wb):
+        from workload_app import reports
+        before = reports.build(wb, "year", 2026).scorecard["totals"]
+        factors = wb.scorecard_factors()
+        # Put everything on the one factor Osama leads on.
+        for factor in factors:
+            factor["weight"] = 1.0 if factor["key"] == "plan_adherence" else 0.0
+        wb.save_scorecard_factors(factors)
+        after = reports.build(wb, "year", 2026).scorecard
+        assert after["totals"] != before
+        assert after["ranking"][0]["engineer"] == "Osama"
+
+    def test_weights_that_do_not_total_one_hundred_are_refused(self, wb):
+        from workload_app.workbook import ValidationError
+        factors = wb.scorecard_factors()
+        factors[0]["weight"] = 0.9
+        with pytest.raises(ValidationError, match="not 100%"):
+            wb.save_scorecard_factors(factors)
+
+    def test_a_target_factor_needs_a_target(self, wb):
+        from workload_app.workbook import ValidationError
+        factors = wb.scorecard_factors()
+        for factor in factors:
+            if factor["direction"] == "target":
+                factor["target"] = 0
+        with pytest.raises(ValidationError, match="needs one that is not zero"):
+            wb.save_scorecard_factors(factors)
+
+    def test_a_factor_can_be_renamed_and_comes_back(self, wb):
+        factors = wb.scorecard_factors()
+        factors[0]["factor"] = "Value per man-month"
+        wb.save_scorecard_factors(factors)
+        assert wb.scorecard_factors()[0]["factor"] == "Value per man-month"
+
+
+class TestHeroes:
+    def test_only_finished_months_are_scored(self, report, readonly_wb):
+        """The as-at date is 1 September, so August is the last month scored."""
+        assert [m["month"] for m in report.monthly][-1] == "2026-08"
+        assert all(m["month"] < "2026-09" for m in report.monthly)
+
+    def test_every_scored_month_has_a_winner(self, report):
+        for month in report.monthly:
+            if month["booked"]:
+                assert month["hero"] in report.engineers
+                assert 0 <= month["hero_score"] <= 100
+
+    def test_the_hero_of_the_month_is_the_top_scorer(self, report):
+        for month in report.monthly:
+            if not month["booked"]:
+                continue
+            best = max(month["scores"], key=lambda name: month["scores"][name])
+            assert month["hero"] == best
+
+    def test_the_month_shown_is_the_most_recent_scored_one(self, report):
+        assert report.heroes["month"]["month"] == "2026-08"
+        assert report.heroes["month"]["label"] == "August 2026"
+
+    def test_the_hero_of_the_year_tops_the_period_scorecard(self, report):
+        assert report.heroes["year"]["engineer"] == (
+            report.scorecard["ranking"][0]["engineer"])
+
+    def test_months_won_adds_up_to_the_months_scored(self, report):
+        assert sum(report.heroes["wins"].values()) == report.heroes["months_scored"]
+
+    def test_a_period_with_no_finished_month_has_no_hero(self, readonly_wb):
+        from workload_app import reports
+        far = reports.build(readonly_wb, "year", 2028)
+        assert far.monthly == []
+        assert far.heroes["month"] is None

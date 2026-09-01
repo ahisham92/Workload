@@ -30,12 +30,27 @@ operating system's own dialog), give it a name, and it is remembered in
 `~/.workload_app.json`. **Switch unit** in the header puts one down and picks up
 another; each keeps its own place.
 
-Nothing in the app assumes who the engineers are. The team, the paste-target
-sheets and the order they are stacked in all come from the workbook — from
-`Work Calendar` rows 20 onwards and the `Timesheet Raw` formula — so a copy set
-up for a different discipline, with different people and differently named
-sheets, works without a code change. The engineer split on a deliverable is
-keyed by name and follows whoever that unit's team is.
+## The team
+
+A unit has whoever it has. The **Team** tab adds, renames and removes engineers,
+and everything follows: a paste-target sheet of their own, a place in the stack
+that builds `Timesheet Raw`, a column for their share of every deliverable, a
+row in the availability table, and their own line in every report and the
+scorecard.
+
+The workbook ships with room for exactly three, in fixed positions — Deliverables
+K/L/M for the split, Work Calendar rows 20-22, Inputs rows 91-93 — and about
+ninety formulas address those positions directly. So a fourth engineer onwards is
+written into free space rather than inserted: nothing shifts, and not one of
+those formulas has to be repaired. The trade-off is that the workbook's *own*
+Mgmt Review, Engineer KPIs and Team Member sheets stay three columns wide and
+know only the first three people. The app's versions of those reports handle any
+number, which is where you read them now.
+
+Nothing in the app assumes who the engineers are or how many there are. The
+team, the paste-target sheets and the order they are stacked in all come from
+the workbook, so a copy set up for a different discipline works without a code
+change, and the split on a deliverable is keyed by name.
 
 ## What it does:
 
@@ -83,15 +98,28 @@ date, per-engineer figures are each project's value times that engineer's share,
 and the scorecard weights six factors exactly as the sheet does. The test suite
 holds all of it against the values Excel last calculated.
 
-**Reference** — the `Project Types` and `Rules of Credit` tables, read-only until
-unlocked with a password. These decide how every deliverable earns credit, so a
+**Reference** — the `Project Types` and `Rules of Credit` tables **and the
+scorecard factors**, read-only until unlocked with a password. The factors are
+what the team ranking is built from: what counts, how much each weighs, and
+whether it scores against the best performer or against a target. The weights
+have to total 100%, or one period's ranking could not be read against another's. These decide how every deliverable earns credit, so a
 change here moves the progress and CPI of every project using that type. The
 lock is a deterrent against a stray keystroke, not a security control: the same
 cells are editable in Excel by anyone who can open the file.
 
-**Overview** — the portfolio position (budget, actual MM, earned MM, profit,
-CPI), each engineer's monthly hours against their capacity, the `Work Calendar`
-data check, and any register problems.
+**Overview** — the whole page is for one chosen year: the budget in hand, what
+has been planned and booked against it, earned value, profit, utilisation and
+CPI. Each engineer is shown in the workbook's own measures — man-months against
+capacity, earned against actual, plan adherence — rather than a count of hours,
+which on its own says very little. Every measure carries its definition from the
+`Definitions` sheet, and the glossary sits at the foot of the page.
+
+**Hero of the month and Hero of the year** sit at the top. The month's hero is
+whoever scored highest on the team scorecard in the last *completed* month — in
+September you see August, because ranking a month still in progress just rewards
+whoever booked first. The year's hero tops the scorecard for the period, with a
+tally of months won beside it, so a steady month-by-month winner is visible even
+when someone else leads on total value delivered.
 
 ## The row limit that loses an engineer's hours
 
@@ -170,7 +198,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/actuals_block.py` | Growing the `Deliverable Actuals` block |
 | `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
-| `workload_app/reports.py` | The five report views, computed once per period |
+| `workload_app/reports.py` | The five report views and the heroes, once per period |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/server.py` | The local HTTP server and JSON API |
 | `workload_app/static/` | The single-page front end (no build step) |
@@ -234,6 +262,7 @@ calculated.
 5. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
 6. **Projects** — open each active project and move its deliverables' steps on.
+   **Team** — only when someone joins or leaves.
 7. **Reports** — read the Dashboard and Management Review, and print whichever
    view you need for the meeting.
 8. Open the workbook itself only for `Delivery Sequence` and `Profit Plan`,

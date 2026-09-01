@@ -667,3 +667,111 @@ class TestReportsEndpoint:
     def test_reports_need_a_workbook(self, empty_server):
         status, _ = call(empty_server, "/api/reports")
         assert status == 409
+
+
+class TestTeamEndpoint:
+    def test_the_team_lists_itself(self, server):
+        status, body = call(server, "/api/team")
+        assert status == 200
+        assert [p["short_name"] for p in body["engineers"]] == [
+            "Ahmed", "Osama", "Kirolos"]
+        assert body["years"] == [2024, 2025, 2026, 2027, 2028]
+
+    def test_an_engineer_can_be_added(self, server):
+        status, body = call(server, "/api/team", "POST", {
+            "short_name": "Nadia", "available_hours": 185,
+            "availability": {"2026": 1.0},
+        })
+        assert status == 200
+        assert body["sheet"] == "TS Nadia"
+        _status, team = call(server, "/api/team")
+        assert "Nadia" in [p["short_name"] for p in team["engineers"]]
+
+    def test_a_new_engineer_reaches_the_reports(self, server):
+        call(server, "/api/team", "POST",
+             {"short_name": "Nadia", "available_hours": 185,
+              "availability": {"2026": 1.0}})
+        _status, body = call(server, "/api/reports?period=year&year=2026")
+        assert "Nadia" in body["engineers"]
+        assert "Nadia" in body["per_engineer"]
+
+    def test_a_new_engineer_can_take_a_timesheet(self, server):
+        call(server, "/api/team", "POST",
+             {"short_name": "Nadia", "available_hours": 185})
+        _status, check = call(server, "/api/timesheets")
+        assert "Nadia" in check["per_engineer"]
+        assert check["per_engineer"]["Nadia"]["rows"] == 0
+
+    def test_an_engineer_can_be_renamed(self, server):
+        status, body = call(server, "/api/team/Kirolos", "PUT",
+                            {"short_name": "Mina"})
+        assert status == 200 and body["renamed"] is True
+        _status, team = call(server, "/api/team")
+        assert "Mina" in [p["short_name"] for p in team["engineers"]]
+
+    def test_an_engineer_can_be_removed(self, server):
+        status, body = call(server, "/api/team/Kirolos", "DELETE")
+        assert status == 200
+        assert body["sheet_removed"] == "TS Kirolos"
+        _status, team = call(server, "/api/team")
+        assert [p["short_name"] for p in team["engineers"]] == ["Ahmed", "Osama"]
+
+    def test_a_duplicate_name_is_refused(self, server):
+        status, body = call(server, "/api/team", "POST", {"short_name": "Ahmed"})
+        assert status == 422
+        assert any("already an engineer" in m for m in body["errors"])
+
+    def test_the_team_needs_a_workbook(self, empty_server):
+        status, _ = call(empty_server, "/api/team")
+        assert status == 409
+
+
+class TestScorecardFactorsEndpoint:
+    def _unlock(self, server):
+        call(server, "/api/reference/unlock", "POST", {"password": "2026"})
+
+    def test_the_factors_come_back_with_the_reference(self, server):
+        _status, body = call(server, "/api/reference")
+        assert len(body["scorecard_factors"]) == 6
+        assert body["scorecard_factors"][0]["key"] == "type_weighted_cpi"
+        assert body["definitions"]
+
+    def test_they_cannot_be_changed_while_locked(self, server):
+        status, _ = call(server, "/api/reference", "PUT",
+                         {"scorecard_factors": []})
+        assert status == 403
+
+    def test_a_weight_can_be_changed(self, server):
+        self._unlock(server)
+        _status, ref = call(server, "/api/reference")
+        factors = ref["scorecard_factors"]
+        factors[0]["weight"] = 0.4
+        factors[1]["weight"] = 0.1
+        status, _ = call(server, "/api/reference", "PUT", {
+            "project_types": ref["project_types"],
+            "credit_steps": [dict(s, type_code=code)
+                             for code, items in ref["credit_steps"].items()
+                             for s in items],
+            "scorecard_factors": factors,
+        })
+        assert status == 200
+        _status, after = call(server, "/api/reference")
+        assert after["scorecard_factors"][0]["weight"] == pytest.approx(0.4)
+
+    def test_weights_that_do_not_add_up_are_refused(self, server):
+        self._unlock(server)
+        _status, ref = call(server, "/api/reference")
+        factors = ref["scorecard_factors"]
+        factors[0]["weight"] = 0.9
+        status, body = call(server, "/api/reference", "PUT",
+                            {"scorecard_factors": factors})
+        assert status == 422
+        assert any("not 100%" in m for m in body["errors"])
+
+
+class TestHeroesInTheApi:
+    def test_the_report_carries_the_heroes(self, server):
+        _status, body = call(server, "/api/reports?period=year&year=2026")
+        assert body["heroes"]["month"]["month"] == "2026-08"
+        assert body["heroes"]["year"]["engineer"] in body["engineers"]
+        assert body["monthly"]

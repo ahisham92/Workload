@@ -194,11 +194,44 @@ class CreditStep:
 
 
 @dataclass
+class EngineerSlot:
+    """Where one engineer's cells live.
+
+    The workbook ships with room for three: rows 20-22 on Work Calendar, rows
+    91-93 on Inputs, and columns K/L/M and W/X/Y for the splits.  A fourth
+    onwards goes into free space instead of being inserted, because inserting
+    a row or column would shift the ninety-odd formulas that address those
+    positions and every one of them would have to be repaired.
+    """
+    index: int
+    calendar_row: int
+    availability_row: int
+    share_column: str
+    manual_share_column: str
+
+    @property
+    def built_in(self) -> bool:
+        """Whether the workbook's own formulas know about this slot."""
+        return self.index < cfg.ENGINEER_BUILT_IN_SLOTS
+
+
+@dataclass
 class Engineer:
     short_name: str
     pattern: str
     available_hours: Optional[float]
     availability: Dict[int, float] = field(default_factory=dict)
+    slot: Optional[int] = None
+    sheet: str = ""
+    rows: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "short_name": self.short_name, "pattern": self.pattern,
+            "available_hours": self.available_hours,
+            "availability": self.availability, "slot": self.slot,
+            "sheet": self.sheet, "rows": self.rows,
+        }
 
 
 # --------------------------------------------------------------------------
@@ -267,6 +300,189 @@ class WorkloadWorkbook:
         result["path"] = str(self.path)
         return result
 
+    # -- the team --------------------------------------------------------
+    def team(self) -> List[Dict[str, Any]]:
+        """The engineers, with how much timesheet each of them has."""
+        rows = self.rows_per_engineer()
+        sheets = self.ts_sheets()
+        out = []
+        for person in self.engineers():
+            record = person.to_dict()
+            record["sheet"] = sheets.get(person.short_name, "")
+            record["rows"] = rows.get(person.short_name, 0)
+            out.append(record)
+        return out
+
+    def _validate_engineer(self, name: str, data: Dict[str, Any], *,
+                           existing: Optional[str] = None) -> Dict[str, Any]:
+        errors: List[str] = []
+        name = as_text(name)
+        if not name:
+            errors.append("The engineer needs a short name.")
+        if len(name) > 25:
+            errors.append("Keep the short name under 25 characters — it also "
+                          "names their timesheet sheet.")
+        if set(name) & set(r"[]:*?/\\"):
+            errors.append(r"A short name cannot contain [ ] : * ? / \ — it also "
+                          "names their timesheet sheet.")
+        taken = {e.short_name for e in self.engineers()} - (
+            {existing} if existing else set())
+        if name in taken:
+            errors.append(f"There is already an engineer called {name!r}.")
+
+        hours = as_number(data.get("available_hours"))
+        if hours is not None and hours <= 0:
+            errors.append("Available hours per month must be greater than zero.")
+
+        availability: Dict[int, float] = {}
+        for year, value in (data.get("availability") or {}).items():
+            share = as_fraction(value)
+            if share is None:
+                continue
+            if not 0 <= share <= 2:
+                errors.append(f"Availability for {year} must be between 0% and 200%.")
+            availability[int(year)] = share
+        if errors:
+            raise ValidationError(errors)
+        return {
+            "name": name,
+            "pattern": as_text(data.get("pattern")) or f"*{name}*",
+            "available_hours": hours,
+            "availability": availability,
+        }
+
+    def _write_engineer(self, slot: EngineerSlot, values: Dict[str, Any]) -> None:
+        cols = cfg.ENGINEER_COLUMNS
+        row = slot.calendar_row
+        self._set(cfg.SHEET_CALENDAR, f"{cols['short_name']}{row}", values["name"])
+        self._set(cfg.SHEET_CALENDAR, f"{cols['pattern']}{row}", values["pattern"])
+        self._set(cfg.SHEET_CALENDAR, f"{cols['available_hours']}{row}",
+                  values["available_hours"])
+
+        available_row = slot.availability_row
+        self._set(cfg.SHEET_INPUTS, f"A{available_row}", values["name"])
+        for column, year in self._availability_years().items():
+            self._set(cfg.SHEET_INPUTS, f"{column}{available_row}",
+                      values["availability"].get(year))
+        if not slot.built_in:
+            # The continuation block sits in empty space, so it labels itself.
+            self._set(cfg.SHEET_INPUTS, f"A{cfg.AVAILABILITY_EXTRA_FIRST_ROW - 1}",
+                      "TEAM AVAILABILITY (continued)")
+            self._set(cfg.SHEET_CALENDAR,
+                      f"A{cfg.ENGINEER_EXTRA_FIRST_ROW - 1}", "ENGINEERS (continued)")
+
+    def add_engineer(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add an engineer, and everything that depends on there being one.
+
+        That means a paste-target sheet of their own, a place in the stack that
+        builds Timesheet Raw, a column for their share of a deliverable, and a
+        row in the availability table.
+        """
+        values = self._validate_engineer(data.get("short_name", ""), data)
+        used = {e.slot for e in self.engineers()}
+        free = [s for s in self.engineer_slots() if s.index not in used]
+        if not free:
+            raise ValidationError([
+                f"A unit can hold {cfg.MAX_ENGINEERS} engineers and this one is full."
+            ])
+        slot = free[0]
+        self._write_engineer(slot, values)
+        self._label_share_columns(slot, values["name"])
+
+        sheet_name = f"{cfg.TS_SHEET_PREFIX}{values['name']}"
+        template = next(iter(self.ts_sheets().values()), None)
+        self._wb.add_sheet(sheet_name, template=template)
+        self._wb.sheet(sheet_name).set_value(
+            "A1",
+            f"TIMESHEET - {values['name'].upper()}  |  PASTE TARGET. Delete row 4 "
+            f"downward, then paste this person's export into A4. Do not touch row 3.",
+        )
+        capacity.add_to_stack(self._wb, sheet_name)
+
+        self._dirty = True
+        self._formulas_changed = True
+        self._version += 1
+        self._cache.clear()
+        self._timesheet_cache.clear()
+        return {"engineer": values["name"], "slot": slot.index, "sheet": sheet_name}
+
+    def _label_share_columns(self, slot: EngineerSlot, name: str) -> None:
+        """Head the split columns so the sheet reads as it always did."""
+        self._set(cfg.SHEET_DELIVERABLES,
+                  f"{slot.share_column}{cfg.DELIVERABLE_FIRST_ROW - 1}", f"{name} %")
+        self._set(cfg.SHEET_INPUTS,
+                  f"{slot.manual_share_column}{cfg.PROJECT_FIRST_ROW - 1}",
+                  f"{name} % (manual fallback)")
+
+    def update_engineer(self, engineer: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Rename an engineer or change their availability."""
+        slot = self.slot_for(engineer)
+        values = self._validate_engineer(
+            data.get("short_name", engineer), data, existing=engineer)
+        # Read the sheet name before the write: renaming the engineer renames
+        # what ts_sheets() would look them up by.
+        old_sheet = self.ts_sheets().get(engineer)
+
+        self._write_engineer(slot, values)
+        self._label_share_columns(slot, values["name"])
+
+        renamed = values["name"] != engineer
+        if renamed:
+            new_sheet = f"{cfg.TS_SHEET_PREFIX}{values['name']}"
+            if old_sheet and old_sheet != new_sheet:
+                self._wb.rename_sheet(old_sheet, new_sheet)
+                capacity.rename_in_stack(self._wb, old_sheet, new_sheet)
+                self._wb.sheet(new_sheet).set_value(
+                    "A1",
+                    f"TIMESHEET - {values['name'].upper()}  |  PASTE TARGET. Delete "
+                    f"row 4 downward, then paste this person's export into A4. "
+                    f"Do not touch row 3.",
+                )
+            self._formulas_changed = True
+        self._dirty = True
+        self._version += 1
+        self._cache.clear()
+        self._timesheet_cache.clear()
+        return {"engineer": values["name"], "renamed": renamed}
+
+    def remove_engineer(self, engineer: str) -> Dict[str, Any]:
+        """Remove an engineer, their sheet, and their column of every split."""
+        if len(self.engineers()) <= 1:
+            raise ValidationError([
+                "A unit needs at least one engineer; add their replacement first."
+            ])
+        slot = self.slot_for(engineer)
+        sheet = self.ts_sheets().get(engineer)
+
+        cleared = 0
+        for deliverable in self.deliverables():
+            if deliverable.shares.get(engineer):
+                cleared += 1
+            self._set(cfg.SHEET_DELIVERABLES,
+                      f"{slot.share_column}{deliverable.row}", None)
+        for project in self.projects():
+            self._set(cfg.SHEET_INPUTS,
+                      f"{slot.manual_share_column}{project.row}", None)
+
+        cols = cfg.ENGINEER_COLUMNS
+        for column in cols.values():
+            self._set(cfg.SHEET_CALENDAR, f"{column}{slot.calendar_row}", None)
+        self._set(cfg.SHEET_INPUTS, f"A{slot.availability_row}", None)
+        for column in self._availability_years():
+            self._set(cfg.SHEET_INPUTS, f"{column}{slot.availability_row}", None)
+
+        if sheet:
+            capacity.remove_from_stack(self._wb, sheet)
+            self._wb.remove_sheet(sheet)
+
+        self._dirty = True
+        self._formulas_changed = True
+        self._version += 1
+        self._cache.clear()
+        self._timesheet_cache.clear()
+        return {"engineer": engineer, "deliverables_cleared": cleared,
+                "sheet_removed": sheet}
+
     # -- reference tables ------------------------------------------------
     def project_types(self) -> List[ProjectType]:
         return self._cached("project_types", self._read_project_types)
@@ -321,34 +537,70 @@ class WorkloadWorkbook:
         )
         return lookup.get((type_code, step_no))
 
+    def engineer_slots(self) -> List[EngineerSlot]:
+        """Every possible engineer position, filled or not."""
+        built_in = cfg.ENGINEER_BUILT_IN_SLOTS
+        extra_share = col_to_index(cfg.DELIVERABLE_SHARE_EXTRA_FIRST_COL)
+        extra_manual = col_to_index(cfg.PROJECT_MANUAL_SHARE_EXTRA_FIRST_COL)
+        slots: List[EngineerSlot] = []
+        for index in range(cfg.MAX_ENGINEERS):
+            if index < built_in:
+                slots.append(EngineerSlot(
+                    index=index,
+                    calendar_row=cfg.ENGINEER_FIRST_ROW + index,
+                    availability_row=cfg.AVAILABILITY_FIRST_ROW + index,
+                    share_column=cfg.DELIVERABLE_SHARE_COLUMNS[index],
+                    manual_share_column=cfg.PROJECT_MANUAL_SHARE_COLUMNS[index],
+                ))
+            else:
+                offset = index - built_in
+                slots.append(EngineerSlot(
+                    index=index,
+                    calendar_row=cfg.ENGINEER_EXTRA_FIRST_ROW + offset,
+                    availability_row=cfg.AVAILABILITY_EXTRA_FIRST_ROW + offset,
+                    share_column=index_to_col(extra_share + offset),
+                    manual_share_column=index_to_col(extra_manual + offset),
+                ))
+        return slots
+
     def engineers(self) -> List[Engineer]:
         """The team, read from Work Calendar rather than assumed.
 
-        A workbook set up for another unit names different people, so nothing
-        here may depend on who they are or how many of them there are.
+        A workbook set up for another unit names different people, and a unit
+        may have any number of them, so nothing here may depend on who they are
+        or how many there are.
         """
         return self._cached("engineers", self._read_engineers)
 
     def _read_engineers(self) -> List[Engineer]:
         cols = cfg.ENGINEER_COLUMNS
         years = self._availability_years()
-        availability_rows = self._availability_rows()
         out: List[Engineer] = []
-        for offset in range(cfg.ENGINEER_MAX_ROWS):
-            row = cfg.ENGINEER_FIRST_ROW + offset
+        for slot in self.engineer_slots():
+            row = slot.calendar_row
             name = self._wb.get_text(cfg.SHEET_CALENDAR, f"{cols['short_name']}{row}")
             if not name:
-                break
+                continue
             out.append(Engineer(
                 short_name=name,
                 pattern=self._wb.get_text(cfg.SHEET_CALENDAR, f"{cols['pattern']}{row}")
                 or f"*{name}*",
                 available_hours=self._wb.get_number(
                     cfg.SHEET_CALENDAR, f"{cols['available_hours']}{row}"),
-                availability=self._availability_for(
-                    availability_rows.get(name), years),
+                availability=self._availability_for(slot.availability_row, years),
+                slot=slot.index,
             ))
         return out
+
+    def slot_for(self, engineer: str) -> EngineerSlot:
+        slots = {s.index: s for s in self.engineer_slots()}
+        for person in self.engineers():
+            if person.short_name == engineer:
+                return slots[person.slot]
+        raise ValidationError([
+            f"{engineer!r} is not one of this workbook's engineers "
+            f"({', '.join(self.engineer_names()) or 'none found'})."
+        ])
 
     def engineer_names(self) -> List[str]:
         return [e.short_name for e in self.engineers()]
@@ -366,16 +618,15 @@ class WorkloadWorkbook:
                      if name.startswith(cfg.TS_SHEET_PREFIX)]
         stacked = [name for name in capacity.stack_order(self._wb)
                    if name in available]
-        ordered = stacked + [n for n in available if n not in stacked]
-        mapping: "OrderedDict[str, str]" = OrderedDict()
-        spare = list(ordered)
+        spare = stacked + [n for n in available if n not in stacked]
+        mapping: "OrderedDict[str, Optional[str]]" = OrderedDict()
         for engineer in self.engineers():
             wanted = f"{cfg.TS_SHEET_PREFIX}{engineer.short_name}"
             if wanted in spare:
                 mapping[engineer.short_name] = wanted
                 spare.remove(wanted)
             else:
-                mapping[engineer.short_name] = None      # filled in below
+                mapping[engineer.short_name] = None
         for short_name, sheet in list(mapping.items()):
             if sheet is None:
                 mapping[short_name] = spare.pop(0) if spare else None
@@ -391,17 +642,6 @@ class WorkloadWorkbook:
                 f"({', '.join(sheets) or 'none found'})."
             ])
         return sheets[engineer]
-
-    def _availability_rows(self) -> Dict[str, int]:
-        """Name -> its row in the team availability block on Inputs."""
-        out: Dict[str, int] = {}
-        for offset in range(cfg.AVAILABILITY_MAX_ROWS):
-            row = cfg.AVAILABILITY_FIRST_ROW + offset
-            name = self._wb.get_text(cfg.SHEET_INPUTS, f"A{row}")
-            if not name:
-                break
-            out[name] = row
-        return out
 
     def _availability_years(self) -> Dict[str, int]:
         """Column letter -> year, from the team availability header row."""
@@ -463,6 +703,8 @@ class WorkloadWorkbook:
             "project_types": [t.__dict__ for t in self.project_types()],
             "credit_steps": steps,
             "statuses": cfg.PROJECT_STATUSES,
+            "scorecard_factors": self.scorecard_factors(),
+            "definitions": self.definitions(),
             "engineers": [
                 {
                     "short_name": e.short_name,
@@ -486,18 +728,28 @@ class WorkloadWorkbook:
         }
 
     # -- engineer splits -------------------------------------------------
-    def _read_shares(self, sheet: str, row: int, columns: Sequence[str]
-                     ) -> Dict[str, Optional[float]]:
-        """Read a split into ``{engineer: fraction}``, by column position."""
-        names = self.engineer_names()
-        out: Dict[str, Optional[float]] = {}
-        for name, col in zip(names, columns):
-            out[name] = self._wb.get_number(sheet, f"{col}{row}")
+    def _share_columns(self, manual: bool = False) -> "OrderedDict[str, str]":
+        """Engineer -> the column their split lives in, by slot."""
+        slots = {s.index: s for s in self.engineer_slots()}
+        out: "OrderedDict[str, str]" = OrderedDict()
+        for person in self.engineers():
+            slot = slots[person.slot]
+            out[person.short_name] = (
+                slot.manual_share_column if manual else slot.share_column)
         return out
 
-    def _write_shares(self, sheet: str, row: int, columns: Sequence[str],
-                      shares: Dict[str, Optional[float]]) -> None:
-        for name, col in zip(self.engineer_names(), columns):
+    def _read_shares(self, sheet: str, row: int, manual: bool = False
+                     ) -> Dict[str, Optional[float]]:
+        """Read a split into ``{engineer: fraction}``."""
+        return {
+            name: self._wb.get_number(sheet, f"{col}{row}")
+            for name, col in self._share_columns(manual).items()
+        }
+
+    def _write_shares(self, sheet: str, row: int,
+                      shares: Dict[str, Optional[float]],
+                      manual: bool = False) -> None:
+        for name, col in self._share_columns(manual).items():
             self._set(sheet, f"{col}{row}", shares.get(name))
 
     def _validate_shares(self, data: Dict[str, Any], label: str,
@@ -551,7 +803,7 @@ class WorkloadWorkbook:
                 manual_percent=self._wb.get_number(
                     cfg.SHEET_INPUTS, f"{cols['manual_percent']}{row}"),
                 manual_shares=self._read_shares(
-                    cfg.SHEET_INPUTS, row, cfg.PROJECT_MANUAL_SHARE_COLUMNS),
+                    cfg.SHEET_INPUTS, row, manual=True),
             ))
         return out
 
@@ -660,8 +912,8 @@ class WorkloadWorkbook:
         }
         for name, col in cols.items():
             self._set(cfg.SHEET_INPUTS, f"{col}{row}", values[name])
-        self._write_shares(cfg.SHEET_INPUTS, row,
-                           cfg.PROJECT_MANUAL_SHARE_COLUMNS, project.manual_shares)
+        self._write_shares(cfg.SHEET_INPUTS, row, project.manual_shares,
+                           manual=True)
 
     def add_project(self, data: Dict[str, Any]) -> Project:
         row = self._next_project_row()
@@ -707,7 +959,7 @@ class WorkloadWorkbook:
             self._clear_deliverable_row(deliverable.row)
         for col in cfg.PROJECT_INPUT_COLUMNS.values():
             self._set(cfg.SHEET_INPUTS, f"{col}{existing.row}", None)
-        for col in cfg.PROJECT_MANUAL_SHARE_COLUMNS:
+        for col in self._share_columns(manual=True).values():
             self._set(cfg.SHEET_INPUTS, f"{col}{existing.row}", None)
         return {"row": existing.row, "deliverables_removed": len(attached)}
 
@@ -742,8 +994,7 @@ class WorkloadWorkbook:
                 step_no=int(step) if step is not None else None,
                 status_date=self._wb.get_date(
                     cfg.SHEET_DELIVERABLES, f"{cols['status_date']}{row}"),
-                shares=self._read_shares(
-                    cfg.SHEET_DELIVERABLES, row, cfg.DELIVERABLE_SHARE_COLUMNS),
+                shares=self._read_shares(cfg.SHEET_DELIVERABLES, row),
                 notes=self._wb.get_text(cfg.SHEET_DELIVERABLES, f"{cols['notes']}{row}"),
             )
             if row <= actuals_end:
@@ -887,8 +1138,7 @@ class WorkloadWorkbook:
         }
         for name, col in cols.items():
             self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", values[name])
-        self._write_shares(cfg.SHEET_DELIVERABLES, row,
-                           cfg.DELIVERABLE_SHARE_COLUMNS, deliverable.shares)
+        self._write_shares(cfg.SHEET_DELIVERABLES, row, deliverable.shares)
 
         self.ensure_actuals_capacity(row)
         acols = cfg.ACTUALS_INPUT_COLUMNS
@@ -919,7 +1169,7 @@ class WorkloadWorkbook:
     def _clear_deliverable_row(self, row: int) -> None:
         for col in cfg.DELIVERABLE_INPUT_COLUMNS.values():
             self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", None)
-        for col in cfg.DELIVERABLE_SHARE_COLUMNS:
+        for col in self._share_columns().values():
             self._set(cfg.SHEET_DELIVERABLES, f"{col}{row}", None)
         if row <= self.actuals_last_row():
             for col in cfg.ACTUALS_INPUT_COLUMNS.values():
@@ -1024,6 +1274,114 @@ class WorkloadWorkbook:
         }
 
     # -- reference tables ------------------------------------------------
+    def scorecard_factors(self) -> List[Dict[str, Any]]:
+        """The factors the ranking is built from, read from the Scorecard sheet."""
+        return self._cached("scorecard_factors", self._read_scorecard_factors)
+
+    def _read_scorecard_factors(self) -> List[Dict[str, Any]]:
+        cols = cfg.SCORECARD_COLUMNS
+        out: List[Dict[str, Any]] = []
+        for offset in range(cfg.SCORECARD_LAST_ROW - cfg.SCORECARD_FIRST_ROW + 1):
+            row = cfg.SCORECARD_FIRST_ROW + offset
+            label = self._wb.get_text(cfg.SHEET_SCORECARD, f"{cols['factor']}{row}")
+            if not label:
+                continue
+            direction = self._wb.get_text(
+                cfg.SHEET_SCORECARD, f"{cols['direction']}{row}")
+            out.append({
+                "factor": label,
+                "key": (cfg.SCORECARD_KEYS[offset]
+                        if offset < len(cfg.SCORECARD_KEYS) else None),
+                "weight": self._wb.get_number(
+                    cfg.SHEET_SCORECARD, f"{cols['weight']}{row}") or 0.0,
+                "direction": ("higher"
+                              if direction == cfg.SCORECARD_DIRECTION_HIGHER
+                              else "target"),
+                "direction_label": direction,
+                "target": self._wb.get_number(
+                    cfg.SHEET_SCORECARD, f"{cols['target']}{row}"),
+                "how": self._wb.get_text(cfg.SHEET_SCORECARD, f"{cols['how']}{row}"),
+                "row": row,
+            })
+        return out
+
+    def save_scorecard_factors(self, factors: Sequence[Dict[str, Any]]
+                               ) -> Dict[str, Any]:
+        """Rewrite the scorecard factors, weights, directions and targets."""
+        errors: List[str] = []
+        room = cfg.SCORECARD_LAST_ROW - cfg.SCORECARD_FIRST_ROW + 1
+        items = list(factors)
+        if len(items) > room:
+            errors.append(
+                f"The Scorecard sheet has room for {room} factors, not {len(items)}.")
+        total = 0.0
+        for position, item in enumerate(items, start=1):
+            if not as_text(item.get("factor")):
+                errors.append(f"Factor {position} has no name.")
+            weight = as_fraction(item.get("weight"))
+            if weight is None:
+                errors.append(f"Factor {position} has no weight.")
+            elif not 0 <= weight <= 1:
+                errors.append(f"Factor {position}: weight must be between 0% and 100%.")
+            else:
+                total += weight
+            direction = as_text(item.get("direction")).lower()
+            if direction not in {"higher", "target"}:
+                errors.append(
+                    f"Factor {position}: scoring must be 'higher' or 'target'.")
+            if direction == "target":
+                target = as_number(item.get("target"))
+                if target is None or target == 0:
+                    errors.append(
+                        f"Factor {position} is scored against a target, so it "
+                        f"needs one that is not zero.")
+        if items and abs(total - 1.0) > 1e-4:
+            errors.append(
+                f"The weights total {total * 100:.1f}%, not 100%. A ranking whose "
+                f"weights do not add up cannot be read against another period."
+            )
+        if errors:
+            raise ValidationError(errors)
+
+        cols = cfg.SCORECARD_COLUMNS
+        for offset in range(room):
+            row = cfg.SCORECARD_FIRST_ROW + offset
+            item = items[offset] if offset < len(items) else {}
+            direction = as_text(item.get("direction")).lower()
+            self._set(cfg.SHEET_SCORECARD, f"{cols['factor']}{row}",
+                      as_text(item.get("factor")) or None)
+            self._set(cfg.SHEET_SCORECARD, f"{cols['weight']}{row}",
+                      as_fraction(item.get("weight")))
+            self._set(cfg.SHEET_SCORECARD, f"{cols['direction']}{row}",
+                      (cfg.SCORECARD_DIRECTION_HIGHER if direction == "higher"
+                       else cfg.SCORECARD_DIRECTION_TARGET) if item else None)
+            self._set(cfg.SHEET_SCORECARD, f"{cols['target']}{row}",
+                      as_number(item.get("target")) if direction == "target" else None)
+            if item.get("how"):
+                self._set(cfg.SHEET_SCORECARD, f"{cols['how']}{row}",
+                          as_text(item.get("how")))
+        return {"factors": len(items)}
+
+    def definitions(self) -> List[Dict[str, str]]:
+        """The glossary from the Definitions sheet, for the measures on screen."""
+        return self._cached("definitions", self._read_definitions)
+
+    def _read_definitions(self) -> List[Dict[str, str]]:
+        cols = cfg.DEFINITIONS_COLUMNS
+        out: List[Dict[str, str]] = []
+        for row in range(1, cfg.DEFINITIONS_LAST_ROW + 1):
+            field_name = self._wb.get_text(
+                cfg.SHEET_DEFINITIONS, f"{cols['field']}{row}")
+            means = self._wb.get_text(cfg.SHEET_DEFINITIONS, f"{cols['means']}{row}")
+            if not field_name or not means or field_name == "Field":
+                continue
+            out.append({
+                "field": field_name,
+                "means": means,
+                "how": self._wb.get_text(cfg.SHEET_DEFINITIONS, f"{cols['how']}{row}"),
+            })
+        return out
+
     def save_reference(self, project_types: Optional[Sequence[Dict[str, Any]]],
                        credit_steps: Optional[Sequence[Dict[str, Any]]]
                        ) -> Dict[str, Any]:

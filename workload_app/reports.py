@@ -157,6 +157,8 @@ class ReportSet:
     scorecard: Dict[str, Any] = field(default_factory=dict)
     quarterly: List[Dict[str, Any]] = field(default_factory=list)
     delivery_mix: List[Dict[str, Any]] = field(default_factory=list)
+    monthly: List[Dict[str, Any]] = field(default_factory=list)
+    heroes: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -171,6 +173,8 @@ class ReportSet:
             "scorecard": self.scorecard,
             "quarterly": self.quarterly,
             "delivery_mix": self.delivery_mix,
+            "monthly": self.monthly,
+            "heroes": self.heroes,
         }
 
 
@@ -205,10 +209,13 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
         engineers=engineers, projects=projects, team=team,
         per_engineer=per_engineer,
         by_status=_by_status(wb, projects),
-        scorecard=_scorecard(per_engineer, engineers),
+        scorecard=_scorecard(per_engineer, engineers, wb.scorecard_factors()),
         quarterly=_quarterly(wb, index, quarters, engineers, hours_per_mm),
         delivery_mix=_delivery_mix(wb, index, hours_per_mm),
     )
+    report.monthly = _monthly_scores(wb, index, projects, engineers, period,
+                                     as_at, hours_per_mm)
+    report.heroes = _heroes(report.monthly, report.scorecard, as_at, period)
     return report
 
 
@@ -521,26 +528,22 @@ def _delivery_mix(wb, index, hours_per_mm) -> List[Dict[str, Any]]:
 
 # -- the scorecard ---------------------------------------------------------
 
-#: Factor, weight, and how it scores. "higher" ranks against the best performer;
-#: "target" scores 100 on the target and falls away either side of it.
-SCORECARD_FACTORS = [
-    ("Efficiency (CPI, type-weighted)", "type_weighted_cpi", 0.30, "higher", None),
-    ("Utilisation vs capacity", "utilisation", 0.20, "target", 1.0),
-    ("Plan adherence", "plan_adherence", 0.15, "target", 1.0),
-    ("Earned MM delivered (type-weighted)", "type_weighted_earned_mm", 0.20,
-     "higher", None),
-    ("Actual MM contributed", "actual_mm", 0.10, "higher", None),
-    ("Projects worked", "projects_worked", 0.05, "higher", None),
-]
-
-
-def _scorecard(per_engineer: Dict[str, Dict[str, Any]], engineers: Sequence[str]
-               ) -> Dict[str, Any]:
+def _scorecard(per_engineer: Dict[str, Dict[str, Any]], engineers: Sequence[str],
+               definitions: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Rank the team on the factors and weights the Scorecard sheet defines."""
     factors: List[Dict[str, Any]] = []
     scores: Dict[str, float] = {name: 0.0 for name in engineers}
 
-    for label, key, weight, direction, target in SCORECARD_FACTORS:
-        values = {name: (per_engineer[name].get(key) or 0.0) for name in engineers}
+    for factor in definitions:
+        label = factor["factor"]
+        key = factor.get("key")
+        weight = factor.get("weight") or 0.0
+        direction = factor.get("direction") or "higher"
+        target = factor.get("target")
+        values = {
+            name: ((per_engineer[name].get(key) or 0.0) if key else 0.0)
+            for name in engineers
+        }
         best = max(values.values()) if values else 0.0
         row_scores: Dict[str, float] = {}
         for name, value in values.items():
@@ -553,7 +556,7 @@ def _scorecard(per_engineer: Dict[str, Dict[str, Any]], engineers: Sequence[str]
             scores[name] += score * weight
         factors.append({
             "factor": label, "weight": weight, "direction": direction,
-            "target": target,
+            "target": target, "key": key, "how": factor.get("how", ""),
             "values": {k: _round(v) for k, v in values.items()},
             "best": _round(best),
             "scores": {k: _round(v, 1) for k, v in row_scores.items()},
@@ -575,4 +578,136 @@ def _scorecard(per_engineer: Dict[str, Dict[str, Any]], engineers: Sequence[str]
              "strongest": strongest[name], "weakest": weakest[name]}
             for position, name in enumerate(ranking)
         ],
+    }
+
+
+# --------------------------------------------------------------------------
+# hero of the month
+# --------------------------------------------------------------------------
+
+def _months_in(period: Period) -> List[Tuple[str, _dt.date, _dt.date]]:
+    """Each calendar month the period covers, as (label, first day, last day)."""
+    start, end = period.start, period.end
+    if start is None or end is None:
+        return []
+    start = max(start, _dt.date(2000, 1, 1))
+    out: List[Tuple[str, _dt.date, _dt.date]] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        first = _dt.date(year, month, 1)
+        last = (_dt.date(year + (month == 12), (month % 12) + 1, 1)
+                - _dt.timedelta(days=1))
+        out.append((first.strftime("%Y-%m"), first, last))
+        year, month = (year + (month == 12), (month % 12) + 1)
+    return out
+
+
+def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
+                    ) -> List[Dict[str, Any]]:
+    """Run the scorecard month by month, so each finished month has a winner.
+
+    Only months that have finished are scored: a month still in progress would
+    rank whoever happens to have booked most so far.
+    """
+    factors = wb.scorecard_factors()
+    availability = {e.short_name: e for e in wb.engineers()}
+    by_project = {p["number"]: p for p in projects}
+
+    # Bucket the timesheet once: month -> engineer -> job -> hours.
+    buckets: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(float)))
+    for row in index.rows:
+        date = row["date"]
+        if date is None:
+            continue
+        buckets[date.strftime("%Y-%m")][row["engineer"]][row["job_number"]] += row["hours"]
+
+    out: List[Dict[str, Any]] = []
+    for label, first, last in _months_in(period):
+        if last >= as_at:
+            continue                      # not finished yet, so not scored
+        per: Dict[str, Dict[str, Any]] = {}
+        for name in engineers:
+            jobs = buckets.get(label, {}).get(name, {})
+            actual = sum(jobs.values()) / hours_per_mm if hours_per_mm else 0.0
+            earned = type_weighted = planned = 0.0
+            worked = 0
+            for job, hours in jobs.items():
+                project = by_project.get(job)
+                if not project or not hours:
+                    continue
+                worked += 1
+                share = (project["shares"] or {}).get(name) or 0.0
+                lifetime = project["lifetime_actual_mm"] or 0.0
+                month_mm = hours / hours_per_mm if hours_per_mm else 0.0
+                value = ((month_mm / lifetime) * (project["lifetime_earned_mm"] or 0.0)
+                         if lifetime else 0.0)
+                earned += value
+                type_weighted += value * (project["type_factor"] or 1.0)
+            for project in projects:
+                share = (project["shares"] or {}).get(name) or 0.0
+                if not share:
+                    continue
+                start = _parse(project["start"])
+                end = _parse(project["end"])
+                if start and end and project["budget_mm"]:
+                    days = (end - start).days + 1
+                    overlap = max(0, (min(end, last) - max(start, first)).days + 1)
+                    planned += project["budget_mm"] * overlap / days * share
+            engineer = availability.get(name)
+            factor = (engineer.availability.get(first.year, 1.0)
+                      if engineer else 1.0)
+            capacity = factor          # one month of availability
+            per[name] = {
+                "actual_mm": _round(actual),
+                "earned_mm": _round(earned),
+                "type_weighted_earned_mm": _round(type_weighted),
+                "type_weighted_cpi": _round(_safe(type_weighted, actual)),
+                "cpi": _round(_safe(earned, actual)),
+                "utilisation": _round(_safe(actual, capacity)),
+                "plan_adherence": _round(_safe(actual, planned)),
+                "planned_mm": _round(planned),
+                "capacity_mm": _round(capacity),
+                "projects_worked": worked,
+            }
+        board = _scorecard(per, engineers, factors)
+        winner = board["ranking"][0] if board["ranking"] else None
+        out.append({
+            "month": label,
+            "label": first.strftime("%B %Y"),
+            "per_engineer": per,
+            "scores": board["totals"],
+            "hero": winner["engineer"] if winner else None,
+            "hero_score": winner["score"] if winner else None,
+            "hero_strongest": winner["strongest"] if winner else "",
+            "booked": _round(sum(p["actual_mm"] or 0.0 for p in per.values())),
+        })
+    return out
+
+
+def _heroes(monthly: Sequence[Dict[str, Any]], scorecard: Dict[str, Any],
+            as_at: _dt.date, period: Period) -> Dict[str, Any]:
+    """The most recent month's winner, and the year's."""
+    scored = [m for m in monthly if m["booked"]]
+    latest = scored[-1] if scored else None
+
+    # The year's hero is whoever tops the period's own scorecard; the count of
+    # months won is the tie-breaker a reader will look for next.
+    wins: Dict[str, int] = defaultdict(int)
+    for month in scored:
+        if month["hero"]:
+            wins[month["hero"]] += 1
+    ranking = scorecard.get("ranking") or []
+    champion = ranking[0] if ranking else None
+    return {
+        "month": latest,
+        "months_scored": len(scored),
+        "wins": dict(wins),
+        "year": {
+            "engineer": champion["engineer"] if champion else None,
+            "score": champion["score"] if champion else None,
+            "strongest": champion["strongest"] if champion else "",
+            "months_won": wins.get(champion["engineer"], 0) if champion else 0,
+        } if champion else None,
+        "period_label": period.label,
     }

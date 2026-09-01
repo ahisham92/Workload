@@ -519,6 +519,142 @@ class Workbook:
                 out.append(record)
         return out
 
+    # -- adding and removing sheets --------------------------------------
+    def add_sheet(self, name: str, template: Optional[str] = None) -> str:
+        """Add a worksheet, optionally copying another sheet's head and header.
+
+        A new sheet needs four things registered, not one: the part itself, a
+        content-type override for it, a relationship from the workbook, and an
+        entry in the workbook's sheet list.
+        """
+        if name in self._sheet_paths:
+            raise XlsxError(f"{self.path.name} already has a sheet called {name!r}")
+        if len(name) > 31 or set(name) & set(r"[]:*?/\\"):
+            raise XlsxError(
+                f"{name!r} is not a usable sheet name (31 characters, and none "
+                f"of []:*?/\\)"
+            )
+
+        numbers = [
+            int(m.group(1))
+            for path in self._sheet_paths.values()
+            for m in [re.search(r"sheet(\d+)\.xml$", path)] if m
+        ]
+        target = f"xl/worksheets/sheet{max(numbers) + 1 if numbers else 1}.xml"
+        while target in self._entries:
+            numbers.append(max(numbers) + 1)
+            target = f"xl/worksheets/sheet{max(numbers) + 1}.xml"
+
+        self._entries[target] = self._new_sheet_xml(template).encode("utf-8")
+        self._order.append(target)
+        self._infos[target] = zipfile.ZipInfo(target, date_time=(1980, 1, 1, 0, 0, 0))
+
+        ct = self._text("[Content_Types].xml")
+        override = (
+            f'<Override PartName="/{target}" ContentType="application/vnd'
+            f'.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+        self._entries["[Content_Types].xml"] = ct.replace(
+            "</Types>", override + "</Types>").encode("utf-8")
+
+        rels = self._text("xl/_rels/workbook.xml.rels")
+        used = {int(m.group(1)) for m in re.finditer(r'Id="rId(\d+)"', rels)}
+        rid = f"rId{max(used) + 1 if used else 1}"
+        relationship = (
+            f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org'
+            f'/officeDocument/2006/relationships/worksheet" '
+            f'Target="worksheets/{target.rsplit("/", 1)[-1]}"/>'
+        )
+        self._entries["xl/_rels/workbook.xml.rels"] = rels.replace(
+            "</Relationships>", relationship + "</Relationships>").encode("utf-8")
+
+        wb = self._text("xl/workbook.xml")
+        ids = {int(m.group(1)) for m in re.finditer(r'sheetId="(\d+)"', wb)}
+        entry = (
+            f'<sheet name="{_xml_escape(name)}" sheetId="{max(ids) + 1 if ids else 1}"'
+            f' r:id="{rid}"/>'
+        )
+        self._entries["xl/workbook.xml"] = wb.replace(
+            "</sheets>", entry + "</sheets>").encode("utf-8")
+
+        self._sheet_paths[name] = target
+        self._sheets.pop(name, None)
+        return name
+
+    def _new_sheet_xml(self, template: Optional[str]) -> str:
+        head = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml'
+            '/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+            'officeDocument/2006/relationships">'
+        )
+        rows = ""
+        if template and template in self._sheet_paths:
+            source = self.sheet(template)
+            kept = [source.row_xml(number) for number in source.row_numbers()
+                    if number <= 3]
+            rows = "".join(r for r in kept if r)
+            # The copied rows carry namespaced display hints (x14ac:dyDescent)
+            # that this minimal sheet does not declare; they are decoration, so
+            # drop them rather than pull the whole namespace list across.
+            rows = re.sub(r'\s+[\w]+:[\w]+="[^"]*"', "", rows)
+        return (
+            f'{head}<dimension ref="A1"/><sheetViews><sheetView '
+            f'workbookViewId="0"><pane ySplit="3" topLeftCell="A4" '
+            f'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+            f'<sheetFormatPr defaultRowHeight="14.4"/><sheetData>{rows}'
+            f'</sheetData><pageMargins left="0.7" right="0.7" top="0.75" '
+            f'bottom="0.75" header="0.3" footer="0.3"/></worksheet>'
+        )
+
+    def rename_sheet(self, old: str, new: str) -> None:
+        """Rename a worksheet and repoint every formula that names it."""
+        if old not in self._sheet_paths:
+            raise XlsxError(f"no sheet named {old!r}")
+        if new in self._sheet_paths:
+            raise XlsxError(f"{self.path.name} already has a sheet called {new!r}")
+        wb = self._text("xl/workbook.xml")
+        pattern = r'(<sheet\b[^>]*\bname=")%s(")' % re.escape(_xml_escape(old))
+        wb, count = re.subn(pattern, lambda m: m.group(1) + _xml_escape(new) + m.group(2),
+                            wb, count=1)
+        if not count:
+            raise XlsxError(f"could not find {old!r} in the workbook's sheet list")
+        self._entries["xl/workbook.xml"] = wb.encode("utf-8")
+        self._sheet_paths[new] = self._sheet_paths.pop(old)
+        if old in self._sheets:
+            sheet = self._sheets.pop(old)
+            sheet.name = new
+            self._sheets[new] = sheet
+
+    def remove_sheet(self, name: str) -> None:
+        """Remove a worksheet and every registration that points at it."""
+        if name not in self._sheet_paths:
+            raise XlsxError(f"no sheet named {name!r}")
+        target = self._sheet_paths.pop(name)
+        self._sheets.pop(name, None)
+        self._entries.pop(target, None)
+        if target in self._order:
+            self._order.remove(target)
+        self._infos.pop(target, None)
+
+        ct = self._text("[Content_Types].xml")
+        self._entries["[Content_Types].xml"] = re.sub(
+            r'<Override PartName="/%s"[^>]*/>' % re.escape(target), "", ct
+        ).encode("utf-8")
+
+        wb = self._text("xl/workbook.xml")
+        m = re.search(
+            r'<sheet\b[^>]*name="%s"[^>]*/>' % re.escape(_xml_escape(name)), wb)
+        if m:
+            rid = re.search(r'r:id="([^"]+)"', m.group(0))
+            wb = wb.replace(m.group(0), "")
+            self._entries["xl/workbook.xml"] = wb.encode("utf-8")
+            if rid:
+                rels = self._text("xl/_rels/workbook.xml.rels")
+                self._entries["xl/_rels/workbook.xml.rels"] = re.sub(
+                    r'<Relationship Id="%s"[^>]*/>' % re.escape(rid.group(1)),
+                    "", rels).encode("utf-8")
+
     # -- saving ----------------------------------------------------------
     def force_full_recalc(self) -> None:
         """Ask Excel to recalculate everything the next time it opens the file."""
