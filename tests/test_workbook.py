@@ -484,3 +484,34 @@ class TestReferenceTables:
         ])
         assert wb.credit_for("DD", 1) == pytest.approx(0.25)
         assert wb.credit_for("DD", 2) == pytest.approx(0.5)
+
+
+class TestTheDataCheckByYear:
+    """The Overview is for one year, so its data check is too."""
+
+    def test_a_year_narrows_the_counts_but_keeps_the_whole_file(self, readonly_wb):
+        whole = readonly_wb.data_check()
+        year = readonly_wb.data_check(2026)
+        assert year["year"] == 2026
+        assert 0 < year["rows"] < whole["rows"]
+        assert 0 < year["hours"] < whole["hours"]
+        assert year["all_time_rows"] == whole["rows"]
+        assert year["all_time_hours"] == whole["hours"]
+
+    def test_each_engineer_carries_both_counts(self, readonly_wb):
+        year = readonly_wb.data_check(2026)
+        for name, entry in year["per_engineer"].items():
+            assert entry["rows"] <= entry["all_time_rows"], name
+            assert entry["hours"] <= entry["all_time_hours"], name
+        assert sum(e["rows"] for e in year["per_engineer"].values()) == year["rows"]
+
+    def test_unknown_job_numbers_follow_the_year_too(self, readonly_wb):
+        whole = readonly_wb.data_check()["unknown_job_numbers"]
+        year = readonly_wb.data_check(2026)["unknown_job_numbers"]
+        assert 0 < len(year) < len(whole)
+        codes = {u["code"] for u in whole}
+        assert {u["code"] for u in year} <= codes
+
+    def test_the_capacity_report_still_sees_every_row(self, readonly_wb):
+        year = readonly_wb.data_check(2026)
+        assert year["capacity"]["rows_used"] == year["all_time_rows"]

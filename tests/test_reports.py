@@ -319,3 +319,32 @@ class TestTheYearFilterReaches:
                 <= team["projects_live"])
         assert team["projects_active"] == sum(
             1 for p in report.projects if p["live"] and p["status"] == "Active")
+
+
+class TestProjectOfTheYear:
+    """The finished project that earned the most for what it cost."""
+
+    def test_it_is_finalized_and_tops_the_cpi(self, report):
+        champion = report.champion
+        assert champion is not None
+        best = {p["number"] for p in report.projects
+                if p["status"] == "Finalized"
+                and (p["actual_mm"] or 0) >= 0.25
+                and p["cpi"] is not None}
+        assert champion["number"] in best
+        assert champion["cpi"] == max(
+            p["cpi"] for p in report.projects if p["number"] in best)
+
+    def test_a_couple_of_hours_cannot_win_the_year(self, readonly_wb):
+        # 2025 has a finished project with a CPI of 12 on 0.011 MM booked --
+        # a ratio, not an achievement. The floor is what keeps it out.
+        year = reports.build(readonly_wb, "year", 2025)
+        assert year.champion["actual_mm"] >= 0.25
+        thin = [p for p in year.projects
+                if p["status"] == "Finalized" and p["cpi"] is not None
+                and 0 < (p["actual_mm"] or 0) < 0.25]
+        assert thin, "expected a thin candidate to exist in 2025"
+        assert max(p["cpi"] for p in thin) > year.champion["cpi"]
+
+    def test_it_travels_with_the_rest_of_the_set(self, report):
+        assert report.to_dict()["champion"]["number"] == report.champion["number"]

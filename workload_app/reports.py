@@ -159,6 +159,7 @@ class ReportSet:
     delivery_mix: List[Dict[str, Any]] = field(default_factory=list)
     monthly: List[Dict[str, Any]] = field(default_factory=list)
     heroes: Dict[str, Any] = field(default_factory=dict)
+    champion: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -175,6 +176,7 @@ class ReportSet:
             "delivery_mix": self.delivery_mix,
             "monthly": self.monthly,
             "heroes": self.heroes,
+            "champion": self.champion,
         }
 
 
@@ -216,6 +218,7 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
     report.monthly = _monthly_scores(wb, index, projects, engineers, period,
                                      as_at, hours_per_mm)
     report.heroes = _heroes(report.monthly, report.scorecard, as_at, period)
+    report.champion = _champion(projects, period)
     return report
 
 
@@ -693,6 +696,35 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
             "booked": _round(sum(p["actual_mm"] or 0.0 for p in per.values())),
         })
     return out
+
+
+def _champion(projects: Sequence[Dict[str, Any]], period: Period
+              ) -> Optional[Dict[str, Any]]:
+    """The project of the period: finished, and earned the most per MM spent.
+
+    Only projects with real effort booked in the period are eligible, so a job
+    finalised years ago cannot win a year it took no part in, and two hours of
+    touch-up cannot outrank a year's work on a ratio.
+    """
+    candidates = [
+        p for p in projects
+        if p["status"] == "Finalized" and p["cpi"] is not None
+        and (p["actual_mm"] or 0) >= cfg.CHAMPION_MIN_ACTUAL_MM
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda p: (p["cpi"], p["earned_mm"] or 0))
+    return {
+        "number": best["number"],
+        "name": best["name"],
+        "cpi": best["cpi"],
+        "budget_mm": best["budget_mm"],
+        "actual_mm": best["actual_mm"],
+        "earned_mm": best["earned_mm"],
+        "profit_mm": best["profit_mm"],
+        "finalists": len(candidates),
+        "period_label": period.label,
+    }
 
 
 def _heroes(monthly: Sequence[Dict[str, Any]], scorecard: Dict[str, Any],

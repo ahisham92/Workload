@@ -71,7 +71,11 @@ stands it takes 7,682 rows down to 5,271. Absence codes and proposal effort are
 kept — utilisation and the Proposals sheet both need them.
 
 **Projects** — the register, and behind each row the project's own page: its
-details, its figures, and **its deliverables edited in place**. The step dropdown
+details, its figures, and **its deliverables edited in place**. Every column
+sorts — number, name, status, budget, progress, actual, earned, profit, CPI,
+deliverables — numbers opening on their largest, blanks always sinking to the
+bottom, and the row numbers following the order on screen. The `#` header puts
+the register's own order back. The step dropdown
 is filtered to the steps `Rules of Credit` defines for the chosen type and shows
 the credit each earns; the split columns follow this unit's engineers.
 
@@ -122,7 +126,16 @@ has been planned and booked against it, earned value, profit, utilisation and
 CPI. Each engineer is shown in the workbook's own measures — man-months against
 capacity, earned against actual, plan adherence — rather than a count of hours,
 which on its own says very little. Every measure carries its definition from the
-`Definitions` sheet, and the glossary sits at the foot of the page.
+`Definitions` sheet, and the glossary sits at the foot of the page. The data
+check follows the same year — rows, hours and job numbers charged but not in
+the register are all counted for that year, with the whole-file totals beside
+them, so the year's problems are not buried in a decade of history.
+
+**Project of the year** sits beside them: the finished project that earned the
+most for what it cost — the best CPI among the projects finalized and worked on
+in the chosen year. A project has to carry at least a quarter of a man-month of
+effort in the period to qualify, because two hours of touch-up on a completed
+job would otherwise win every year on a ratio.
 
 **Hero of the month and Hero of the year** sit at the top. The month's hero is
 whoever scored highest on the team scorecard in the last *completed* month — in
@@ -151,15 +164,18 @@ in the workbook says so. Because the sheets stack in order, it is the rows at
 the bottom of the stack that stop counting first — you update the last
 engineer, and nothing moves.
 
-The Timesheets tab shows how much room is left against both limits, warns
-before either runs out, and will raise them for you. It offers to read each
-monthly sheet down to row 25,000 — that is a one-line change to the stack with
-no recalculation cost, so there is no reason to sit at 6,000. Raising the
-consolidated limit is the heavier of the two: it rewrites every one of those
-138,000 references and extends the per-row helper formulas to match, and two of
-those helper columns cost roughly the square of the limit to recalculate. So
-the app suggests a few years of headroom rather than the maximum — and
-importing only registered work is usually the cheaper fix.
+**The app widens the per-sheet limit to 25,000 the moment it opens a
+workbook.** That is a one-line change to the `VSTACK` with no recalculation
+cost, so there was never a reason to leave it at 6,000 or to make it a button
+somebody had to find. The Timesheets tab shows how much room is left against
+both limits and warns before either runs out.
+
+Raising the consolidated limit is the heavier of the two, and stays a decision:
+it rewrites every one of those 138,000 references and extends the per-row
+helper formulas to match, and two of those helper columns cost roughly the
+square of the limit to recalculate. So the app suggests a few years of headroom
+rather than the maximum — and importing only registered work is usually the
+cheaper fix.
 
 ## Rules it enforces
 

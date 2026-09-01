@@ -14,6 +14,7 @@ const state = {
   browseFolder: null,
   detail: null,          // the project currently open, with its deliverables
   referenceDraft: null,
+  projectSort: { key: null, dir: 1 },   // null = the register's own order
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -397,7 +398,8 @@ function renderHeroes(report) {
   const month = heroes.month;
   const year = heroes.year;
   const strip = $('#hero-strip');
-  if (!month && !year) { strip.replaceChildren(); return; }
+  const champion = report.champion;
+  if (!month && !year && !champion) { strip.replaceChildren(); return; }
 
   const wins = heroes.wins || {};
   strip.className = 'hero-strip';
@@ -421,11 +423,22 @@ function renderHeroes(report) {
       ? el('div', { class: 'hero hero-year' },
           el('span', { class: 'medal' }, '🏆'),
           el('div', { class: 'who' },
-            el('div', { class: 'label' }, `Hero of ${report.period.label.toLowerCase()}`),
+            el('div', { class: 'label' }, `Hero of ${periodName(report.period)}`),
             el('div', { class: 'name' }, year.engineer || '—'),
             el('div', { class: 'why' },
               `scored ${num(year.score, 1)} of 100 · `
               + `won ${year.months_won} of ${heroes.months_scored} month(s) scored`)))
+      : null,
+    champion
+      ? el('div', { class: 'hero hero-project' },
+          el('span', { class: 'medal' }, '🎖️'),
+          el('div', { class: 'who' },
+            el('div', { class: 'label' }, `Project of ${periodName(report.period)}`),
+            el('div', { class: 'name' }, champion.number),
+            el('div', { class: 'why', title: champion.name },
+              `${trim(champion.name, 64)} — finalized, CPI `
+              + `${fmt.ratio(champion.cpi)} on ${num(champion.actual_mm)} MM `
+              + `spent, best of ${champion.finalists} finished`)))
       : null,
     Object.keys(wins).length
       ? el('div', { class: 'hero', style: 'border-left-color: var(--series-3)' },
@@ -437,6 +450,17 @@ function renderHeroes(report) {
                 .sort((a, b) => b[1] - a[1])
                 .map(([name, count]) => `${name} ${count}`).join(' · '))))
       : null);
+}
+
+/** A period's name, short enough for a card's heading. */
+function periodName(period) {
+  return period.kind === 'all' ? 'all time' : period.label.toLowerCase();
+}
+
+/** Cut a long project name to something a card can hold. */
+function trim(text, limit) {
+  const value = text || '';
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 }
 
 function renderDefinitions(definitions) {
@@ -497,23 +521,33 @@ function engineerBlock(name, report, overview) {
 }
 
 function renderDataCheck(check) {
-  const kind = check.rows === 0 ? 'msg-warn'
+  const kind = check.all_time_rows === 0 ? 'msg-warn'
     : check.rows_not_matching_pattern ? 'msg-bad' : 'msg-ok';
   const unknown = check.unknown_job_numbers || [];
+  // The counts follow the year chosen above; the sheets themselves hold every
+  // year at once, so the whole-file totals stay beside them.
+  const year = check.year;
+  const scope = year ? `in ${year}` : 'all time';
   $('#data-check').replaceChildren(
     el('div', { class: `msg ${kind}` }, check.verdict),
     el('dl', { class: 'kv' },
-      el('dt', {}, 'Rows'), el('dd', {}, fmt.int(check.rows)),
-      el('dt', {}, 'Hours'), el('dd', {}, fmt.hours(check.hours)),
+      el('dt', {}, `Rows ${scope}`),
+      el('dd', {}, fmt.int(check.rows)
+        + (year ? ` · of ${fmt.int(check.all_time_rows)} on the sheets` : '')),
+      el('dt', {}, `Hours ${scope}`),
+      el('dd', {}, fmt.hours(check.hours)
+        + (year ? ` · of ${fmt.hours(check.all_time_hours)} all time` : '')),
       el('dt', {}, 'First date'), el('dd', {}, fmt.date(check.first_date)),
       el('dt', {}, 'Last date'), el('dd', {}, fmt.date(check.last_date)),
       ...Object.entries(check.per_engineer).flatMap(([name, e]) => [
         el('dt', {}, name),
-        el('dd', {}, `${fmt.int(e.rows)} rows · ${fmt.hours(e.hours)} h · to ${fmt.date(e.last_date)}`),
+        el('dd', {}, `${fmt.int(e.rows)} rows · ${fmt.hours(e.hours)} h ${scope}`
+          + ` · to ${fmt.date(e.last_date)}`),
       ])),
     unknown.length
       ? el('div', { class: 'msg msg-warn', style: 'margin-top:12px' },
-          el('strong', {}, `${unknown.length} job number(s) charged but not in the register: `),
+          el('strong', {},
+            `${unknown.length} job number(s) charged ${scope} but not in the register: `),
           unknown.slice(0, 8).map((u) => `${u.code} (${u.rows})`).join(', ')
             + (unknown.length > 8 ? `, and ${unknown.length - 8} more` : ''))
       : null);
@@ -550,9 +584,10 @@ function renderTimesheets() {
   $('#ts-cards').replaceChildren(...Object.entries(check.per_engineer).map(([name, e]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, `${name} — ${e.sheet}`),
-      el('div', { class: 'value' }, fmt.int(e.rows)),
+      el('div', { class: 'value' }, fmt.int(e.all_time_rows)),
       el('div', { class: 'sub' },
-        `rows · ${fmt.hours(e.hours)} h · ${fmt.date(e.first_date)} → ${fmt.date(e.last_date)}`),
+        `rows · ${fmt.hours(e.all_time_hours)} h · `
+        + `${fmt.date(e.first_date)} → ${fmt.date(e.last_date)}`),
       e.rows_not_matching_pattern
         ? el('div', { class: 'msg msg-bad', style: 'margin-top:8px' },
             `${e.rows_not_matching_pattern} row(s) belong to someone else`)
@@ -605,7 +640,11 @@ function renderCapacity(check) {
           `Each monthly sheet is only read to row ${cap.source_last_row.toLocaleString()} `
           + `(${cap.per_sheet_capacity.toLocaleString()} entries). Reading to row `
           + `${cap.suggested_source_last_row.toLocaleString()} leaves room for years of imports.`)
-      : null));
+      : el('p', { class: 'muted' },
+          `Each monthly sheet is read to row ${cap.source_last_row.toLocaleString()}, `
+          + `which is ${cap.per_sheet_capacity.toLocaleString()} entries each — `
+          + 'the app widens the stack to that when it opens a workbook, so an '
+          + "engineer's own sheet is not the thing that runs out first.")));
 }
 
 async function raiseSourceLimit(cap) {
@@ -779,6 +818,74 @@ function statusPill(status) {
   return '';
 }
 
+/** The sortable columns, in the order the table shows them.
+ *
+ *  Each one knows how to read its own value, so sorting and rendering cannot
+ *  disagree about what a column holds.
+ */
+const PROJECT_COLUMNS = [
+  { key: null, label: '#', num: true },
+  { key: 'number', label: 'Number', text: true, of: (p) => p.number },
+  { key: 'name', label: 'Name', text: true, of: (p) => p.name },
+  { key: 'status', label: 'Status', text: true, of: (p) => p.status },
+  { key: 'budget_mm', label: 'Budget MM', num: true, of: (p) => p.budget_mm },
+  { key: 'progress', label: 'Progress', num: true, of: (p, m) => m.progress },
+  { key: 'actual_mm', label: 'Actual MM', num: true, of: (p, m) => m.actual_mm },
+  { key: 'earned_mm', label: 'Earned MM', num: true, of: (p, m) => m.earned_mm },
+  { key: 'profit_mm', label: 'Profit MM', num: true, of: (p, m) => m.profit_mm },
+  { key: 'cpi', label: 'CPI', num: true, of: (p, m) => m.cpi },
+  { key: 'deliverables', label: 'Deliverables', num: true,
+    of: (p, m) => m.deliverables || 0 },
+];
+
+/** Sort the filtered rows in place. Nulls sink, whichever way the sort runs. */
+function sortProjects(rows, byNumber) {
+  const { key, dir } = state.projectSort;
+  const column = PROJECT_COLUMNS.find((c) => c.key === key);
+  if (!column || !column.of) return;          // the register's own order
+  rows.sort((a, b) => {
+    const left = column.of(a, byNumber.get(a.number) || {});
+    const right = column.of(b, byNumber.get(b.number) || {});
+    const leftMissing = left === null || left === undefined || left === '';
+    const rightMissing = right === null || right === undefined || right === '';
+    if (leftMissing || rightMissing) return leftMissing - rightMissing;
+    if (column.text) return dir * String(left).localeCompare(String(right));
+    return dir * (left - right);
+  });
+}
+
+function projectHeader(column) {
+  if (column.key === null) {
+    // The row number is the position in the table, so it never sorts itself;
+    // clicking it puts the register's own order back.
+    const ordered = state.projectSort.key === null;
+    return el('th', {
+      class: `num sortable${ordered ? ' sorted' : ''}`,
+      title: 'Back to the order the register holds them in',
+      onclick: () => { state.projectSort = { key: null, dir: 1 }; renderProjects(); },
+    }, column.label);
+  }
+  const active = state.projectSort.key === column.key;
+  const arrow = active ? (state.projectSort.dir === 1 ? ' ▲' : ' ▼') : '';
+  return el('th', {
+    class: `${column.num ? 'num' : ''} sortable${active ? ' sorted' : ''}`,
+    'aria-sort': active
+      ? (state.projectSort.dir === 1 ? 'ascending' : 'descending')
+      : 'none',
+    title: `Sort by ${column.label.toLowerCase()}`,
+    onclick: () => sortProjectsBy(column),
+  }, `${column.label}${arrow}`);
+}
+
+/** Click once to sort, again to reverse. Numbers open on their largest. */
+function sortProjectsBy(column) {
+  const current = state.projectSort;
+  state.projectSort = current.key === column.key
+    ? { key: column.key, dir: -current.dir }
+    : { key: column.key, dir: column.num ? -1 : 1 };
+  renderProjects();
+}
+
 function renderProjects() {
   const projectSelect = $('#project-filter');
   const chosen = projectSelect.value || 'all';
@@ -806,13 +913,13 @@ function renderProjects() {
     return !filter || `${p.number} ${p.name}`.toLowerCase().includes(filter);
   });
 
+  sortProjects(rows, byNumber);
+
   $('#projects-table').replaceChildren(
-    el('thead', {}, el('tr', {},
-      ['#', 'Number', 'Name', 'Status', 'Budget MM', 'Progress', 'Actual MM',
-       'Earned MM', 'Profit MM', 'CPI', 'Deliverables', '']
-        .map((h, i) => el('th', {
-          class: i === 0 || (i >= 4 && i <= 10) ? 'num' : '',
-        }, h)))),
+    el('thead', {}, el('tr', {}, [
+      ...PROJECT_COLUMNS.map((column) => projectHeader(column)),
+      el('th', {}, ''),
+    ])),
     el('tbody', {}, rows.length === 0
       ? el('tr', {}, el('td', { colspan: 12 },
           el('div', { class: 'empty' }, 'No projects match.')))

@@ -775,3 +775,25 @@ class TestHeroesInTheApi:
         assert body["heroes"]["month"]["month"] == "2026-08"
         assert body["heroes"]["year"]["engineer"] in body["engineers"]
         assert body["monthly"]
+
+
+class TestTheStackIsWidenedOnOpen:
+    """The workbook ships reading 6,000 rows a sheet; nobody should have to ask."""
+
+    def test_opening_a_workbook_deepens_the_stack(self, server):
+        _status, status = call(server, "/api/status")
+        assert status["stack_raised_to"] == 25000
+        assert status["capacity"]["source_last_row"] == 25000
+        assert status["capacity"]["source_is_short"] is False
+
+    def test_the_consolidated_limit_is_left_alone(self, server):
+        _status, status = call(server, "/api/status")
+        # Raising that one rewrites 138,000 formulas; it stays a decision.
+        assert status["capacity"]["raw_last_row"] == 8000
+
+    def test_a_workbook_already_deep_enough_is_not_rewritten(self, workbook_copy):
+        from workload_app.server import WorkloadService
+        first = WorkloadService(workbook_copy)
+        assert first._stack_raised_to == 25000
+        again = WorkloadService(workbook_copy)
+        assert again._stack_raised_to is None

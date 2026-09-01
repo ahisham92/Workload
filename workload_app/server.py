@@ -49,6 +49,7 @@ class WorkloadService:
         self._wb: Optional[WorkloadWorkbook] = None
         self._staged: Dict[str, ParsedTimesheet] = {}
         self._unlocked = False
+        self._stack_raised_to: Optional[int] = None
         if path is not None:
             self.open(path)
 
@@ -77,6 +78,7 @@ class WorkloadService:
             self.path = resolved
             self._staged.clear()
             self._unlocked = False
+            self._stack_raised_to = self._widen_stack()
             if remember:
                 self.unit = library.save_unit(name or resolved.stem, resolved)
             return self.status()
@@ -102,6 +104,7 @@ class WorkloadService:
             self.path = None
             self.unit = None
             self._unlocked = False
+            self._stack_raised_to = None
             self._staged.clear()
             return self.status()
 
@@ -117,6 +120,27 @@ class WorkloadService:
         return data
 
     # -- helpers ---------------------------------------------------------
+    def _widen_stack(self) -> Optional[int]:
+        """Deepen the per-sheet stack as soon as a workbook is opened.
+
+        The workbook ships reading 6,000 rows from each monthly sheet, and that
+        is the limit an engineer's own sheet reaches first.  Widening it is a
+        one-line change to the VSTACK with no recalculation cost -- unlike the
+        consolidated limit -- so it is done here rather than offered as a
+        button nobody would have a reason to decline.
+        """
+        wb = self._wb
+        if wb is None:
+            return None
+        report = wb.timesheet_capacity()
+        if not report["source_is_short"]:
+            return None
+        target = report["suggested_source_last_row"]
+        wb.extend_timesheet_capacity(source_last_row=target)
+        if self.autosave:
+            wb.save()
+        return target
+
     def _commit(self) -> Dict[str, Any]:
         if self.autosave:
             return self.workbook.save()
@@ -147,6 +171,7 @@ class WorkloadService:
                 "deliverables": len(self._wb.deliverables()),
                 "actuals_last_row": self._wb.actuals_last_row(),
                 "capacity": self._wb.timesheet_capacity(),
+                "stack_raised_to": self._stack_raised_to,
                 "backups": str(self.path.parent / cfg.BACKUP_DIRNAME),
             }
 
@@ -221,7 +246,9 @@ class WorkloadService:
             data["unit"] = self.unit
             data["issues"] = wb.register_issues()
             data["definitions"] = wb.definitions()
-            data["data_check"] = wb.data_check()
+            period = data["period"]
+            data["data_check"] = wb.data_check(
+                period["year"] if period["kind"] == "year" else None)
             return data
 
     def _periods(self, wb) -> Dict[str, Any]:
