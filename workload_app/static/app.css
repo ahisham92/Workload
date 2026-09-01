@@ -567,3 +567,38 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
   .v-bad  { color: #a62828 !important; }
   .progress-track { border: 1px solid #bbb; }
 }
+
+/* -- tasks ---------------------------------------------------------------- */
+.task-filters { align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.task-filters .check { margin: 0 0 10px; white-space: nowrap; }
+
+.load-grid { display: grid; gap: 12px; margin: 6px 0 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.load-card { border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; background: var(--surface); display: grid; gap: 8px; }
+.load-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; }
+.load-figures { display: flex; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; }
+.load-detail { display: grid; gap: 3px; font-size: 12px; }
+.progress-track.bad > span { background: var(--bad); }
+
+.tasks-table td { vertical-align: top; }
+.tasks-table td:first-child { white-space: normal; min-width: 240px;
+  max-width: 420px; }
+.task-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.task-name .tag { font-weight: 500; }
+.small { font-size: 12px; }
+.who { display: flex; flex-wrap: wrap; gap: 6px; }
+.who-chip { display: inline-flex; align-items: center; gap: 5px;
+  background: var(--surface-2); border-radius: 999px; padding: 2px 9px 2px 6px;
+  font-size: 12px; white-space: nowrap; }
+tr.row-done td { opacity: .6; }
+tr.row-done .task-name { text-decoration: line-through; }
+
+.check-group { display: flex; flex-wrap: wrap; gap: 8px; }
+.check-chip { display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+  cursor: pointer; user-select: none; }
+.check-chip:has(input:checked) { border-color: var(--accent);
+  background: var(--surface-2); font-weight: 600; }

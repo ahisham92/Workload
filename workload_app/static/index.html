@@ -76,6 +76,7 @@
   <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
   <button class="tab" data-view="projects" role="tab">Projects</button>
   <button class="tab" data-view="reports" role="tab">Reports</button>
+  <button class="tab" data-view="tasks" role="tab">Tasks</button>
   <button class="tab" data-view="team" role="tab">Team</button>
   <button class="tab" data-view="reference" role="tab">Reference</button>
 </nav>
@@ -204,6 +205,48 @@
     <div class="subtabs no-print" id="report-subtabs"></div>
     <div id="report-header" class="print-only"></div>
     <div id="report-body"></div>
+  </section>
+
+  <!-- ---------------------------------------------------------- tasks -->
+  <section class="view" id="view-tasks">
+    <div class="view-head">
+      <div>
+        <h2>Task management</h2>
+        <p class="muted">The work in front of the team, who it belongs to, and whether it fits in the days available. This tab stands on its own — nothing here touches the timesheet, a project's progress or anyone's CPI.</p>
+      </div>
+      <div class="row-actions">
+        <button class="btn" id="btn-task-settings" type="button">Working day…</button>
+        <button class="btn" id="btn-task-submissions" type="button">Submission tasks…</button>
+        <button class="btn" id="btn-task-meeting" type="button">Weekly meeting…</button>
+        <button class="btn btn-primary" id="btn-add-task" type="button">Add task</button>
+      </div>
+    </div>
+    <div id="task-load"></div>
+    <section class="panel">
+      <div class="row task-filters">
+        <label class="field">
+          <span>Engineer</span>
+          <select id="task-engineer"></select>
+        </label>
+        <label class="field">
+          <span>Project</span>
+          <select id="task-project"></select>
+        </label>
+        <label class="field">
+          <span>Status</span>
+          <select id="task-status-filter"></select>
+        </label>
+        <label class="field grow">
+          <span>Search</span>
+          <input type="text" id="task-search" placeholder="Filter by task, definition or deliverable…" spellcheck="false">
+        </label>
+        <label class="check" title="Finished tasks are out of the way until you ask for them">
+          <input type="checkbox" id="task-show-done">
+          <span>Show done</span>
+        </label>
+      </div>
+      <div id="task-body"></div>
+    </section>
   </section>
 
   <!-- ----------------------------------------------------------- team -->

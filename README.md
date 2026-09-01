@@ -112,6 +112,36 @@ against the best of it, which is the one row a manager reads first. Anything
 counted over time, the delivery mix included, follows the period you picked
 rather than quietly showing every year at once.
 
+**Tasks** — task management, and the one tab that stands apart: nothing on it
+is read by the workbook. No actual MM, no progress, no CPI. It is the plan
+beside the record, not part of it.
+
+A task carries a name, a definition, the hours it needs, the deliverable it
+feeds, and who it belongs to. **More than one person can share a task**, and
+its hours are then split between them, so two people on a six-hour job are
+three hours each rather than six. **Actual hours are typed in here** — this tab
+never reads the timesheet. Done tasks are hidden until you ask for them.
+
+**Who is loaded, and who is not** sits at the top: each person's open work
+against the hours a working day actually holds. The day is 09:00–17:30 by
+default, so 8.5 hours; anything past that is overtime, which is exactly why it
+is not counted as capacity — a person over 100% is one who has to stay late or
+hand something over. Overdue work counts against the window, work further out
+does not, and undated work is listed separately. The working day, the working
+week (Sunday-to-Thursday is two clicks away) and the window are all editable.
+
+Two buttons exist so nobody types the same thing fifty times:
+
+- **Submission tasks** — a deliverable's date pulls a task onto every working
+  day of the week before it, assigned to whoever holds a share of that
+  deliverable. Run it again and it only fills the gaps.
+- **Weekly meeting** — a standing meeting for a project or for the unit, every
+  week for as long as it runs, in one click. Running it again extends the
+  series rather than doubling it.
+
+The list lives on a `Tasks` sheet the app creates in the workbook, so it
+travels with the file — but no formula in the workbook so much as sees it.
+
 **Reference** — the `Project Types` and `Rules of Credit` tables **and the
 scorecard factors**, read-only until unlocked with a password. The factors are
 what the team ranking is built from: what counts, how much each weighs, and
@@ -229,6 +259,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
+| `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/server.py` | The local HTTP server and JSON API |
 | `workload_app/static/` | The single-page front end (no build step) |
@@ -293,9 +324,11 @@ calculated.
    and look at what the unknown job numbers are.
 6. **Projects** — open each active project and move its deliverables' steps on.
    **Team** — only when someone joins or leaves.
-7. **Reports** — read the Dashboard and Management Review, and print whichever
+7. **Tasks** — check who is overloaded for the weeks ahead, and let a new
+   deliverable date fill in its week of preparation.
+8. **Reports** — read the Dashboard and Management Review, and print whichever
    view you need for the meeting.
-8. Open the workbook itself only for `Delivery Sequence` and `Profit Plan`,
+9. Open the workbook itself only for `Delivery Sequence` and `Profit Plan`,
    which are not yet in the app.
 
 Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
@@ -321,3 +354,9 @@ would make it harder to read rather than easier.
 
 `Delivery Sequence` and `Profit Plan` — the ranking of what to deliver next and
 the year-end projection — are still read in the workbook.
+
+The task tab is deliberately not wired to anything yet: its hours are typed,
+not read from the timesheet, and nothing it holds reaches a project's figures.
+Connecting the two — actual hours per task coming from the timesheet, a
+deliverable's progress moving when its tasks close — is the obvious next step,
+and is a decision to take rather than a gap to fill in quietly.
