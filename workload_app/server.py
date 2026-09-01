@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
-from . import config as cfg, library, metrics, timesheets
+from . import config as cfg, library, metrics, reports, timesheets
 from .timesheets import ImportError_, ParsedTimesheet
 from .library import NotAWorkbook
 from .workbook import ValidationError, WorkloadWorkbook
@@ -180,6 +180,28 @@ class WorkloadService:
                 "metrics": metrics.deliverable_rows(wb, index),
                 "actuals_last_row": wb.actuals_last_row(),
             }
+
+    def reports(self, kind: str, year: Optional[int],
+                quarter: Optional[str]) -> Dict[str, Any]:
+        """Every report figure for one period, computed in a single pass."""
+        with self._lock:
+            wb = self.workbook
+            index = metrics.TimesheetIndex(wb)
+            data = reports.build(wb, kind, year, quarter, index=index).to_dict()
+            data["periods"] = self._periods(wb)
+            data["unit"] = self.unit
+            data["issues"] = wb.register_issues()
+            return data
+
+    def _periods(self, wb) -> Dict[str, Any]:
+        quarters = reports.read_quarters(wb)
+        years = sorted({q.year for q in quarters if q.year})
+        return {
+            "years": years,
+            "quarters": sorted({q.label.split("-")[0] for q in quarters
+                                if not q.opening}),
+            "plan_year": wb.plan_year(),
+        }
 
     def timesheet_status(self) -> Dict[str, Any]:
         with self._lock:
@@ -422,6 +444,9 @@ def build_routes(service: WorkloadService) -> List[Route]:
          lambda q, b, row: service.update_deliverable(_int(row), b)),
         ("DELETE", "/api/deliverables/{}",
          lambda q, b, row: service.delete_deliverable(_int(row))),
+        ("GET", "/api/reports",
+         lambda q, b: service.reports(
+             q.get("period", ["year"])[0], _year(q), q.get("quarter", [None])[0])),
         ("GET", "/api/timesheets", lambda q, b: service.timesheet_status()),
         ("POST", "/api/timesheets/stage", lambda q, b: _stage(service, b)),
         ("POST", "/api/timesheets/apply",

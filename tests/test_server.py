@@ -628,3 +628,42 @@ class TestImportFilter:
             "content_base64": content, "registered_only": True,
         })
         assert any("nothing to import" in m for m in staged["errors"])
+
+
+class TestReportsEndpoint:
+    def test_a_year_is_the_default(self, server):
+        status, body = call(server, "/api/reports")
+        assert status == 200
+        assert body["period"]["kind"] == "year"
+        assert body["period"]["year"] == body["periods"]["plan_year"]
+
+    def test_the_headline_figures_are_there(self, server):
+        _status, body = call(server, "/api/reports?period=year&year=2026")
+        assert body["team"]["actual_mm"] == pytest.approx(17.91, abs=0.01)
+        assert body["team"]["planned_mm"] == pytest.approx(44.83, abs=0.01)
+
+    def test_every_view_has_what_it_needs(self, server):
+        _status, body = call(server, "/api/reports?period=year&year=2026")
+        assert set(body) >= {"team", "per_engineer", "by_status", "scorecard",
+                             "quarterly", "delivery_mix", "projects", "periods",
+                             "engineers", "issues"}
+        assert set(body["per_engineer"]) == set(body["engineers"])
+
+    def test_a_quarter_can_be_asked_for(self, server):
+        _status, body = call(server, "/api/reports?period=quarter&year=2026&quarter=Q1")
+        assert body["period"]["kind"] == "quarter"
+        assert body["period"]["from"] == "2026-01-01"
+        assert body["period"]["to"] == "2026-03-31"
+
+    def test_all_time_is_accepted(self, server):
+        _status, body = call(server, "/api/reports?period=all")
+        assert body["period"]["kind"] == "all"
+
+    def test_the_years_offered_come_from_the_workbook(self, server):
+        _status, body = call(server, "/api/reports")
+        assert 2026 in body["periods"]["years"]
+        assert body["periods"]["quarters"] == ["Q1", "Q2", "Q3", "Q4"]
+
+    def test_reports_need_a_workbook(self, empty_server):
+        status, _ = call(empty_server, "/api/reports")
+        assert status == 409

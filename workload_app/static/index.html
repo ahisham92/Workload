@@ -75,6 +75,7 @@
   <button class="tab is-active" data-view="overview" role="tab">Overview</button>
   <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
   <button class="tab" data-view="projects" role="tab">Projects</button>
+  <button class="tab" data-view="reports" role="tab">Reports</button>
   <button class="tab" data-view="reference" role="tab">Reference</button>
 </nav>
 
@@ -166,6 +167,39 @@
     <div id="project-detail" hidden></div>
   </section>
 
+  <!-- -------------------------------------------------------- reports -->
+  <section class="view" id="view-reports">
+    <div class="report-head no-print">
+      <div>
+        <h2>Reports</h2>
+        <p class="muted">The workbook's report sheets, computed here. Every figure is worked out once and shared between the views.</p>
+      </div>
+      <div class="row" style="margin:0">
+        <label class="field">
+          <span>Period</span>
+          <select id="report-period">
+            <option value="year">Full year</option>
+            <option value="quarter">Quarter</option>
+            <option value="all">All time</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Year</span>
+          <select id="report-year"></select>
+        </label>
+        <label class="field" id="report-quarter-field">
+          <span>Quarter</span>
+          <select id="report-quarter"></select>
+        </label>
+        <button class="btn btn-primary" id="btn-print" type="button">Print / Save as PDF</button>
+      </div>
+    </div>
+
+    <div class="subtabs no-print" id="report-subtabs"></div>
+    <div id="report-header" class="print-only"></div>
+    <div id="report-body"></div>
+  </section>
+
   <!-- ------------------------------------------------------ reference -->
   <section class="view" id="view-reference">
     <div class="view-head">
@@ -198,6 +232,7 @@
 </div>
 
 <div id="toasts" class="toasts"></div>
+<script src="charts.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

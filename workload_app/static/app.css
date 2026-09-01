@@ -1,5 +1,16 @@
 :root {
   color-scheme: light dark;
+  /* Categorical series, in fixed slot order — never cycled, never reassigned by
+     rank. Validated against this app's own surfaces: adjacent CVD dE 9.1 light /
+     8.4 dark, normal-vision dE 19.6 / 19.3. Three light steps sit under 3:1
+     contrast, which is why every chart carries direct labels and a table. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --grid: #e1e0d9;
   --bg: #f5f6f8;
   --surface: #ffffff;
   --surface-2: #f0f2f5;
@@ -19,7 +30,15 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --grid: #2c2c2a;
+    --axis: #383835;
     --bg: #14171c;
     --surface: #1b1f26;
     --surface-2: #232830;
@@ -36,6 +55,16 @@
     --bad-soft: #331d1d;
     --shadow: 0 1px 3px rgba(0, 0, 0, .4);
   }
+}
+
+:root[data-theme="dark"] {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --grid: #2c2c2a;
 }
 
 * { box-sizing: border-box; }
@@ -372,3 +401,99 @@ tr.clickable:hover { background: var(--accent-soft); }
 .check input { margin-top: 2px; }
 .check .hint { color: var(--muted); font-size: 12px; }
 .edit-table tr.row-bad td { background: var(--bad-soft); }
+
+/* -- charts -------------------------------------------------------------- */
+.figure { margin: 0 0 18px; }
+.figure figcaption { display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.figure figcaption b { font-weight: 600; }
+.figure figcaption .muted { font-size: 12px; }
+.chart { display: block; max-width: 100%; height: auto; }
+.chart-scroll { overflow-x: auto; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.target-line { stroke: var(--muted); stroke-width: 2; stroke-dasharray: 4 3; }
+.axis-label { fill: var(--muted); font-size: 10.5px;
+  font-variant-numeric: tabular-nums; }
+.bar, .slice { transition: opacity .12s; }
+.bar:hover, .slice:hover { opacity: .82; }
+.donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.donut-total { fill: var(--text); font-size: 21px; font-weight: 600;
+  text-anchor: middle; }
+.donut-unit { fill: var(--muted); font-size: 10.5px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px;
+  color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+.chart-tip { position: fixed; z-index: 90; pointer-events: none;
+  background: var(--surface); color: var(--text); font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 6px 9px; box-shadow: var(--shadow); max-width: 260px; }
+
+.score-bars { display: flex; flex-direction: column; gap: 7px; }
+.score-row { display: grid; grid-template-columns: 92px 1fr 62px;
+  align-items: center; gap: 10px; font-size: 12.5px; }
+.score-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-track { height: 10px; background: var(--surface-2); border-radius: 5px;
+  overflow: hidden; }
+.score-track > span { display: block; height: 100%; border-radius: 5px; }
+.score-value { text-align: right; font-variant-numeric: tabular-nums;
+  color: var(--muted); }
+
+.report-grid { display: grid; gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; }
+.subtab { appearance: none; border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); border-radius: 999px; padding: 5px 13px; font: inherit;
+  font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.subtab:hover { color: var(--text); }
+.subtab.is-active { background: var(--accent); border-color: var(--accent);
+  color: #fff; }
+.report-head { display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.print-only { display: none; }
+
+.report-title { font-size: 17px; margin-bottom: 10px; }
+tr.total-row td { font-weight: 600; background: var(--surface-2); }
+
+/* -- print / save as PDF ------------------------------------------------- */
+@page { size: A4 landscape; margin: 12mm; }
+
+@media print {
+  /* Print the report and nothing else: no chrome, no navigation, no controls. */
+  .topbar, .tabs, .no-print, .toasts, .modal-backdrop, #chooser,
+  #view-overview, #view-timesheets, #view-projects, #view-reference { display: none !important; }
+  body { background: #fff; color: #000; }
+  main { padding: 0; max-width: none; }
+  .view { display: none; }
+  .view.is-active { display: block; }
+  .print-only { display: block; }
+
+  .print-head { border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 14px; }
+  .print-head h1 { font-size: 18px; }
+  .print-head p { font-size: 11px; color: #444; margin: 2px 0 0; }
+
+  .panel, .card, .table-wrap {
+    box-shadow: none; border-color: #bbb; break-inside: avoid;
+  }
+  .panel { padding: 10px 12px; margin-bottom: 12px; }
+  .figure, .cards, table { break-inside: avoid; }
+  .report-grid { grid-template-columns: 1fr 1fr; }
+  /* Let the KPI row fill its width rather than leaving a ragged tail. */
+  .cards { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .card { padding: 8px 10px; }
+  .card .value { font-size: 16px; }
+  .card .label { font-size: 9px; }
+  .card .sub { font-size: 9px; }
+  .report-title { font-size: 14px; }
+  .figure figcaption { font-size: 11px; }
+  .legend { font-size: 9.5px; }
+  th { background: #f2f2f2 !important; color: #000; position: static; }
+  table { font-size: 10px; }
+  th, td { padding: 3px 5px; }
+  .table-wrap { overflow: visible; }
+  .chart-scroll { overflow: visible; }
+  .pill { border: 1px solid #999; }
+  a[href]::after { content: ""; }
+}
