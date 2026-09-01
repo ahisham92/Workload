@@ -18,6 +18,8 @@ SHEET_PROJECT_TYPES = "Project Types"
 SHEET_RULES = "Rules of Credit"
 SHEET_CALENDAR = "Work Calendar"
 SHEET_PROFIT_PLAN = "Profit Plan"
+SHEET_PHASING = "Phasing"
+SHEET_SUPPORT_PLAN = "Support Plan"
 
 #: Paste-target sheets are found by this prefix rather than by name, so a
 #: workbook set up for another unit -- different people, different sheet names
@@ -250,3 +252,19 @@ PROPOSAL_JOB_TYPES = ["2-Proposals Chargeable", "3-Proposals Regular"]
 #: Not a security control -- the same cells are editable in Excel by anyone who
 #: can open the file -- so it is deliberately kept simple and in plain sight.
 REFERENCE_PASSWORD = "2026"
+
+
+# -- Phasing: the quarter grid the reports are built on --------------------
+#: Row holding each column's year, its quarter label, and the period bounds.
+PHASING_YEAR_ROW = 3
+PHASING_QUARTER_ROW = 4
+PHASING_START_ROW = 5
+PHASING_END_ROW = 6
+#: Columns D..X: an opening balance column, then one per quarter.
+PHASING_FIRST_COL = "D"
+PHASING_LAST_COL = "X"
+
+#: Planned MM per project per quarter is spread from the project's dates unless
+#: a value is typed into the override block, which starts here (one row per
+#: project, aligned with Inputs).
+PHASING_OVERRIDE_FIRST_ROW = 95

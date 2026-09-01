@@ -67,6 +67,22 @@ that rule workable: a deliverable added on its own would leave the project short
 every time. Anything the Overview flags gets a **Fix** button that opens the
 project responsible.
 
+**Reports** — five of the workbook's report sheets, rebuilt here so the file does
+not have to be opened to show anyone anything: **Dashboard**, **Engineer KPIs**,
+**Team Member**, **Scorecard** and **Management Review**. Pick a full year, a
+single quarter or all time. **Print / Save as PDF** prints the view you are on —
+just the report, with a header naming the unit, the view, the period and the
+as-at date, and nothing breaking across a page.
+
+Every figure is computed **once** into a single result set and shared between
+the views, so the same actual MM cannot say two different things on two tabs.
+The definitions are the workbook's own — planned MM is the budget spread across
+the project's dates (unless a Phasing override says otherwise), a period earns
+in proportion to the effort spent in it, capacity is pro-rated to the as-at
+date, per-engineer figures are each project's value times that engineer's share,
+and the scorecard weights six factors exactly as the sheet does. The test suite
+holds all of it against the values Excel last calculated.
+
 **Reference** — the `Project Types` and `Rules of Credit` tables, read-only until
 unlocked with a password. These decide how every deliverable earns credit, so a
 change here moves the progress and CPI of every project using that type. The
@@ -154,6 +170,8 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/actuals_block.py` | Growing the `Deliverable Actuals` block |
 | `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
+| `workload_app/reports.py` | The five report views, computed once per period |
+| `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/server.py` | The local HTTP server and JSON API |
 | `workload_app/static/` | The single-page front end (no build step) |
 
@@ -216,15 +234,31 @@ calculated.
 5. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
 6. **Projects** — open each active project and move its deliverables' steps on.
-7. Stop the app and open the workbook to read `Delivery Sequence`, `Profit Plan`
-   and `Mgmt Review`.
+7. **Reports** — read the Dashboard and Management Review, and print whichever
+   view you need for the meeting.
+8. Open the workbook itself only for `Delivery Sequence` and `Profit Plan`,
+   which are not yet in the app.
 
 Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
 are already automatic; the workbook reads them from the timesheet.
 
 
+## About the charts
+
+The series colours are a fixed, validated palette, checked against this app's
+own light and dark surfaces for colour-blind separation and contrast rather than
+picked by eye. A colour belongs to a thing, not to its position: "Finalized"
+is the same colour on every chart and in every period, even when a status is
+missing from one of them. Three of the light-mode steps sit below 3:1 contrast,
+which is why every chart carries direct labels and the numbers appear in a table
+underneath it — the colour never has to carry the meaning on its own.
+
+Donuts are used where the question really is part-to-whole and there are few
+enough segments to read at a glance. Comparing planned against actual against
+earned is a bar chart, because that is a comparison of magnitudes, and a pie
+would make it harder to read rather than easier.
+
 ## Still to come
 
-The report views — Dashboard, Engineer KPIs, Team Member, Scorecard and
-Management Review — with pie charts and a Print to PDF button, so the workbook
-does not have to be opened to show anyone anything.
+`Delivery Sequence` and `Profit Plan` — the ranking of what to deliver next and
+the year-end projection — are still read in the workbook.

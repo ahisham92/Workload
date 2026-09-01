@@ -1189,6 +1189,27 @@ async function refreshAll() {
   renderTimesheets();
   renderProjects();
   renderReference();
+  await setupReports();
+}
+
+async function setupReports() {
+  const periods = state.report ? state.report.periods : null;
+  if (!periods) {
+    // First load: fetch once to learn which years the workbook covers.
+    const first = await api('/api/reports?period=year');
+    state.report = first;
+    if (!state.reportMember) state.reportMember = first.engineers[0];
+    const yearSelect = $('#report-year');
+    yearSelect.replaceChildren(...first.periods.years.map(
+      (y) => el('option', { value: y }, y)));
+    yearSelect.value = String(first.periods.plan_year);
+    $('#report-quarter').replaceChildren(...first.periods.quarters.map(
+      (q) => el('option', { value: q }, q)));
+    $('#report-quarter-field').hidden = true;
+    renderReports();
+  } else {
+    await loadReport();
+  }
 }
 
 function switchView(view) {
@@ -1238,6 +1259,16 @@ function wire() {
     showShell(false);
     await renderChooser(state.browseFolder);
   });
+  // reports
+  $('#report-period').addEventListener('change', () => {
+    $('#report-quarter-field').hidden = $('#report-period').value !== 'quarter';
+    $('#report-year').disabled = $('#report-period').value === 'all';
+    loadReport();
+  });
+  $('#report-year').addEventListener('change', loadReport);
+  $('#report-quarter').addEventListener('change', loadReport);
+  $('#btn-print').addEventListener('click', () => window.print());
+
   $('#chooser-browse-wrap').addEventListener('toggle', (event) => {
     if (event.target.open) renderChooser(state.browseFolder);
   });
@@ -1275,3 +1306,422 @@ function wire() {
       `Could not start: ${error.message}`));
   }
 })();
+
+/* ------------------------------------------------------------- reports */
+
+const REPORT_VIEWS = [
+  ['dashboard', 'Dashboard'],
+  ['engineers', 'Engineer KPIs'],
+  ['member', 'Team Member'],
+  ['scorecard', 'Scorecard'],
+  ['review', 'Management Review'],
+];
+
+state.report = null;
+state.reportView = 'dashboard';
+state.reportMember = null;
+
+function num(value, digits = 2) {
+  return value === null || value === undefined ? '—' : Number(value).toFixed(digits);
+}
+
+/** A table under every chart: the light-mode series colours sit below 3:1, so
+ *  the numbers have to be readable without relying on the colour. */
+function table(headers, rows, opts = {}) {
+  const numeric = opts.numeric || [];
+  return el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, headers.map((h, i) =>
+      el('th', { class: numeric.includes(i) ? 'num' : '' }, h)))),
+    el('tbody', {}, rows.map((row) => el('tr', { class: row.__class || '' },
+      row.cells.map((cell, i) =>
+        el('td', { class: numeric.includes(i) ? 'num' : (cell.wide ? 'wide' : '') },
+          cell && cell.node ? cell.node : cell)))))));
+}
+
+function kpiCards(items) {
+  return el('div', { class: 'cards' }, items.map(([label, value, sub]) =>
+    el('div', { class: 'card' },
+      el('div', { class: 'label' }, label),
+      el('div', { class: 'value' }, value),
+      el('div', { class: 'sub' }, sub))));
+}
+
+async function loadReport() {
+  const period = $('#report-period').value;
+  const year = $('#report-year').value;
+  const quarter = $('#report-quarter').value;
+  const query = period === 'all' ? 'period=all'
+    : `period=${period}&year=${year}${period === 'quarter' ? `&quarter=${quarter}` : ''}`;
+  state.report = await api(`/api/reports?${query}`);
+  if (!state.reportMember) state.reportMember = state.report.engineers[0];
+  renderReports();
+}
+
+function renderReports() {
+  const data = state.report;
+  if (!data) return;
+
+  $('#report-subtabs').replaceChildren(...REPORT_VIEWS.map(([key, label]) =>
+    el('button', {
+      class: `subtab ${state.reportView === key ? 'is-active' : ''}`, type: 'button',
+      onclick: () => { state.reportView = key; renderReports(); },
+    }, label)));
+
+  $('#report-header').replaceChildren(
+    el('div', { class: 'print-head' },
+      el('h1', {}, data.unit ? data.unit.name : 'Workload'),
+      el('p', {}, `${REPORT_VIEWS.find(([k]) => k === state.reportView)[1]}`
+        + ` · ${data.period.label} · as at ${data.as_at}`)));
+
+  const body = $('#report-body');
+  const views = {
+    dashboard: renderDashboard, engineers: renderEngineerKpis,
+    member: renderTeamMember, scorecard: renderScorecard, review: renderReview,
+  };
+  body.replaceChildren(views[state.reportView](data));
+}
+
+/* -- Dashboard ---------------------------------------------------------- */
+
+/** A colour per status, fixed by the register's own status order so a status
+ *  keeps the same colour across every chart and period. */
+function statusColor(status) {
+  const order = (state.reference && state.reference.statuses) || [];
+  const index = order.indexOf(status);
+  return `var(--series-${(index < 0 ? 0 : index % 6) + 1})`;
+}
+
+/** A colour per engineer, fixed by the team's order on Work Calendar. */
+function engineerColor(name) {
+  const index = (state.report ? state.report.engineers : []).indexOf(name);
+  return `var(--series-${(index < 0 ? 0 : index % 6) + 1})`;
+}
+
+function renderDashboard(data) {
+  const t = data.team;
+  const statuses = data.by_status;
+  return el('div', {},
+    el('h3', { class: 'report-title' }, `Portfolio dashboard — ${data.period.label}`),
+    kpiCards([
+      ['Planned MM', num(t.planned_mm), 'full period plan'],
+      ['Actual MM', num(t.actual_mm), 'what was burned'],
+      ['Earned MM', num(t.earned_mm), 'value delivered'],
+      ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
+      ['Utilisation', fmt.pct(t.utilisation), `vs ${num(t.capacity_to_date_mm)} MM capacity to date`],
+      ['Efficiency (CPI)', fmt.ratio(t.cpi), t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
+      ['Plan adherence', fmt.pct(t.plan_adherence), `vs ${num(t.planned_to_date_mm)} MM planned to date`],
+      ['Projects live', fmt.int(t.projects_live), `${t.projects_active} active or not started`],
+    ]),
+
+    el('div', { class: 'report-grid' },
+      el('section', { class: 'panel' },
+        charts.donut(statuses.map((s) => ({
+          label: s.status, value: s.budget_mm, color: statusColor(s.status) })), {
+          title: 'Budget by project status',
+          note: 'projects live in this period', unit: 'MM',
+        })),
+      el('section', { class: 'panel' },
+        charts.donut(statuses.map((s) => ({
+          label: s.status, value: s.actual_mm, color: statusColor(s.status) })), {
+          title: 'Effort spent by project status',
+          note: 'actual MM booked in this period', unit: 'MM',
+        }))),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Portfolio by status'),
+      el('p', { class: 'muted' },
+        'Only projects live in this period, which is why these total less than '
+        + 'the headline figures above — those cover every project in the register, '
+        + 'as the workbook reports them.'),
+      table(['Status', 'Projects', 'Budget MM', 'Planned MM', 'Actual MM',
+             'Earned MM', 'Remaining MM', 'In scope?'],
+        statuses.map((s) => ({
+          cells: [s.status, fmt.int(s.projects), num(s.budget_mm), num(s.planned_mm),
+                  num(s.actual_mm), num(s.earned_mm), num(s.remaining_mm),
+                  s.in_scope ? 'Yes' : '—'],
+        })).concat([{
+          __class: 'total-row',
+          cells: ['TOTAL (live in period)',
+            fmt.int(statuses.reduce((a, s) => a + s.projects, 0)),
+            num(statuses.reduce((a, s) => a + s.budget_mm, 0)),
+            num(statuses.reduce((a, s) => a + s.planned_mm, 0)),
+            num(statuses.reduce((a, s) => a + s.actual_mm, 0)),
+            num(statuses.reduce((a, s) => a + s.earned_mm, 0)),
+            num(statuses.reduce((a, s) => a + s.remaining_mm, 0)), ''],
+        }]), { numeric: [1, 2, 3, 4, 5, 6] })),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Project detail'),
+      el('p', { class: 'muted' }, 'Projects live in the selected period.'),
+      table(['Project', 'Status', 'Budget', '% compl.', 'Planned', 'Actual',
+             'Earned', 'CPI', 'Cost at compl.', 'Remaining', 'Profit'],
+        data.projects.filter((p) => p.live)
+          .sort((a, b) => (b.actual_mm || 0) - (a.actual_mm || 0))
+          .map((p) => ({
+            cells: [p.number, p.status, num(p.budget_mm), fmt.pct(p.progress),
+              num(p.planned_mm), num(p.actual_mm), num(p.earned_mm),
+              p.cpi === null ? '—' : fmt.ratio(p.cpi),
+              num(p.cost_at_completion_mm), num(p.remaining_mm),
+              num(p.lifetime_profit_mm)],
+          })), { numeric: [2, 3, 4, 5, 6, 7, 8, 9, 10] })));
+}
+
+/* -- Engineer KPIs ------------------------------------------------------ */
+
+function renderEngineerKpis(data) {
+  const names = data.engineers;
+  const per = data.per_engineer;
+  const rows = [
+    ['Actual MM booked', 'actual_mm', num],
+    ['Planned MM to date', 'planned_to_date_mm', num],
+    ['Earned MM', 'earned_mm', num],
+    ['Profit / (loss) MM', 'profit_mm', num],
+    ['Capacity MM to date', 'capacity_to_date_mm', num],
+    ['Utilisation', 'utilisation', fmt.pct],
+    ['Plan adherence', 'plan_adherence', fmt.pct],
+    ['Efficiency (CPI)', 'cpi', fmt.ratio],
+    ['Type-weighted earned MM', 'type_weighted_earned_mm', num],
+    ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio],
+    ['Share of team time', 'share_of_team_time', fmt.pct],
+    ['Remaining on hand', 'remaining_mm', num],
+    ['Projects worked', 'projects_worked', (v) => fmt.int(v)],
+    ['Average MM per project', 'average_mm_per_project', num],
+  ];
+
+  const worked = {};
+  for (const name of names) {
+    for (const project of per[name].projects) {
+      worked[project.number] = worked[project.number]
+        || { number: project.number, name: project.name, status: project.status, by: {} };
+      worked[project.number].by[name] = project.actual_mm;
+    }
+  }
+  const workedRows = Object.values(worked)
+    .map((p) => ({ ...p, total: names.reduce((s, n) => s + (p.by[n] || 0), 0) }))
+    .sort((a, b) => b.total - a.total);
+
+  return el('div', {},
+    el('h3', { class: 'report-title' }, `Engineer KPIs — ${data.period.label}`),
+    el('div', { class: 'report-grid' },
+      el('section', { class: 'panel' },
+        charts.groupedBars(names, [
+          { label: 'Planned to date', values: names.map((n) => per[n].planned_to_date_mm) },
+          { label: 'Actual', values: names.map((n) => per[n].actual_mm) },
+          { label: 'Earned', values: names.map((n) => per[n].earned_mm) },
+        ], { title: 'Planned, actual and earned', note: 'man-months' })),
+      el('section', { class: 'panel' },
+        charts.groupedBars(names, [
+          { label: 'Actual MM', values: names.map((n) => per[n].actual_mm) },
+        ], {
+          title: 'Effort against capacity',
+          note: 'the dashed line is capacity to date',
+          target: Math.max(...names.map((n) => per[n].capacity_to_date_mm || 0)),
+        }))),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'KPIs by engineer'),
+      table(['KPI', ...names, 'Team'],
+        rows.map(([label, key, format]) => ({
+          cells: [label, ...names.map((n) => format(per[n][key])),
+            format(teamValue(data, key))],
+        })), { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) })),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Who worked on what'),
+      el('p', { class: 'muted' }, 'Actual MM booked in the period.'),
+      table(['Project', 'Status', ...names, 'Total'],
+        workedRows.map((p) => ({
+          cells: [p.number, p.status, ...names.map((n) => num(p.by[n] || 0)),
+            num(p.total)],
+        })), { numeric: names.map((_n, i) => i + 2).concat([names.length + 2]) })));
+}
+
+function teamValue(data, key) {
+  const per = data.per_engineer;
+  const names = data.engineers;
+  const sum = (k) => names.reduce((a, n) => a + (per[n][k] || 0), 0);
+  if (['utilisation', 'plan_adherence'].includes(key)) {
+    return key === 'utilisation'
+      ? data.team.utilisation : data.team.plan_adherence;
+  }
+  if (key === 'cpi') return data.team.cpi;
+  if (key === 'type_weighted_cpi') {
+    return sum('actual_mm') ? sum('type_weighted_earned_mm') / sum('actual_mm') : null;
+  }
+  if (key === 'share_of_team_time') return 1;
+  if (key === 'projects_worked') {
+    return new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
+  }
+  if (key === 'average_mm_per_project') {
+    const projects = new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
+    return projects ? sum('actual_mm') / projects : null;
+  }
+  return sum(key);
+}
+
+/* -- Team Member -------------------------------------------------------- */
+
+function renderTeamMember(data) {
+  const names = data.engineers;
+  const chosen = names.includes(state.reportMember) ? state.reportMember : names[0];
+  const person = data.per_engineer[chosen];
+  const quarters = data.quarterly;
+
+  return el('div', {},
+    el('div', { class: 'report-head' },
+      el('h3', { class: 'report-title' }, `${chosen} — ${data.period.label}`),
+      el('div', { class: 'subtabs no-print' }, names.map((name) =>
+        el('button', {
+          class: `subtab ${name === chosen ? 'is-active' : ''}`, type: 'button',
+          onclick: () => { state.reportMember = name; renderReports(); },
+        }, name)))),
+
+    kpiCards([
+      ['Actual MM', num(person.actual_mm), `${person.projects_worked} project(s) worked`],
+      ['Earned MM', num(person.earned_mm), 'value delivered'],
+      ['Utilisation', fmt.pct(person.utilisation), `of ${num(person.capacity_to_date_mm)} MM capacity`],
+      ['Efficiency (CPI)', fmt.ratio(person.cpi), 'earned ÷ actual'],
+      ['Plan adherence', fmt.pct(person.plan_adherence), `vs ${num(person.planned_to_date_mm)} MM planned`],
+      ['Remaining on hand', num(person.remaining_mm), 'still allocated'],
+    ]),
+
+    el('div', { class: 'report-grid' },
+      el('section', { class: 'panel' },
+        charts.donut(person.projects.map((p) => ({ label: p.number, value: p.actual_mm })), {
+          title: `Where ${chosen}'s time went`, note: 'actual MM by project', unit: 'MM',
+        })),
+      el('section', { class: 'panel' },
+        charts.stackedColumns(quarters.map((q) => q.label),
+          names.map((name) => ({
+            label: name, color: engineerColor(name),
+            values: quarters.map((q) => q[name]),
+          })),
+          { title: 'Team effort by quarter', note: 'actual MM booked' }))),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, `Projects ${chosen} worked on`),
+      person.projects.length
+        ? table(['Project', 'Name', 'Status', 'Actual MM', 'Share of their time'],
+            person.projects.map((p) => ({
+              cells: [p.number, { node: el('span', {}, p.name), wide: true }, p.status,
+                num(p.actual_mm),
+                fmt.pct(person.actual_mm ? p.actual_mm / person.actual_mm : null)],
+            })), { numeric: [3, 4] })
+        : el('div', { class: 'empty' }, `No hours booked by ${chosen} in this period.`)));
+}
+
+/* -- Scorecard ---------------------------------------------------------- */
+
+function renderScorecard(data) {
+  const board = data.scorecard;
+  const names = data.engineers;
+  const medal = ['🥇', '🥈', '🥉'];
+
+  return el('div', {},
+    el('h3', { class: 'report-title' }, `Team scorecard — ${data.period.label}`),
+    el('p', { class: 'muted' },
+      'A weighted ranking. "Higher is better" factors score against the best '
+      + 'performer; target factors score 100 on target and fall away either side.'),
+
+    el('div', { class: 'report-grid' },
+      el('section', { class: 'panel' },
+        charts.scoreBars(board.ranking.map((r) => ({
+          label: r.engineer, value: r.score, color: engineerColor(r.engineer),
+        })), { title: 'Weighted score', note: 'out of 100' })),
+      el('section', { class: 'panel' },
+        charts.groupedBars(names, board.factors.map((f) => ({
+          label: f.factor.replace(/\s*\(.*\)/, ''),
+          values: names.map((n) => f.scores[n]),
+        })).slice(0, 3), { title: 'Top-weighted factors', note: 'normalised score', unit: '' }))),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Ranking'),
+      table(['Rank', 'Engineer', 'Weighted score', 'Strongest factor', 'Weakest factor'],
+        board.ranking.map((r) => ({
+          cells: [`${medal[r.rank - 1] || ''} ${r.rank}`, r.engineer, num(r.score, 1),
+            { node: el('span', {}, r.strongest), wide: true },
+            { node: el('span', {}, r.weakest), wide: true }],
+        })), { numeric: [0, 2] })),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'How the score is made up'),
+      table(['Factor', 'Weight', 'Scored', ...names.map((n) => `${n} value`),
+             ...names.map((n) => `${n} score`)],
+        board.factors.map((f) => ({
+          cells: [f.factor, fmt.pct0(f.weight),
+            f.direction === 'higher' ? 'vs best' : `target ${f.target}`,
+            ...names.map((n) => num(f.values[n])),
+            ...names.map((n) => num(f.scores[n], 1))],
+        })), { numeric: [1, ...names.map((_n, i) => i + 3),
+                         ...names.map((_n, i) => i + 3 + names.length)] })));
+}
+
+/* -- Management Review -------------------------------------------------- */
+
+function renderReview(data) {
+  const t = data.team;
+  const names = data.engineers;
+  const per = data.per_engineer;
+  const mix = data.delivery_mix;
+  const issues = data.issues || [];
+
+  return el('div', {},
+    el('h3', { class: 'report-title' }, `Management review — ${data.period.label}`),
+    kpiCards([
+      ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
+      ['Actual MM', num(t.actual_mm), 'what we actually burned'],
+      ['Earned MM', num(t.earned_mm), 'value delivered'],
+      ['Profit / (loss)', num(t.profit_mm), 'earned − actual'],
+      ['Utilisation', fmt.pct(t.utilisation), 'actual vs capacity to date'],
+      ['Plan adherence', fmt.pct(t.plan_adherence), 'actual vs planned to date'],
+    ]),
+
+    el('div', { class: 'report-grid' },
+      el('section', { class: 'panel' },
+        charts.donut(names.map((n) => ({
+          label: n, value: per[n].actual_mm, color: engineerColor(n) })), {
+          title: 'Share of team time booked', note: 'actual MM by engineer', unit: 'MM',
+        })),
+      el('section', { class: 'panel' },
+        charts.groupedBars(names, [
+          { label: 'Actual MM', values: names.map((n) => per[n].actual_mm) },
+          { label: 'Earned MM', values: names.map((n) => per[n].earned_mm) },
+        ], { title: 'Effort against value delivered', note: 'man-months' }))),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Team KPIs'),
+      table(['KPI', ...names, 'Team'], [
+        ['Actual MM booked', 'actual_mm', num],
+        ['Planned MM to date', 'planned_to_date_mm', num],
+        ['Earned MM', 'earned_mm', num],
+        ['Utilisation', 'utilisation', fmt.pct],
+        ['Plan adherence', 'plan_adherence', fmt.pct],
+        ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio],
+        ['Average type factor', 'average_type_factor', (v) => num(v, 2)],
+        ['Remaining on hand', 'remaining_mm', num],
+      ].map(([label, key, format]) => ({
+        cells: [label, ...names.map((n) => format(per[n][key])),
+          format(teamValue(data, key))],
+      })), { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) })),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Delivery mix'),
+      el('p', { class: 'muted' },
+        'Where the delivered hours came from. Support figures come from the '
+        + 'Support Plan sheet.'),
+      table(['Source', 'Hours', 'Man-months', 'Share'],
+        mix.map((row) => ({
+          cells: [row.source, fmt.hours(row.hours), num(row.man_months),
+            fmt.pct(row.share)],
+        })), { numeric: [1, 2, 3] })),
+
+    el('section', { class: 'panel' },
+      el('h3', {}, 'Register health'),
+      issues.length
+        ? el('div', {}, issues.map((issue) => el('div', {
+            class: `msg msg-${issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info'}`,
+          }, el('strong', {}, `${issue.where}: `), issue.message)))
+        : el('div', { class: 'msg msg-ok' },
+            'Every project accounts for 100% of its scope and every deliverable '
+            + 'splits 100% between the team.')));
+}
