@@ -211,7 +211,7 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
         by_status=_by_status(wb, projects),
         scorecard=_scorecard(per_engineer, engineers, wb.scorecard_factors()),
         quarterly=_quarterly(wb, index, quarters, engineers, hours_per_mm),
-        delivery_mix=_delivery_mix(wb, index, hours_per_mm),
+        delivery_mix=_delivery_mix(wb, index, hours_per_mm, period),
     )
     report.monthly = _monthly_scores(wb, index, projects, engineers, period,
                                      as_at, hours_per_mm)
@@ -409,7 +409,9 @@ def _team_totals(projects, capacity, period, as_at) -> Dict[str, Any]:
         "cpi": _round(_safe(earned, actual)),
         "spi": _round(_safe(earned, planned_to_date)),
         "projects_live": len(live),
-        "projects_active": sum(1 for p in live if p["in_scope"]),
+        "projects_active": sum(1 for p in live if p["status"] == "Active"),
+        "projects_not_started": sum(1 for p in live if p["status"] == "Not Started"),
+        "projects_in_scope": sum(1 for p in live if p["in_scope"]),
     }
 
 
@@ -511,9 +513,17 @@ def _quarterly(wb, index, quarters, engineers, hours_per_mm
     return out
 
 
-def _delivery_mix(wb, index, hours_per_mm) -> List[Dict[str, Any]]:
-    """Where the delivered hours came from -- the team, and any support."""
-    team_hours = sum(r["hours"] for r in index.rows)
+def _delivery_mix(wb, index, hours_per_mm, period) -> List[Dict[str, Any]]:
+    """Where the delivered hours came from in this period -- team, and support.
+
+    Counted over the chosen period like everything else on the page, so the mix
+    cannot quietly be a decade of history sitting beside a single year's KPIs.
+    """
+    start, end = period.start, period.end
+    team_hours = sum(
+        r["hours"] for r in index.rows
+        if r["date"] and start and end and start <= r["date"] <= end
+    )
     rows = [{"source": "This team (from timesheet)", "hours": _round(team_hours, 1),
              "man_months": _round(team_hours / hours_per_mm if hours_per_mm else 0)}]
     for label, cell in (("Bengaluru support", "B40"), ("Draftsman support", "B48")):

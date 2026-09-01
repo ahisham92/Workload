@@ -1512,11 +1512,14 @@ class WorkloadWorkbook:
         """Replace every data row on an engineer's sheet with ``rows``."""
         sheet_name = self.ts_sheet(engineer)
         width = col_to_index(cfg.TS_LAST_COLUMN)
-        limit = cfg.TS_MAX_DATA_ROW - cfg.TS_FIRST_DATA_ROW + 1
+        # The cap is whatever the stack actually reads, not a fixed number.
+        source_last = capacity.source_limit(self._wb)
+        limit = source_last - cfg.TS_FIRST_DATA_ROW + 1
         if len(rows) > limit:
             raise ValidationError([
-                f"{len(rows):,} rows is more than the {limit:,} that Timesheet Raw "
-                f"reads from each engineer's sheet."
+                f"{len(rows):,} rows is more than the {limit:,} that "
+                f"{cfg.SHEET_TS_RAW} reads from each engineer's sheet. Raise the "
+                f"stack limit on the Timesheets tab first."
             ])
         overflow = self._capacity_after(engineer, rows)
         date_col_index = self._date_column_index(engineer)
@@ -1584,12 +1587,17 @@ class WorkloadWorkbook:
                                   ) -> Dict[str, Any]:
         """Raise the caps so every row reaches the calculations again."""
         current = self.timesheet_capacity()
-        ceiling = current["max_raw_last_row"]
+        sheets = len(current["stack_order"])
+        # A wider per-sheet limit asked for in the same call raises the
+        # ceiling too, so judge the request against what it will produce.
+        source = max(source_last_row or 0, current["source_last_row"])
+        ceiling = (cfg.TS_RAW_FIRST_DATA_ROW
+                   + sheets * (source - cfg.TS_FIRST_DATA_ROW + 1) - 1)
         if raw_last_row and raw_last_row > ceiling:
             raise ValidationError([
                 f"{raw_last_row:,} is beyond what the stack can produce. The "
-                f"three sheets can supply at most {ceiling:,} rows unless the "
-                f"per-sheet limit is raised too."
+                f"{sheets} monthly sheets can supply at most {ceiling:,} rows "
+                f"unless the per-sheet limit is raised too."
             ])
         result = capacity.extend(self._wb, raw_last_row=raw_last_row,
                                  source_last_row=source_last_row)

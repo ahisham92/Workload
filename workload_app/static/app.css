@@ -538,3 +538,27 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
 .measure-label { color: var(--muted); cursor: help; }
 .measure-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 .eng-name { display: inline-flex; align-items: center; gap: 7px; }
+
+/* -- tone: what reads as a loss or below target --------------------------- */
+.v-ok   { color: var(--ok); font-weight: 600; }
+.v-warn { color: var(--warn); font-weight: 600; }
+.v-bad  { color: var(--bad); font-weight: 600; }
+
+.progress-cell { display: inline-flex; align-items: center; gap: 8px;
+  justify-content: flex-end; width: 100%; }
+.progress-track { display: block; width: 54px; height: 7px; border-radius: 4px;
+  background: var(--surface-2); overflow: hidden; flex: none; }
+.progress-track > span { display: block; height: 100%; border-radius: 4px;
+  background: var(--accent); }
+.progress-track.warn > span { background: var(--warn); }
+.progress-track.ok > span { background: var(--ok); }
+.progress-value { font-variant-numeric: tabular-nums; min-width: 34px;
+  text-align: right; }
+
+@media print {
+  /* Keep the colouring in the PDF — a loss must still read as one on paper. */
+  .v-ok   { color: #16794a !important; }
+  .v-warn { color: #8a5a00 !important; }
+  .v-bad  { color: #a62828 !important; }
+  .progress-track { border: 1px solid #bbb; }
+}

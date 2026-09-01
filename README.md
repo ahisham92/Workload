@@ -98,6 +98,16 @@ date, per-engineer figures are each project's value times that engineer's share,
 and the scorecard weights six factors exactly as the sheet does. The test suite
 holds all of it against the values Excel last calculated.
 
+**Anything below target reads red, everywhere.** A negative profit, a CPI or
+plan adherence under 1.00, utilisation short of the target, progress behind
+where it should be — all of it is coloured on the same scale on every tab, so a
+problem looks like a problem without reading the number first. The colour
+survives **Print / Save as PDF**. The engineer KPI tables — on Engineer KPIs and
+on Management Review — close with the **weighted score out of 100** and a star
+against the best of it, which is the one row a manager reads first. Anything
+counted over time, the delivery mix included, follows the period you picked
+rather than quietly showing every year at once.
+
 **Reference** — the `Project Types` and `Rules of Credit` tables **and the
 scorecard factors**, read-only until unlocked with a password. The factors are
 what the team ranking is built from: what counts, how much each weighs, and
@@ -121,31 +131,35 @@ whoever booked first. The year's hero tops the scorecard for the period, with a
 tally of months won beside it, so a steady month-by-month winner is visible even
 when someone else leads on total value delivered.
 
-## The row limit that loses an engineer's hours
+## The two row limits that lose an engineer's hours
 
-`Timesheet Raw` builds itself from the three TS sheets with
+`Timesheet Raw` builds itself by stacking the monthly sheets:
 
 ```
 VSTACK('TS Ahmed'!A4:P6000, 'TS Osama'!A4:P6000, 'TS Kirolos'!A4:P6000)
 ```
 
-and every formula that reads the result — around 138,000 of them across
-`Phasing`, `Timesheet Daily`, `Deliverable Actuals`, `Proposals` and
-`Work Calendar` — reads rows 4 to 8000 only. That is 7,997 rows for all three
-engineers together.
+There are two limits in that one line. Each sheet is read only as far as
+row 6,000, and every formula that reads the result — around 138,000 of them
+across `Phasing`, `Timesheet Daily`, `Deliverable Actuals`, `Proposals` and
+`Work Calendar` — reads rows 4 to 8,000 of the consolidated sheet: 7,997 rows
+for the whole team together.
 
-Once the sheets hold more than that, the surplus rows still appear on
-`Timesheet Raw` but reach no calculation at all: no project actuals, no
-dashboard, no CPI. Nothing in the workbook says so. And because the stack runs
-Ahmed, then Osama, then Kirolos, it is **the last engineer's rows that vanish
-first** — you update Kirolos, and nothing moves.
+Once either limit is passed, the surplus rows still appear on the sheet but
+reach no calculation at all: no project actuals, no dashboard, no CPI. Nothing
+in the workbook says so. Because the sheets stack in order, it is the rows at
+the bottom of the stack that stop counting first — you update the last
+engineer, and nothing moves.
 
-The Timesheets tab shows how much room is left, warns before it runs out, and
-will raise the limit for you. Raising it rewrites every one of those references
-and extends the per-row helper formulas to match. It is worth knowing that two
-of those helper columns cost roughly the square of the limit to recalculate, so
-the app suggests a few years of headroom rather than the maximum — and importing
-only registered work is usually the cheaper fix.
+The Timesheets tab shows how much room is left against both limits, warns
+before either runs out, and will raise them for you. It offers to read each
+monthly sheet down to row 25,000 — that is a one-line change to the stack with
+no recalculation cost, so there is no reason to sit at 6,000. Raising the
+consolidated limit is the heavier of the two: it rewrites every one of those
+138,000 references and extends the per-row helper formulas to match, and two of
+those helper columns cost roughly the square of the limit to recalculate. So
+the app suggests a few years of headroom rather than the maximum — and
+importing only registered work is usually the cheaper fix.
 
 ## Rules it enforces
 

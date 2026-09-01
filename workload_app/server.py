@@ -421,10 +421,12 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             current = wb.timesheet_capacity()
-            raw = body.get("raw_last_row") or current["suggested_raw_last_row"]
+            raw = body.get("raw_last_row")
             source = body.get("source_last_row")
+            if not raw and not source:
+                raw = current["suggested_raw_last_row"]
             result = wb.extend_timesheet_capacity(
-                raw_last_row=int(raw),
+                raw_last_row=int(raw) if raw else None,
                 source_last_row=int(source) if source else None,
             )
             result["save"] = self._commit()

@@ -291,3 +291,31 @@ class TestHeroes:
         far = reports.build(readonly_wb, "year", 2028)
         assert far.monthly == []
         assert far.heroes["month"] is None
+
+
+class TestTheYearFilterReaches:
+    """Blocks that used to count everything now follow the chosen period."""
+
+    def test_the_delivery_mix_follows_the_period(self, readonly_wb):
+        year = reports.build(readonly_wb, "year", 2026)
+        whole = reports.build(readonly_wb, "all")
+        team = "This team (from timesheet)"
+        one = next(r for r in year.delivery_mix if r["source"] == team)
+        every = next(r for r in whole.delivery_mix if r["source"] == team)
+        assert 0 < one["hours"] < every["hours"]
+
+    def test_a_year_of_the_mix_matches_that_year_of_the_quarters(self, readonly_wb):
+        year = reports.build(readonly_wb, "year", 2026)
+        whole = reports.build(readonly_wb, "all")
+        team = "This team (from timesheet)"
+        mix = next(r for r in year.delivery_mix if r["source"] == team)
+        quarters = sum(r["total"] for r in whole.quarterly if r["year"] == 2026)
+        assert mix["man_months"] == pytest.approx(quarters, abs=0.05)
+
+    def test_active_projects_are_counted_apart_from_the_live_ones(self, report):
+        team = report.team
+        assert team["projects_active"] <= team["projects_live"]
+        assert (team["projects_active"] + team["projects_not_started"]
+                <= team["projects_live"])
+        assert team["projects_active"] == sum(
+            1 for p in report.projects if p["live"] and p["status"] == "Active")

@@ -209,7 +209,10 @@ class TestWritingBack:
 
     def test_more_rows_than_the_workbook_reads_are_refused(self, wb):
         from workload_app.workbook import ValidationError
-        too_many = [[None] * 72] * (cfg.TS_MAX_DATA_ROW + 1)
+        # The limit is whatever the stack actually reads from each sheet,
+        # not a constant -- raising the stack raises this too.
+        reads = wb.timesheet_capacity()["per_sheet_capacity"]
+        too_many = [[None] * 72] * (reads + 1)
         with pytest.raises(ValidationError, match="more than the"):
             wb.replace_timesheet("Kirolos", too_many)
 
