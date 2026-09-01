@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Timestamped copies the app takes before every write.
+backups/
+
+# Excel's lock file, which appears beside an open workbook.
+~$*.xlsx
