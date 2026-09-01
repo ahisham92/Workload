@@ -30,9 +30,21 @@ from openpyxl.formula.translate import Translator
 from . import config as cfg
 from .xlsx_io import Workbook, XlsxError, _xml_escape, _xml_unescape
 
-#: The stacking order of the sheets inside Timesheet Raw, which decides whose
-#: rows are lost first when the cap is exceeded.
-STACK_ORDER = ["Ahmed", "Osama", "Kirolos"]
+def stack_order(wb: Workbook) -> List[str]:
+    """The TS sheets in the order Timesheet Raw stacks them.
+
+    This is what decides whose rows fall off the end when the cap is exceeded,
+    so it is read from the formula rather than assumed.
+    """
+    formula = _formula(wb, cfg.SHEET_TS_RAW, "A4") or ""
+    found = re.findall(r"'([^']+)'!\$[A-Z]{1,2}\$\d+", formula)
+    ordered: List[str] = []
+    for name in found:
+        if name.startswith(cfg.TS_SHEET_PREFIX) and name not in ordered:
+            ordered.append(name)
+    if ordered:
+        return ordered
+    return [n for n in wb.sheet_names if n.startswith(cfg.TS_SHEET_PREFIX)]
 
 
 def source_limit(wb: Workbook) -> int:
@@ -68,18 +80,25 @@ def _formula(wb: Workbook, sheet: str, ref: str) -> Optional[str]:
     return _xml_unescape(m.group(1)) if m else None
 
 
-def report(wb: Workbook, rows_per_engineer: Dict[str, int]) -> Dict[str, Any]:
+def report(wb: Workbook, rows_per_engineer: Dict[str, int],
+           order: Optional[List[str]] = None) -> Dict[str, Any]:
     """How much of each cap is used, and who loses rows if it is exceeded."""
+    order = order or [
+        name[len(cfg.TS_SHEET_PREFIX):] for name in stack_order(wb)
+    ]
+    order = [name for name in order if name in rows_per_engineer] + [
+        name for name in rows_per_engineer if name not in order
+    ]
     source = source_limit(wb)
     raw = raw_limit(wb)
     per_sheet_capacity = source - cfg.TS_FIRST_DATA_ROW + 1
     total_capacity = raw - cfg.TS_RAW_FIRST_DATA_ROW + 1
-    used = sum(rows_per_engineer.get(name, 0) for name in STACK_ORDER)
+    used = sum(rows_per_engineer.get(name, 0) for name in order)
 
     # Walk the stack in order to see whose rows fall past the cap.
     running = 0
     cut_off: List[Dict[str, Any]] = []
-    for name in STACK_ORDER:
+    for name in order:
         count = rows_per_engineer.get(name, 0)
         if running + count > total_capacity:
             lost = min(count, running + count - total_capacity)
@@ -93,7 +112,7 @@ def report(wb: Workbook, rows_per_engineer: Dict[str, int]) -> Dict[str, Any]:
             "headroom": per_sheet_capacity - rows_per_engineer.get(name, 0),
             "over": rows_per_engineer.get(name, 0) > per_sheet_capacity,
         }
-        for name in STACK_ORDER
+        for name in order
     }
 
     headroom = total_capacity - used
@@ -108,7 +127,7 @@ def report(wb: Workbook, rows_per_engineer: Dict[str, int]) -> Dict[str, Any]:
         "low_headroom": 0 <= headroom < cfg.TS_RAW_HEADROOM_WARNING,
         "cut_off": cut_off,
         "per_sheet": per_sheet,
-        "stack_order": list(STACK_ORDER),
+        "stack_order": list(order),
         "suggested_raw_last_row": suggest_raw_last_row(used, raw),
         "max_raw_last_row": cfg.TS_RAW_FIRST_DATA_ROW + 3 * per_sheet_capacity - 1,
     }

@@ -215,5 +215,5 @@ class TestWritingBack:
 
     def test_an_unknown_engineer_is_refused(self, wb):
         from workload_app.workbook import ValidationError
-        with pytest.raises(ValidationError, match="not one of the three"):
+        with pytest.raises(ValidationError, match="not one of this workbook"):
             wb.replace_timesheet("Someone", [])

@@ -93,11 +93,12 @@ class TestProgress:
         from workload_app.workbook import Deliverable
         items = [
             Deliverable(row=1, type_code="DD", step_no=None, phase_weight=0.75,
-                        share_ahmed=1.0),
+                        shares={"Ahmed": 1.0}),
             Deliverable(row=2, type_code="DD", step_no=None, phase_weight=0.25,
-                        share_osama=1.0),
+                        shares={"Osama": 1.0}),
         ]
-        shares = metrics.engineer_shares(items, readonly_wb.credit_for)
+        shares = metrics.engineer_shares(
+            items, readonly_wb.credit_for, ["Ahmed", "Osama", "Kirolos"])
         assert shares["Ahmed"] == pytest.approx(0.75)
         assert shares["Osama"] == pytest.approx(0.25)
 
