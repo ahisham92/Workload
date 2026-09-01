@@ -45,7 +45,37 @@ def a_row(**overrides):
     return row
 
 
+def stub_dimension(data: bytes) -> bytes:
+    """Rewrite a workbook's sheet dimension to the stub the real export uses."""
+    import io
+    import re
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as source:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                blob = source.read(info.filename)
+                if info.filename.startswith("xl/worksheets/sheet"):
+                    blob = re.sub(rb'<dimension ref="[^"]*"/>',
+                                  b'<dimension ref="A1"/>', blob)
+                target.writestr(info, blob)
+    return out.getvalue()
+
+
 class TestReadingFiles:
+    def test_a_stub_dimension_does_not_hide_the_data(self, ts_headers):
+        """The reporting tool writes `<dimension ref="A1"/>`.
+
+        openpyxl's read-only mode trusts that and returns a single row, which
+        made a real 923-row export look like a file with no header.
+        """
+        rows = [a_row(Date=dt.date(2026, 9, day)) for day in range(1, 21)]
+        data = stub_dimension(make_export(ts_headers, rows))
+        parsed = timesheets.parse("Ahmed", "export.xlsx", data, ts_headers)
+        assert parsed.errors == []
+        assert len(parsed.rows) == 20
+
     def test_a_title_block_above_the_headers_is_skipped(self, ts_headers):
         data = make_export(ts_headers, [a_row()])
         parsed = timesheets.parse("Ahmed", "e.xlsx", data, ts_headers)

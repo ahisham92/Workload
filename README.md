@@ -12,10 +12,17 @@ validations and every formula come through untouched.
 
 ```
 pip install -r requirements.txt
-python -m workload_app --workbook path/to/Workload.xlsx
+python -m workload_app
 ```
 
-Your browser opens on <http://127.0.0.1:8765/>. Stop it with Ctrl+C.
+Your browser opens on <http://127.0.0.1:8765/> and asks which workbook to use —
+paste a path, or pick one from the recently-opened and nearby lists. Skip the
+question with `python -m workload_app --workbook path/to/Workload.xlsx`. Stop
+the app with Ctrl+C.
+
+The app carries no workbook of its own: it edits the file you point it at, in
+place. Close that file in Excel first — Excel keeps its own copy in memory and
+would overwrite anything written while it is open.
 
 ## What it does
 
@@ -43,6 +50,31 @@ earns.
 **Overview** — the portfolio position (budget, actual MM, earned MM, profit,
 CPI), each engineer's monthly hours against their capacity, the `Work Calendar`
 data check, and any register problems.
+
+## The row limit that loses an engineer's hours
+
+`Timesheet Raw` builds itself from the three TS sheets with
+
+```
+VSTACK('TS Ahmed'!A4:P6000, 'TS Osama'!A4:P6000, 'TS Kirolos'!A4:P6000)
+```
+
+and every formula that reads the result — around 138,000 of them across
+`Phasing`, `Timesheet Daily`, `Deliverable Actuals`, `Proposals` and
+`Work Calendar` — reads rows 4 to 8000 only. That is 7,997 rows for all three
+engineers together.
+
+Once the sheets hold more than that, the surplus rows still appear on
+`Timesheet Raw` but reach no calculation at all: no project actuals, no
+dashboard, no CPI. Nothing in the workbook says so. And because the stack runs
+Ahmed, then Osama, then Kirolos, it is **the last engineer's rows that vanish
+first** — you update Kirolos, and nothing moves.
+
+The Timesheets tab shows how much room is left, warns before it runs out, and
+will raise the limit for you. Raising it rewrites every one of those references
+and extends the per-row helper formulas to match. It is worth knowing that two
+of those helper columns cost roughly the square of the limit to recalculate, so
+the app suggests a few years of headroom rather than the maximum.
 
 ## Rules it enforces
 
@@ -88,6 +120,8 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | Path | What it is |
 | --- | --- |
 | `workload_app/xlsx_io.py` | Reads and writes cells directly in the spreadsheet XML |
+| `workload_app/library.py` | Finding, checking and remembering workbooks |
+| `workload_app/capacity.py` | The row caps on the consolidated timesheet |
 | `workload_app/config.py` | Where every input lives — sheets, rows, columns |
 | `workload_app/workbook.py` | The registers as a domain model, and the validation |
 | `workload_app/actuals_block.py` | Growing the `Deliverable Actuals` block |
@@ -95,7 +129,6 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
 | `workload_app/server.py` | The local HTTP server and JSON API |
 | `workload_app/static/` | The single-page front end (no build step) |
-| `data/Workload.xlsx` | The working copy the app opens by default |
 
 If the workbook is restructured, `config.py` is the file to edit — the code
 reads its sheet names, row ranges and column letters from there.
@@ -118,40 +151,45 @@ python -m workload_app [-w WORKBOOK] [--host HOST] [-p PORT]
                        [--no-autosave] [--no-browser] [-q]
 ```
 
+`--workbook` is optional; without it the app asks in the browser and remembers
+what you chose in `~/.workload_app.json`.
+
 The app binds to `127.0.0.1` — it is reachable only from your own machine. It
 has no authentication, so do not put it on a shared interface.
 
 ## Tests
 
+The tests need a workbook to run against, and none is committed — the
+repository holds no project data. Point them at yours:
+
 ```
 pip install -r requirements-dev.txt
+export WORKLOAD_TEST_WORKBOOK=/path/to/Workload.xlsx   # or drop a copy at data/
 python -m pytest
 ```
 
-148 tests, run against the real workbook on a throw-away copy. They cover the
-XML surgery (including a check that every sheet reassembles byte for byte and
-that only the intended parts of the file change), the validation rules, the
-import, and the arithmetic — cross-checked against the values the workbook
-itself last calculated.
+They work on a throw-away copy, never your file. Without one they skip
+themselves and say so.
 
-## A note on `data/Workload.xlsx`
-
-The workbook is committed so the app has something to open and the tests have
-something real to run against. It contains live project data; if that should not
-live in the repository, delete it and point the app at your own copy with
-`--workbook`. Nothing else depends on the file being there — the tests skip
-themselves if it is missing.
+The suite covers the XML surgery (including that every sheet reassembles byte
+for byte and that only the intended parts of the file change), the row caps and
+what happens when they are exceeded, choosing a workbook, the validation rules,
+the import — including the stub `<dimension>` that the real export writes — and
+the arithmetic, cross-checked against the values the workbook itself last
+calculated.
 
 ## The monthly routine
 
 1. Close the workbook in Excel.
-2. Start the app.
+2. Start the app and choose the workbook.
 3. **Timesheets** — upload each engineer's export, check the summary, Replace.
-4. **Overview** — check the data check reads "All rows matched to an engineer",
+4. **Timesheets** — check the room left in the workbook. If it warns, raise the
+   limit before going further, or the newest rows will not count.
+5. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
-5. **Deliverables** — move each deliverable's step on, and fill in the milestone
+6. **Deliverables** — move each deliverable's step on, and fill in the milestone
    dates that have happened.
-6. Stop the app and open the workbook to read `Delivery Sequence`, `Profit Plan`
+7. Stop the app and open the workbook to read `Delivery Sequence`, `Profit Plan`
    and `Mgmt Review`.
 
 Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —

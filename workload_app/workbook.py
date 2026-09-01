@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from . import actuals_block, config as cfg
+from . import actuals_block, capacity, config as cfg
 from .xlsx_io import (
     CellValue, Workbook, build_cell, col_to_index, from_serial, index_to_col,
 )
@@ -886,6 +886,7 @@ class WorkloadWorkbook:
                 f"{len(rows):,} rows is more than the {limit:,} that Timesheet Raw "
                 f"reads from each engineer's sheet."
             ])
+        overflow = self._capacity_after(engineer, rows)
         date_col_index = self._date_column_index(engineer)
         xml_rows: List[str] = []
         for offset, values in enumerate(rows):
@@ -906,7 +907,17 @@ class WorkloadWorkbook:
             f"A1:{cfg.TS_LAST_COLUMN}{max(last_row, cfg.TS_HEADER_ROW)}")
         self._dirty = True
         self._timesheet_cache.clear()
-        return {"engineer": engineer, "rows": len(xml_rows)}
+        self._version += 1
+        self._cache.clear()
+        return {"engineer": engineer, "rows": len(xml_rows),
+                "capacity_warnings": overflow}
+
+    def _capacity_after(self, engineer: str, rows: Sequence[Sequence[CellValue]]
+                        ) -> List[Dict[str, str]]:
+        """What the caps would say once ``rows`` replace this engineer's sheet."""
+        counts = dict(self.rows_per_engineer())
+        counts[engineer] = len(rows)
+        return capacity.messages(capacity.report(self._wb, counts))
 
     def _date_column_index(self, engineer: str) -> int:
         headers = self.timesheet_headers(engineer)
@@ -914,6 +925,47 @@ class WorkloadWorkbook:
             if header == cfg.TS_KEY_FIELDS["date"]:
                 return index
         return 12  # column L, where the workbook's own formulas look
+
+    # -- timesheet capacity ----------------------------------------------
+    def rows_per_engineer(self) -> Dict[str, int]:
+        """Dated rows on each TS sheet -- what the VSTACK actually stacks."""
+        counts: Dict[str, int] = {}
+        for short_name in cfg.TS_SHEETS:
+            counts[short_name] = sum(
+                1 for row in self.timesheet_rows(short_name, ["L"])
+                if isinstance(row.get("L"), (int, float)) and row["L"] > 0
+            )
+        return counts
+
+    def timesheet_capacity(self) -> Dict[str, Any]:
+        """How close the timesheet is to the caps built into the workbook."""
+        return self._cached(
+            "capacity",
+            lambda: capacity.report(self._wb, self.rows_per_engineer()),
+        )
+
+    def capacity_messages(self) -> List[Dict[str, str]]:
+        return capacity.messages(self.timesheet_capacity())
+
+    def extend_timesheet_capacity(self, *, raw_last_row: Optional[int] = None,
+                                  source_last_row: Optional[int] = None
+                                  ) -> Dict[str, Any]:
+        """Raise the caps so every row reaches the calculations again."""
+        current = self.timesheet_capacity()
+        ceiling = current["max_raw_last_row"]
+        if raw_last_row and raw_last_row > ceiling:
+            raise ValidationError([
+                f"{raw_last_row:,} is beyond what the stack can produce. The "
+                f"three sheets can supply at most {ceiling:,} rows unless the "
+                f"per-sheet limit is raised too."
+            ])
+        result = capacity.extend(self._wb, raw_last_row=raw_last_row,
+                                 source_last_row=source_last_row)
+        self._dirty = True
+        self._formulas_changed = True
+        self._version += 1
+        self._cache.clear()
+        return result
 
     # -- health ----------------------------------------------------------
     def data_check(self) -> Dict[str, Any]:
@@ -977,6 +1029,11 @@ class WorkloadWorkbook:
         else:
             verdict = "All rows matched to an engineer."
 
+        capacity_report = self.timesheet_capacity()
+        capacity_warnings = capacity.messages(capacity_report)
+        if any(w["level"] == "error" for w in capacity_warnings):
+            verdict = capacity_warnings[0]["message"]
+
         return {
             "rows": total_rows,
             "hours": round(total_hours, 2),
@@ -984,6 +1041,8 @@ class WorkloadWorkbook:
             "last_date": iso(last_date),
             "rows_not_matching_pattern": unmatched,
             "verdict": verdict,
+            "capacity": capacity_report,
+            "capacity_warnings": capacity_warnings,
             "per_engineer": per_engineer,
             "unknown_job_numbers": sorted(
                 ({"code": k, "rows": v} for k, v in unknown_codes.items()),

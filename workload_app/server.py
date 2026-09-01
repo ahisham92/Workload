@@ -17,11 +17,12 @@ import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
-from . import config as cfg, metrics, timesheets
+from . import config as cfg, library, metrics, timesheets
 from .timesheets import ImportError_, ParsedTimesheet
+from .library import NotAWorkbook
 from .workbook import ValidationError, WorkloadWorkbook
 from .xlsx_io import XlsxError
 
@@ -38,111 +39,171 @@ class ApiError(Exception):
 
 
 class WorkloadService:
-    """Holds the open workbook and serialises access to it."""
+    """Holds the chosen workbook, if one is open yet, and serialises access."""
 
-    def __init__(self, path: Path, *, autosave: bool = True):
-        self.path = path
+    def __init__(self, path: Optional[Path] = None, *, autosave: bool = True):
+        self.path: Optional[Path] = None
         self.autosave = autosave
         self._lock = threading.RLock()
-        self._wb = WorkloadWorkbook(path)
+        self._wb: Optional[WorkloadWorkbook] = None
         self._staged: Dict[str, ParsedTimesheet] = {}
+        if path is not None:
+            self.open(path)
+
+    # -- choosing a workbook ---------------------------------------------
+    @property
+    def is_open(self) -> bool:
+        return self._wb is not None
+
+    @property
+    def workbook(self) -> WorkloadWorkbook:
+        """The open workbook, or a clear refusal if none has been chosen."""
+        if self._wb is None:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                "No workbook is open. Choose your Workload file first.",
+            )
+        return self._wb
+
+    def open(self, path: Union[str, Path]) -> Dict[str, Any]:
+        with self._lock:
+            resolved = library.validate(Path(path))
+            if self._wb is not None and self._wb.dirty:
+                self._wb.save()
+            self._wb = WorkloadWorkbook(resolved)
+            self.path = resolved
+            self._staged.clear()
+            library.remember(resolved)
+            return self.status()
+
+    def close(self) -> Dict[str, Any]:
+        with self._lock:
+            if self._wb is not None and self._wb.dirty:
+                self._wb.save()
+            self._wb = None
+            self.path = None
+            self._staged.clear()
+            return self.status()
+
+    def library(self, folder: Optional[str] = None) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "recent": library.recent(),
+            "suggestions": library.candidates(),
+            "cwd": str(Path.cwd()),
+            "home": str(Path.home()),
+        }
+        if folder is not None:
+            data["browse"] = library.browse(folder)
+        return data
 
     # -- helpers ---------------------------------------------------------
     def _commit(self) -> Dict[str, Any]:
         if self.autosave:
-            return self._wb.save()
+            return self.workbook.save()
         return {"saved": False, "pending": True}
 
     def _known_job_numbers(self) -> set:
-        return ({p.number for p in self._wb.projects()}
-                | set(self._wb.non_project_codes()))
+        wb = self.workbook
+        return {p.number for p in wb.projects()} | set(wb.non_project_codes())
 
     # -- reads -----------------------------------------------------------
     def status(self) -> Dict[str, Any]:
         with self._lock:
+            if self._wb is None:
+                return {"open": False, "workbook": None,
+                        "autosave": self.autosave}
             return {
+                "open": True,
                 "workbook": str(self.path),
+                "workbook_name": self.path.name,
+                "folder": str(self.path.parent),
                 "autosave": self.autosave,
                 "unsaved_changes": self._wb.dirty,
                 "sheets": self._wb.raw.sheet_names,
                 "projects": len(self._wb.projects()),
                 "deliverables": len(self._wb.deliverables()),
                 "actuals_last_row": self._wb.actuals_last_row(),
+                "capacity": self._wb.timesheet_capacity(),
                 "backups": str(self.path.parent / cfg.BACKUP_DIRNAME),
             }
 
     def reference(self) -> Dict[str, Any]:
         with self._lock:
-            return self._wb.reference()
+            return self.workbook.reference()
 
     def overview(self, year: Optional[int]) -> Dict[str, Any]:
         with self._lock:
-            index = metrics.TimesheetIndex(self._wb)
-            data = metrics.overview(self._wb, year)
-            data["available_years"] = metrics.available_years(self._wb, index)
+            wb = self.workbook
+            index = metrics.TimesheetIndex(wb)
+            data = metrics.overview(wb, year)
+            data["available_years"] = metrics.available_years(wb, index)
             return data
 
     def projects(self) -> Dict[str, Any]:
         with self._lock:
-            index = metrics.TimesheetIndex(self._wb)
+            wb = self.workbook
+            index = metrics.TimesheetIndex(wb)
             return {
-                "projects": [p.to_dict() for p in self._wb.projects()],
-                "metrics": metrics.project_rows(self._wb, index),
+                "projects": [p.to_dict() for p in wb.projects()],
+                "metrics": metrics.project_rows(wb, index),
             }
 
     def deliverables(self) -> Dict[str, Any]:
         with self._lock:
-            index = metrics.TimesheetIndex(self._wb)
+            wb = self.workbook
+            index = metrics.TimesheetIndex(wb)
             return {
-                "deliverables": [d.to_dict() for d in self._wb.deliverables()],
-                "metrics": metrics.deliverable_rows(self._wb, index),
-                "actuals_last_row": self._wb.actuals_last_row(),
+                "deliverables": [d.to_dict() for d in wb.deliverables()],
+                "metrics": metrics.deliverable_rows(wb, index),
+                "actuals_last_row": wb.actuals_last_row(),
             }
 
     def timesheet_status(self) -> Dict[str, Any]:
         with self._lock:
-            return self._wb.data_check()
+            return self.workbook.data_check()
 
     # -- writes ----------------------------------------------------------
     def add_project(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            project = self._wb.add_project(body)
+            project = self.workbook.add_project(body)
             return {"project": project.to_dict(), "save": self._commit()}
 
     def update_project(self, number: str, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            project = self._wb.update_project(number, body)
+            project = self.workbook.update_project(number, body)
             return {"project": project.to_dict(), "save": self._commit()}
 
     def delete_project(self, number: str, cascade: bool) -> Dict[str, Any]:
         with self._lock:
-            result = self._wb.delete_project(number, cascade=cascade)
+            result = self.workbook.delete_project(number, cascade=cascade)
             result["save"] = self._commit()
             return result
 
     def add_deliverable(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            deliverable = self._wb.add_deliverable(body)
+            deliverable = self.workbook.add_deliverable(body)
             return {"deliverable": deliverable.to_dict(), "save": self._commit()}
 
     def update_deliverable(self, row: int, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            deliverable = self._wb.update_deliverable(row, body)
+            deliverable = self.workbook.update_deliverable(row, body)
             return {"deliverable": deliverable.to_dict(), "save": self._commit()}
 
     def delete_deliverable(self, row: int) -> Dict[str, Any]:
         with self._lock:
-            result = self._wb.delete_deliverable(row)
+            result = self.workbook.delete_deliverable(row)
             result["save"] = self._commit()
             return result
 
     def save(self) -> Dict[str, Any]:
         with self._lock:
+            if self._wb is None:
+                return {"saved": False}
             return self._wb.save()
 
     def reload(self) -> Dict[str, Any]:
         with self._lock:
-            self._wb.reload()
+            self.workbook.reload()
             self._staged.clear()
             return self.status()
 
@@ -155,10 +216,11 @@ class WorkloadService:
                     HTTPStatus.BAD_REQUEST,
                     f"{engineer!r} is not one of {', '.join(cfg.TS_SHEETS)}.",
                 )
-            engineers = {e.short_name: e for e in self._wb.engineers()}
+            wb = self.workbook
+            engineers = {e.short_name: e for e in wb.engineers()}
             pattern = engineers[engineer].pattern if engineer in engineers else None
             parsed = timesheets.parse(
-                engineer, filename, data, self._wb.timesheet_headers(engineer),
+                engineer, filename, data, wb.timesheet_headers(engineer),
                 name_pattern=pattern,
                 known_job_numbers=self._known_job_numbers(),
             )
@@ -179,7 +241,7 @@ class WorkloadService:
         columns = [index_to_col(i) for i in range(1, width + 1)]
         return [
             [row.get(col) for col in columns]
-            for row in self._wb.timesheet_rows(engineer, columns)
+            for row in self.workbook.timesheet_rows(engineer, columns)
         ]
 
     def apply_timesheet(self, token: str, mode: str) -> Dict[str, Any]:
@@ -205,10 +267,25 @@ class WorkloadService:
                     HTTPStatus.BAD_REQUEST,
                     "Mode must be 'replace' (the monthly routine) or 'append'.",
                 )
-            result = self._wb.replace_timesheet(parsed.engineer, rows)
+            wb = self.workbook
+            result = wb.replace_timesheet(parsed.engineer, rows)
             result["mode"] = mode
             result["save"] = self._commit()
-            result["data_check"] = self._wb.data_check()
+            result["data_check"] = wb.data_check()
+            return result
+
+    def extend_capacity(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            current = wb.timesheet_capacity()
+            raw = body.get("raw_last_row") or current["suggested_raw_last_row"]
+            source = body.get("source_last_row")
+            result = wb.extend_timesheet_capacity(
+                raw_last_row=int(raw),
+                source_last_row=int(source) if source else None,
+            )
+            result["save"] = self._commit()
+            result["capacity"] = wb.timesheet_capacity()
             return result
 
     def discard_timesheet(self, token: str) -> Dict[str, Any]:
@@ -228,6 +305,10 @@ def build_routes(service: WorkloadService) -> List[Route]:
     """``(method, pattern, handler)``; ``{}`` in a pattern captures a segment."""
     return [
         ("GET", "/api/status", lambda q, b: service.status()),
+        ("GET", "/api/workbooks",
+         lambda q, b: service.library(q.get("folder", [None])[0])),
+        ("POST", "/api/workbooks/open", lambda q, b: service.open(b.get("path", ""))),
+        ("POST", "/api/workbooks/close", lambda q, b: service.close()),
         ("GET", "/api/reference", lambda q, b: service.reference()),
         ("GET", "/api/overview", lambda q, b: service.overview(_year(q))),
         ("GET", "/api/projects", lambda q, b: service.projects()),
@@ -245,6 +326,7 @@ def build_routes(service: WorkloadService) -> List[Route]:
         ("POST", "/api/timesheets/stage", lambda q, b: _stage(service, b)),
         ("POST", "/api/timesheets/apply",
          lambda q, b: service.apply_timesheet(b.get("token", ""), b.get("mode", "replace"))),
+        ("POST", "/api/timesheets/capacity", lambda q, b: service.extend_capacity(b)),
         ("POST", "/api/timesheets/discard",
          lambda q, b: service.discard_timesheet(b.get("token", ""))),
         ("POST", "/api/save", lambda q, b: service.save()),
@@ -372,6 +454,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValidationError as exc:
             self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY,
                             {"error": "The change was rejected.", "errors": exc.errors})
+        except NotAWorkbook as exc:
+            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY,
+                            {"error": str(exc), "errors": [str(exc)]})
         except ImportError_ as exc:
             self._send_json(HTTPStatus.BAD_REQUEST,
                             {"error": str(exc), "errors": [str(exc)]})
@@ -413,8 +498,9 @@ class Handler(BaseHTTPRequestHandler):
         self._handle("DELETE")
 
 
-def make_server(workbook: Path, host: str = "127.0.0.1", port: int = 8765,
-                *, autosave: bool = True, quiet: bool = False) -> ThreadingHTTPServer:
+def make_server(workbook: Optional[Path] = None, host: str = "127.0.0.1",
+                port: int = 8765, *, autosave: bool = True,
+                quiet: bool = False) -> ThreadingHTTPServer:
     service = WorkloadService(workbook, autosave=autosave)
     routes = build_routes(service)
     handler = type("BoundHandler", (Handler,), {"service": service, "routes": routes})

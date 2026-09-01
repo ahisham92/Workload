@@ -206,3 +206,29 @@ TS_NUMERIC_HEADERS = {
 TS_DATE_STYLE = "371"
 
 BACKUP_DIRNAME = "backups"
+
+# -- Timesheet Raw: the consolidated view, and the two caps on it ----------
+SHEET_TS_RAW = "Timesheet Raw"
+TS_RAW_FIRST_DATA_ROW = 4
+
+#: ``Timesheet Raw!A4`` stacks the three TS sheets with VSTACK and filters the
+#: blanks out.  The stack is read from each sheet up to this row, so it is the
+#: cap on any one engineer's sheet.
+TS_SOURCE_DEFAULT_LAST_ROW = 6000
+
+#: Every SUMIFS / MINIFS / MAXIFS that reads the consolidated view stops at this
+#: row.  Rows spilled beyond it are invisible to the whole workbook, and because
+#: the stack runs Ahmed, Osama, Kirolos, it is the last engineer's rows that
+#: silently drop off the end first.
+TS_RAW_DEFAULT_LAST_ROW = 8000
+
+#: Per-row helper formulas on the consolidated view; they have to reach as far
+#: as the cap does.
+TS_RAW_HELPER_COLUMNS = ["BU", "BV", "BW", "BX"]
+
+#: A cell whose formula names the consolidated range, used to read the cap back
+#: out of the workbook rather than assuming it.
+TS_RAW_LIMIT_PROBE = (SHEET_CALENDAR, "B34")
+
+#: Warn once free rows fall below this.
+TS_RAW_HEADROOM_WARNING = 500

@@ -102,6 +102,13 @@ def _read_xlsx(data: bytes) -> List[List[Any]]:
         )
         try:
             sheet = book.worksheets[0]
+            # The reporting tool writes a stub `<dimension ref="A1"/>`, and in
+            # read-only mode openpyxl believes it and hands back a single row.
+            # Rescanning the sheet costs nothing here and is the only way to
+            # see the whole export.
+            reset = getattr(sheet, "reset_dimensions", None)
+            if reset is not None:
+                reset()
             return [list(row) for row in sheet.iter_rows(values_only=True)]
         finally:
             book.close()

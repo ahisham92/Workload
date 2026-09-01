@@ -14,7 +14,81 @@ const state = {
   year: null,
   stagedImport: null,
   view: 'overview',
+  browseFolder: null,
 };
+
+/* --------------------------------------------------------------- chooser */
+
+function showChooser(show) {
+  $('#chooser').hidden = !show;
+  $('#main').hidden = show;
+  $('.tabs').hidden = show;
+  for (const id of ['btn-save', 'btn-reload', 'btn-change', 'save-state']) {
+    $(`#${id}`).hidden = show;
+  }
+}
+
+function fileRow(file, onPick) {
+  return el('button', { class: 'file-row', type: 'button', onclick: onPick },
+    el('span', { class: 'icon' }, '\u{1F4D7}'),
+    el('span', { class: 'who' },
+      el('b', {}, file.name),
+      el('span', { title: file.folder }, file.folder)),
+    el('span', { class: 'meta' }, `${file.size_mb} MB · ${file.modified.slice(0, 10)}`));
+}
+
+async function renderChooser(folder) {
+  const query = folder ? `?folder=${encodeURIComponent(folder)}` : '';
+  const data = await api(`/api/workbooks${query}`);
+  state.browseFolder = folder || data.cwd;
+
+  $('#chooser-recent').replaceChildren(
+    ...(data.recent.length
+      ? [el('h3', {}, 'Recently opened'),
+         el('div', { class: 'file-list' },
+           data.recent.map((f) => fileRow(f, () => openWorkbook(f.path))))]
+      : []));
+
+  $('#chooser-suggestions').replaceChildren(
+    ...(data.suggestions.length
+      ? [el('h3', {}, 'Spreadsheets found nearby'),
+         el('div', { class: 'file-list' },
+           data.suggestions.map((f) => fileRow(f, () => openWorkbook(f.path))))]
+      : [el('p', { class: 'muted' },
+          'No spreadsheets found nearby — paste the full path above instead.')]));
+
+  if (data.browse) {
+    const b = data.browse;
+    $('#chooser-browse').replaceChildren(
+      el('p', { class: 'muted' }, b.folder),
+      el('div', { class: 'file-list' },
+        b.parent
+          ? el('button', { class: 'file-row', type: 'button',
+              onclick: () => renderChooser(b.parent) },
+              el('span', { class: 'icon' }, '\u2B06'),
+              el('span', { class: 'who' }, el('b', {}, 'Up one folder')))
+          : null,
+        b.folders.map((f) => el('button', { class: 'file-row', type: 'button',
+          onclick: () => renderChooser(f.path) },
+          el('span', { class: 'icon' }, '\u{1F4C1}'),
+          el('span', { class: 'who' }, el('b', {}, f.name)))),
+        b.files.map((f) => fileRow(f, () => openWorkbook(f.path)))));
+  }
+}
+
+async function openWorkbook(path) {
+  $('#chooser-error').replaceChildren();
+  try {
+    await api('/api/workbooks/open', { method: 'POST', body: { path } });
+    showChooser(false);
+    await refreshAll();
+    toast(`Opened ${path}`, 'ok');
+  } catch (error) {
+    $('#chooser-error').replaceChildren(
+      ...(error.errors || [error.message]).map(
+        (m) => el('div', { class: 'msg msg-bad' }, m)));
+  }
+}
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -255,9 +329,69 @@ function renderOverview() {
 
 /* -------------------------------------------------------------- timesheets */
 
+function renderCapacity(check) {
+  const cap = check.capacity;
+  const target = $('#ts-capacity');
+  if (!cap) { target.replaceChildren(); return; }
+  const used = cap.rows_used / cap.total_capacity;
+  const tone = cap.over_capacity ? 'bad' : cap.low_headroom ? 'warn' : '';
+  const warnings = check.capacity_warnings || [];
+
+  target.replaceChildren(el('div', { class: 'panel' },
+    el('h3', {}, 'Room left in the workbook'),
+    el('p', { class: 'muted' },
+      `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}. `
+      + `Rows past that stay on the sheet but reach nothing — and because the sheets stack `
+      + `${cap.stack_order.join(' then ')}, they are ${cap.stack_order[cap.stack_order.length - 1]}'s first.`),
+    el('div', { class: `meter ${tone}` },
+      el('span', { style: `width:${Math.min(100, Math.round(used * 100))}%` })),
+    el('p', { class: 'muted' },
+      `${cap.rows_used.toLocaleString()} of ${cap.total_capacity.toLocaleString()} rows used`
+      + (cap.headroom >= 0
+        ? ` — ${cap.headroom.toLocaleString()} left`
+        : ` — ${Math.abs(cap.headroom).toLocaleString()} rows are being ignored`)),
+    ...warnings.map((w) => el('div', {
+      class: `msg msg-${w.level === 'error' ? 'bad' : 'warn'}`,
+    }, w.message)),
+    (cap.over_capacity || cap.low_headroom)
+      ? el('button', { class: 'btn btn-primary', type: 'button',
+          onclick: () => extendCapacity(cap) },
+          `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} rows`)
+      : null));
+}
+
+async function extendCapacity(cap) {
+  const perSheetNeeded = Math.max(
+    ...Object.values(cap.per_sheet).map((s) => s.rows)) + 1500;
+  const source = perSheetNeeded > cap.per_sheet_capacity
+    ? Math.min(cap.source_last_row + 3000, cap.suggested_raw_last_row) : null;
+  if (!window.confirm(
+    `Raise the limit from ${cap.raw_last_row.toLocaleString()} to `
+    + `${cap.suggested_raw_last_row.toLocaleString()} rows?\n\n`
+    + 'This rewrites every formula that reads the consolidated timesheet — around '
+    + '138,000 references — and adds the per-row helper formulas to match. '
+    + 'A backup is taken first.\n\n'
+    + 'Excel will take noticeably longer to recalculate afterwards: two of the '
+    + 'helper columns cost roughly the square of the limit.')) return;
+  try {
+    toast('Rewriting formulas — this takes a few seconds…');
+    const result = await api('/api/timesheets/capacity', {
+      method: 'POST',
+      body: { raw_last_row: cap.suggested_raw_last_row, source_last_row: source },
+    });
+    markSaved(result.save);
+    toast(`Limit raised to ${result.raw_last_row.toLocaleString()} rows across `
+      + `${result.sheets_changed.length} sheets.`, 'ok');
+    await refreshAll();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
 function renderTimesheets() {
   const check = state.overview ? state.overview.data_check : null;
   if (!check) return;
+  renderCapacity(check);
   $('#ts-cards').replaceChildren(...Object.entries(check.per_engineer).map(([name, e]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, `${name} — ${e.sheet}`),
@@ -448,25 +582,52 @@ function openProjectModal(project) {
 }
 
 function renderProjects() {
+  // The filters are rebuilt from the register each time so a newly added
+  // project appears in them straight away.
+  const projectSelect = $('#project-filter');
+  const chosen = projectSelect.value || 'all';
+  projectSelect.replaceChildren(
+    el('option', { value: 'all' }, `All projects (${state.projects.length})`),
+    ...state.projects.map((p) => el('option', { value: p.number },
+      `${p.number} — ${p.name}`)));
+  projectSelect.value = state.projects.some((p) => p.number === chosen)
+    ? chosen : 'all';
+
+  const statusSelect = $('#project-status-filter');
+  const chosenStatus = statusSelect.value || 'all';
+  const statuses = (state.reference.statuses || []).filter(
+    (name) => state.projects.some((p) => p.status === name));
+  statusSelect.replaceChildren(
+    el('option', { value: 'all' }, 'Any status'),
+    ...statuses.map((name) => el('option', { value: name },
+      `${name} (${state.projects.filter((p) => p.status === name).length})`)));
+  statusSelect.value = statuses.includes(chosenStatus) ? chosenStatus : 'all';
+
   const filter = $('#project-search').value.trim().toLowerCase();
   const byNumber = new Map(state.projectMetrics.map((m) => [m.number, m]));
-  const rows = state.projects.filter((p) => !filter
-    || `${p.number} ${p.name} ${p.status}`.toLowerCase().includes(filter));
+  const rows = state.projects.filter((p) => {
+    if (projectSelect.value !== 'all' && p.number !== projectSelect.value) return false;
+    if (statusSelect.value !== 'all' && p.status !== statusSelect.value) return false;
+    return !filter || `${p.number} ${p.name}`.toLowerCase().includes(filter);
+  });
 
   const table = $('#projects-table');
   table.replaceChildren(
     el('thead', {}, el('tr', {},
-      ['Row', 'Number', 'Name', 'Status', 'Budget MM', 'Progress', 'Actual MM',
+      ['#', 'Number', 'Name', 'Status', 'Budget MM', 'Progress', 'Actual MM',
        'Earned MM', 'Profit MM', 'CPI', 'Deliv.', 'Weights', '']
-        .map((h, i) => el('th', { class: i >= 4 && i <= 10 ? 'num' : '' }, h)))),
+        .map((h, i) => el('th', { class: i === 0 || (i >= 4 && i <= 10) ? 'num' : '' }, h)))),
     el('tbody', {}, rows.length === 0
       ? el('tr', {}, el('td', { colspan: 13 }, el('div', { class: 'empty' }, 'No projects match.')))
-      : rows.map((project) => {
+      : rows.map((project, position) => {
         const m = byNumber.get(project.number) || {};
         const cpiPill = m.cpi === null || m.cpi === undefined ? ''
           : m.cpi >= 1 ? 'pill-ok' : m.cpi >= 0.8 ? 'pill-warn' : 'pill-bad';
         return el('tr', {},
-          el('td', { class: 'num muted' }, project.row),
+          el('td', {
+            class: 'num muted',
+            title: `Inputs row ${project.row} in the workbook`,
+          }, position + 1),
           el('td', { class: 'code' }, project.number),
           el('td', { class: 'wide' }, project.name),
           el('td', {}, el('span', { class: `pill ${statusPill(project.status)}` }, project.status || '—')),
@@ -588,9 +749,10 @@ function openDeliverableModal(deliverable) {
     return;
   }
   const editing = Boolean(deliverable);
+  const chosenProject = $('#deliverable-project-filter').value;
   const values = editing ? deliverableToForm(deliverable) : {
-    project_number: $('#deliverable-project-filter').value !== 'all'
-      ? $('#deliverable-project-filter').value : state.projects[0].number,
+    project_number: chosenProject && chosenProject !== 'all'
+      ? chosenProject : state.projects[0].number,
     type_code: state.reference.project_types[0].code,
   };
   openModal(editing ? `Edit deliverable (row ${deliverable.row})` : 'Add deliverable',
@@ -609,8 +771,9 @@ function renderDeliverables() {
   const select = $('#deliverable-project-filter');
   const chosen = select.value || 'all';
   select.replaceChildren(
-    el('option', { value: 'all' }, 'All projects'),
-    ...state.projects.map((p) => el('option', { value: p.number }, `${p.number} — ${p.name}`)));
+    el('option', { value: 'all' }, `All projects (${state.deliverables.length})`),
+    ...state.projects.map((p) => el('option', { value: p.number },
+      `${p.number} — ${p.name}`)));
   select.value = state.projects.some((p) => p.number === chosen) ? chosen : 'all';
 
   const filter = $('#deliverable-search').value.trim().toLowerCase();
@@ -636,18 +799,21 @@ function renderDeliverables() {
 
   $('#deliverables-table').replaceChildren(
     el('thead', {}, el('tr', {},
-      ['Row', 'Project', 'Deliverable', 'Type', 'Weight', 'Step', 'Credit',
+      ['#', 'Project', 'Deliverable', 'Type', 'Weight', 'Step', 'Credit',
        'Progress', 'TS Phase', 'Actual h', 'Last charge', 'A / O / K', '']
-        .map((h, i) => el('th', { class: [4, 6, 7, 8, 9].includes(i) ? 'num' : '' }, h)))),
+        .map((h, i) => el('th', { class: i === 0 || [4, 6, 7, 8, 9].includes(i) ? 'num' : '' }, h)))),
     el('tbody', {}, rows.length === 0
       ? el('tr', {}, el('td', { colspan: 13 }, el('div', { class: 'empty' }, 'No deliverables match.')))
-      : rows.map((d) => {
+      : rows.map((d, position) => {
         const m = byRow.get(d.row) || {};
         const split = ['share_ahmed', 'share_osama', 'share_kirolos']
           .map((k) => (d[k] === null || d[k] === undefined ? '–' : `${Math.round(d[k] * 100)}`))
           .join(' / ');
         return el('tr', {},
-          el('td', { class: 'num muted' }, d.row),
+          el('td', {
+            class: 'num muted',
+            title: `Deliverables row ${d.row} in the workbook`,
+          }, position + 1),
           el('td', { class: 'code' }, d.project_number),
           el('td', { class: 'wide' }, d.name),
           el('td', {}, d.type_code),
@@ -684,14 +850,28 @@ async function removeDeliverable(deliverable) {
 /* ------------------------------------------------------------------ wiring */
 
 async function refreshAll() {
+  const status = await api('/api/status');
+  state.status = status;
+  if (!status.open) {
+    $('#workbook-path').textContent = 'no workbook open';
+    showChooser(true);
+    await renderChooser(state.browseFolder);
+    return;
+  }
+  showChooser(false);
+  if (!state.reference) state.reference = await api('/api/reference');
+  if (state.year === null && state.reference) state.year = state.reference.plan_year;
+  await loadWorkbookViews();
+}
+
+async function loadWorkbookViews() {
   const yearParam = state.year === null ? 'all' : state.year;
-  const [status, overview, projects, deliverables] = await Promise.all([
-    api('/api/status'),
+  const [overview, projects, deliverables] = await Promise.all([
     api(`/api/overview?year=${yearParam}`),
     api('/api/projects'),
     api('/api/deliverables'),
   ]);
-  state.status = status;
+  const status = state.status;
   state.overview = overview;
   state.projects = projects.projects;
   state.projectMetrics = projects.metrics;
@@ -699,7 +879,7 @@ async function refreshAll() {
   state.deliverableMetrics = deliverables.metrics;
 
   $('#workbook-path').textContent = status.workbook;
-  $('#workbook-path').title = status.workbook;
+  $('#workbook-path').title = `${status.workbook} — backups in ${status.backups}`;
   markSaved({ saved: !status.unsaved_changes, pending: status.unsaved_changes });
 
   renderOverview();
@@ -727,6 +907,24 @@ function wire() {
     renderTimesheets();
   });
   $('#project-search').addEventListener('input', renderProjects);
+  $('#project-filter').addEventListener('change', renderProjects);
+  $('#project-status-filter').addEventListener('change', renderProjects);
+  $('#btn-change').addEventListener('click', async () => {
+    if (state.status && state.status.unsaved_changes) {
+      await api('/api/save', { method: 'POST' }).catch(() => {});
+    }
+    await api('/api/workbooks/close', { method: 'POST' });
+    showChooser(true);
+    await renderChooser(state.browseFolder);
+  });
+  $('#chooser-open').addEventListener('click',
+    () => openWorkbook($('#chooser-path').value.trim()));
+  $('#chooser-path').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openWorkbook($('#chooser-path').value.trim());
+  });
+  $('#chooser-browse-wrap').addEventListener('toggle', (event) => {
+    if (event.target.open) renderChooser(state.browseFolder);
+  });
   $('#deliverable-search').addEventListener('input', renderDeliverables);
   $('#deliverable-project-filter').addEventListener('change', renderDeliverables);
   $('#btn-new-project').addEventListener('click', () => openProjectModal(null));
@@ -770,13 +968,9 @@ function wire() {
 (async function start() {
   wire();
   try {
-    state.reference = await api('/api/reference');
-    // Start on the plan year: "all years" spreads a decade of timesheet across
-    // one strip of bars and tells nobody anything.
-    state.year = state.reference.plan_year;
     await refreshAll();
   } catch (error) {
     document.body.prepend(el('div', { class: 'msg msg-bad', style: 'margin:20px' },
-      `Could not load the workbook: ${error.message}`));
+      `Could not start: ${error.message}`));
   }
 })();

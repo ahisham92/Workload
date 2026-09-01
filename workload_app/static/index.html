@@ -19,6 +19,7 @@
     <span id="save-state" class="pill pill-ok">saved</span>
     <button id="btn-save" class="btn btn-ghost" type="button">Save now</button>
     <button id="btn-reload" class="btn btn-ghost" type="button">Reload file</button>
+    <button id="btn-change" class="btn btn-ghost" type="button">Change workbook</button>
   </div>
 </header>
 
@@ -28,6 +29,32 @@
   <button class="tab" data-view="projects" role="tab">Projects</button>
   <button class="tab" data-view="deliverables" role="tab">Deliverables</button>
 </nav>
+
+<section id="chooser" class="chooser" hidden>
+  <div class="chooser-card">
+    <h2>Choose your Workload workbook</h2>
+    <p class="muted">
+      The app edits the file in place, so point it at the workbook you actually use.
+      Close it in Excel first — Excel keeps its own copy in memory and would overwrite
+      anything written while it is open.
+    </p>
+    <label class="field full">
+      <span>Full path to the file</span>
+      <div class="row" style="margin-bottom:0">
+        <input type="text" id="chooser-path" class="grow"
+               placeholder="C:\Users\you\Documents\Workload.xlsx" spellcheck="false">
+        <button class="btn btn-primary" id="chooser-open" type="button">Open</button>
+      </div>
+    </label>
+    <div id="chooser-error"></div>
+    <div id="chooser-recent"></div>
+    <div id="chooser-suggestions"></div>
+    <details id="chooser-browse-wrap">
+      <summary>Browse folders</summary>
+      <div id="chooser-browse"></div>
+    </details>
+  </div>
+</section>
 
 <main id="main">
   <!-- OVERVIEW -->
@@ -67,6 +94,7 @@
       Upload each engineer's export. Columns are matched to the TS sheet by heading name,
       so the order of the export does not matter, and its own header rows are skipped.
     </p>
+    <div id="ts-capacity"></div>
     <div id="ts-cards" class="cards cards-3"></div>
     <section class="panel" id="ts-import-panel">
       <h3>Import an export</h3>
@@ -91,7 +119,17 @@
       <h2>Project register</h2>
       <button class="btn btn-primary" id="btn-new-project" type="button">Add project</button>
     </div>
-    <input type="search" id="project-search" class="search" placeholder="Filter by number, name or status…">
+    <div class="row">
+      <label class="field">
+        <span>Project</span>
+        <select id="project-filter"></select>
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select id="project-status-filter"></select>
+      </label>
+      <input type="search" id="project-search" class="grow" placeholder="Filter by number or name…">
+    </div>
     <div class="table-wrap"><table id="projects-table"></table></div>
   </section>
 
