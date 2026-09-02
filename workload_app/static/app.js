@@ -11,17 +11,28 @@ const state = {
   projectMetrics: [],
   year: null,
   stagedImport: null,
-  browseFolder: null,
   detail: null,          // the project currently open, with its deliverables
   referenceDraft: null,
   projectSort: { key: null, dir: 1 },   // null = the register's own order
   tasks: null,           // the task list, its settings and the load it makes
+  me: null,              // the signed-in account
+  units: [],
 };
 
 /* ---------------------------------------------------------------- helpers */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+/** Replace a node's children, treating a null child as nothing at all.
+ *
+ *  Every render below builds its children with ternaries, and the DOM's own
+ *  replaceChildren turns a null into the text "null" on the page.
+ */
+function setChildren(node, ...children) {
+  node.replaceChildren(
+    ...children.filter((child) => child !== null && child !== undefined));
+}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -120,6 +131,10 @@ async function api(path, options = {}) {
   let payload = {};
   try { payload = await response.json(); } catch { /* empty body */ }
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      // The session has ended -- somewhere else, or by simply expiring.
+      window.location.href = '/login.html';
+    }
     const error = new Error(payload.error || `Request failed (${response.status})`);
     error.errors = payload.errors || [error.message];
     error.status = response.status;
@@ -147,23 +162,15 @@ function showShell(open) {
   for (const id of ['topbar', 'tabs', 'main']) $(`#${id}`).hidden = !open;
 }
 
-function fileRow(file, onPick, icon = '\u{1F4D7}') {
-  return el('button', { class: 'file-row', type: 'button', onclick: onPick },
-    el('span', { class: 'icon' }, icon),
-    el('span', { class: 'who' },
-      el('b', {}, file.name),
-      el('span', { title: file.folder }, file.folder)),
-    el('span', { class: 'meta' },
-      file.size_mb ? `${file.size_mb} MB · ${String(file.modified).slice(0, 10)}` : ''));
-}
-
-async function renderChooser(folder) {
-  const query = folder ? `?folder=${encodeURIComponent(folder)}` : '';
-  const data = await api(`/api/units${query}`);
-  state.browseFolder = folder || data.cwd;
-
+async function renderChooser() {
+  const data = await api('/api/units');
   const units = data.units || [];
-  $('#unit-list').replaceChildren(
+  state.units = units;
+
+  $('#chooser-user').textContent = state.me
+    ? `Signed in as ${state.me.display_name}` : '';
+
+  const parts = [
     el('h3', {}, units.length ? 'Your units' : 'No units yet'),
     units.length
       ? el('div', { class: 'unit-grid' }, units.map((unit) => el('div', {
@@ -174,66 +181,59 @@ async function renderChooser(folder) {
           onclick: () => openUnit(unit),
         },
           el('b', {}, unit.name),
-          el('span', { class: 'muted', title: unit.workbook },
-            unit.exists ? `${unit.file_name} · ${unit.folder}`
-              : 'workbook not found at this path'),
           el('span', { class: 'muted' },
-            unit.opened ? `last opened ${String(unit.opened).slice(0, 10)}` : '')),
-        el('button', {
-          class: 'btn btn-ghost btn-sm unit-forget', type: 'button',
-          title: 'Remove this unit from the list. The workbook is left alone.',
-          onclick: () => forgetUnit(unit),
-        }, '✕'))))
+            unit.exists ? `${unit.size_mb} MB` : 'its workbook is missing'),
+          el('span', { class: 'muted' },
+            unit.opened_at ? `last opened ${String(unit.opened_at).slice(0, 10)}`
+              : `created ${String(unit.created_at).slice(0, 10)}`)),
+        el('div', { class: 'unit-tools' },
+          el('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Rename this unit',
+            onclick: () => renameUnit(unit),
+          }, '✎'),
+          el('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button',
+            title: 'Download a copy of this workbook',
+            onclick: () => downloadUnit(unit),
+          }, '⭳'),
+          el('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button',
+            title: 'Delete this unit and its workbook',
+            onclick: () => deleteUnit(unit),
+          }, '✕')))))
       : el('p', { class: 'muted' },
-          'Add one below: give it a name and point it at its workbook.'));
-
-  if (!units.length) $('#add-unit').open = true;
-
-  $('#chooser-suggestions').replaceChildren(
-    ...(data.suggestions && data.suggestions.length
-      ? [el('h3', {}, 'Spreadsheets found nearby'),
-         el('div', { class: 'file-list' },
-           data.suggestions.map((f) => fileRow(f, () => {
-             $('#unit-path').value = f.path;
-             if (!$('#unit-name').value) $('#unit-name').value = f.name.replace(/\.[^.]+$/, '');
-           })))]
-      : []));
-
-  if (data.browse) {
-    const b = data.browse;
-    $('#chooser-browse').replaceChildren(
-      el('p', { class: 'muted' }, b.folder),
-      el('div', { class: 'file-list' },
-        b.parent
-          ? el('button', { class: 'file-row', type: 'button',
-              onclick: () => renderChooser(b.parent) },
-              el('span', { class: 'icon' }, '⬆'),
-              el('span', { class: 'who' }, el('b', {}, 'Up one folder')))
-          : null,
-        b.folders.map((f) => el('button', { class: 'file-row', type: 'button',
-          onclick: () => renderChooser(f.path) },
-          el('span', { class: 'icon' }, '\u{1F4C1}'),
-          el('span', { class: 'who' }, el('b', {}, f.name)))),
-        b.files.map((f) => fileRow(f, () => { $('#unit-path').value = f.path; }))));
+          'Start one below. A blank unit carries the whole model — project '
+          + 'types, rules of credit, the scorecard — with none of the data.'),
+  ];
+  if (units.length >= data.limit) {
+    parts.push(el('div', { class: 'msg msg-warn' },
+      `An account holds up to ${data.limit} units.`));
   }
+  setChildren($('#unit-list'), ...parts);
 }
 
 function chooserError(messages) {
-  $('#chooser-error').replaceChildren(
+  setChildren($('#chooser-error'), 
     ...messages.map((m) => el('div', { class: 'msg msg-bad' }, m)));
 }
 
-async function pickFile() {
-  const button = $('#btn-pick');
+async function openUnit(unit) {
+  try {
+    await api(`/api/units/${unit.id}/open`, { method: 'POST' });
+    await enterApp();
+  } catch (error) {
+    chooserError(error.errors || [error.message]);
+  }
+}
+
+async function newUnit() {
+  const name = $('#unit-name').value.trim();
+  if (!name) { chooserError(['Give the unit a name first.']); return; }
+  const button = $('#btn-new-unit');
   button.disabled = true;
   try {
-    const result = await api('/api/units/pick', { method: 'POST' });
-    if (result.cancelled) return;
-    $('#unit-path').value = result.path;
-    if (!$('#unit-name').value) {
-      $('#unit-name').value = result.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
-    }
-    $('#chooser-error').replaceChildren();
+    await api('/api/units', { method: 'POST', body: { name } });
+    await enterApp();
   } catch (error) {
     chooserError(error.errors || [error.message]);
   } finally {
@@ -241,32 +241,206 @@ async function pickFile() {
   }
 }
 
-async function openUnit(unit) {
+async function uploadUnit() {
+  const file = $('#unit-file').files[0];
+  if (!file) { chooserError(['Choose a workbook file first.']); return; }
+  const name = $('#unit-name').value.trim() || file.name.replace(/\.[^.]+$/, '');
+  const button = $('#btn-upload-unit');
+  button.disabled = true;
+  chooserError([]);
   try {
-    await api('/api/units/open', { method: 'POST', body: { unit_id: unit.id } });
+    const base64 = await readFileBase64(file);
+    await api('/api/units/upload', {
+      method: 'POST',
+      body: { name, filename: file.name, content_base64: base64 },
+    });
     await enterApp();
+  } catch (error) {
+    chooserError(error.errors || [error.message]);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function renameUnit(unit) {
+  const name = window.prompt('Name this unit', unit.name);
+  if (!name || name === unit.name) return;
+  try {
+    await api(`/api/units/${unit.id}`, { method: 'PUT', body: { name } });
+    await renderChooser();
   } catch (error) {
     chooserError(error.errors || [error.message]);
   }
 }
 
-async function addUnit() {
-  const path = $('#unit-path').value.trim();
-  const name = $('#unit-name').value.trim();
-  if (!path) { chooserError(['Choose a workbook first.']); return; }
-  try {
-    await api('/api/units/open', { method: 'POST', body: { path, name } });
-    await enterApp();
-  } catch (error) {
-    chooserError(error.errors || [error.message]);
-  }
-}
-
-async function forgetUnit(unit) {
+async function deleteUnit(unit) {
   if (!window.confirm(
-    `Remove "${unit.name}" from the list?\n\nThe workbook itself is not touched.`)) return;
-  await api(`/api/units/${unit.id}`, { method: 'DELETE' });
-  await renderChooser(state.browseFolder);
+    `Delete "${unit.name}"?\n\nIts workbook and every backup of it are `
+    + 'removed from the server. Download a copy first if you want one.')) return;
+  try {
+    await api(`/api/units/${unit.id}`, { method: 'DELETE' });
+    await renderChooser();
+  } catch (error) {
+    chooserError(error.errors || [error.message]);
+  }
+}
+
+/** Hand the workbook back as a file, so the account is never a trap. */
+async function downloadUnit(unit) {
+  try {
+    const result = await api(`/api/units/${unit.id}/download`);
+    const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+    const link = el('a', { href: url, download: result.filename });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) {
+    chooserError(error.errors || [error.message]);
+  }
+}
+
+function readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = () => reject(new Error('Could not read the file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ------------------------------------------------------------- account */
+
+async function signOut() {
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+  } finally {
+    window.location.href = '/login.html';
+  }
+}
+
+function openAccountModal() {
+  const me = state.me || {};
+  openModal(`Account — ${me.display_name || me.username}`, [
+    { name: 'current_password', label: 'Current password', type: 'password',
+      full: true },
+    { name: 'new_password', label: 'New password', type: 'password', full: true,
+      hint: 'at least 10 characters' },
+    { name: 'again', label: 'New password again', type: 'password', full: true },
+  ], async () => {
+    const body = modalValues();
+    if ((body.new_password || '') !== (body.again || '')) {
+      showModalErrors(['Those two passwords are not the same.']);
+      return;
+    }
+    await api('/api/auth/password', { method: 'POST', body });
+    closeModal();
+    toast('Password changed. Every other session was signed out.', 'ok');
+  }, {});
+}
+
+/* -- administration ---------------------------------------------------- */
+
+async function openAdmin() {
+  const data = await api('/api/admin/users');
+  const body = el('div', {},
+    el('p', { class: 'muted' },
+      'Accounts can only be made here — there is no public sign-up. A new '
+      + 'account starts with no units and sees nothing of anyone else\'s.'),
+    el('table', {},
+      el('thead', {}, el('tr', {},
+        ['Username', 'Name', 'Units', 'Last seen', 'Role', ''].map(
+          (h) => el('th', {}, h)))),
+      el('tbody', {}, data.users.map((user) => el('tr', {},
+        el('td', {}, el('b', {}, user.username)),
+        el('td', {}, user.display_name),
+        el('td', { class: 'num' }, fmt.int(user.units || 0)),
+        el('td', {}, user.last_seen ? String(user.last_seen).slice(0, 10) : 'never'),
+        el('td', {}, user.is_admin
+          ? el('span', { class: 'pill pill-info' }, 'administrator') : ''),
+        el('td', { class: 'row-actions' },
+          el('button', { class: 'btn btn-sm', type: 'button',
+            onclick: () => resetPassword(user) }, 'Reset password'),
+          el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+            title: user.is_admin ? 'Take away administrator' : 'Make administrator',
+            onclick: () => toggleAdmin(user) }, user.is_admin ? '↓' : '↑'),
+          user.id === (state.me || {}).id ? null
+            : el('button', { class: 'btn btn-sm btn-danger', type: 'button',
+              onclick: () => deleteAccount(user) }, '✕')))))),
+    el('div', { class: 'row-actions', style: 'margin-top:14px' },
+      el('button', { class: 'btn btn-primary', type: 'button',
+        onclick: () => newAccount() }, 'Add an account')));
+
+  openPanel('Accounts', body);
+}
+
+async function newAccount() {
+  openModal('New account', [
+    { name: 'username', label: 'Username', full: true,
+      hint: 'letters, digits, dot, dash or underscore' },
+    { name: 'display_name', label: 'Name shown in the app', full: true },
+    { name: 'password', label: 'Password', type: 'password', full: true,
+      hint: 'leave blank and one is generated for you' },
+    { name: 'is_admin', label: 'May manage accounts', type: 'checks', full: true,
+      options: [{ value: 'yes', label: 'Administrator' }] },
+  ], async () => {
+    const body = modalValues();
+    body.is_admin = (body.is_admin || []).length > 0;
+    const result = await api('/api/admin/users', { method: 'POST', body });
+    closeModal();
+    if (result.password) {
+      window.alert(`Account ${result.user.username} created.\n\n`
+        + `Password: ${result.password}\n\n`
+        + 'Write it down now — it cannot be read back.');
+    } else {
+      toast(`Account ${result.user.username} created.`, 'ok');
+    }
+    await openAdmin();
+  }, {});
+}
+
+async function resetPassword(user) {
+  openModal(`Reset the password for ${user.username}`, [
+    { name: 'password', label: 'New password', type: 'password', full: true,
+      hint: 'leave blank and one is generated for you' },
+  ], async () => {
+    const result = await api(`/api/admin/users/${user.id}/password`,
+      { method: 'POST', body: modalValues() });
+    closeModal();
+    if (result.password) {
+      window.alert(`Password for ${user.username}:\n\n${result.password}\n\n`
+        + 'Write it down now — it cannot be read back.');
+    } else {
+      toast(`Password changed for ${user.username}.`, 'ok');
+    }
+    await openAdmin();
+  }, {});
+}
+
+async function toggleAdmin(user) {
+  try {
+    await api(`/api/admin/users/${user.id}/admin`,
+      { method: 'POST', body: { is_admin: !user.is_admin } });
+    await openAdmin();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function deleteAccount(user) {
+  if (!window.confirm(
+    `Delete the account ${user.username}?\n\nEvery workbook it holds goes `
+    + 'with it. This cannot be undone.')) return;
+  try {
+    await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
+    toast(`${user.username} deleted.`, 'ok');
+    await openAdmin();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
 }
 
 async function enterApp() {
@@ -328,9 +502,43 @@ function openModal(title, fields, onSubmit, values = {}) {
   }
 
   modalSubmit = onSubmit;
+  $('#modal-submit').hidden = false;
+  $('#modal-cancel').textContent = 'Cancel';
   $('#modal-backdrop').hidden = false;
   const first = form.querySelector('input, select, textarea');
   if (first) first.focus();
+}
+
+/** The modal, used for a screen rather than a form: no Save button. */
+function openPanel(title, content) {
+  $('#modal-title').textContent = title;
+  const form = $('#modal-form');
+  setChildren(form, content);
+  $('#modal-errors').innerHTML = '';
+  modalSubmit = null;
+  $('#modal-submit').hidden = true;
+  $('#modal-cancel').textContent = 'Close';
+  $('#modal-backdrop').hidden = false;
+}
+
+function openAccountPanel() {
+  const me = state.me || {};
+  openPanel('Account', el('div', { class: 'account-panel' },
+    el('p', {}, el('b', {}, me.display_name || me.username),
+      me.is_admin ? el('span', { class: 'pill pill-info', style: 'margin-left:8px' },
+        'administrator') : null),
+    el('p', { class: 'muted' },
+      `Signed in as ${me.username}. Your units and their workbooks are yours `
+      + 'alone; no other account can open them.'),
+    el('div', { class: 'row-actions' },
+      el('button', { class: 'btn', type: 'button', onclick: openAccountModal },
+        'Change password'),
+      me.is_admin
+        ? el('button', { class: 'btn', type: 'button', onclick: openAdmin },
+            'Accounts')
+        : null,
+      el('button', { class: 'btn btn-danger', type: 'button', onclick: signOut },
+        'Sign out'))));
 }
 
 function closeModal() {
@@ -350,7 +558,7 @@ function modalValues() {
 }
 
 function showModalErrors(errors) {
-  $('#modal-errors').replaceChildren(
+  setChildren($('#modal-errors'), 
     el('ul', {}, errors.map((e) => el('li', {}, e))));
 }
 
@@ -391,7 +599,7 @@ function renderOverview() {
     ['Active projects', fmt.int(t.projects_active), '',
       `${t.projects_not_started} not started · ${t.projects_live} live in the period`],
   ];
-  $('#overview-cards').replaceChildren(...cards.map(([label_, value, cls, sub]) =>
+  setChildren($('#overview-cards'), ...cards.map(([label_, value, cls, sub]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, label_),
       el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
@@ -399,7 +607,7 @@ function renderOverview() {
 
   renderHeroes(report);
 
-  $('#engineer-cards').replaceChildren(
+  setChildren($('#engineer-cards'), 
     ...report.engineers.map((name) => engineerBlock(name, report, data)));
 
   renderDataCheck(data.data_check);
@@ -414,11 +622,11 @@ function renderHeroes(report) {
   const year = heroes.year;
   const strip = $('#hero-strip');
   const champion = report.champion;
-  if (!month && !year && !champion) { strip.replaceChildren(); return; }
+  if (!month && !year && !champion) { setChildren(strip); return; }
 
   const wins = heroes.wins || {};
   strip.className = 'hero-strip';
-  strip.replaceChildren(
+  setChildren(strip, 
     month
       ? el('div', { class: 'hero' },
           el('span', { class: 'medal' }, '🏅'),
@@ -479,7 +687,7 @@ function trim(text, limit) {
 }
 
 function renderDefinitions(definitions) {
-  $('#definitions-body').replaceChildren(
+  setChildren($('#definitions-body'), 
     el('div', { class: 'defs' }, definitions.map((d) => el('div', { class: 'def' },
       el('b', {}, d.field),
       el('p', {}, d.means),
@@ -543,7 +751,7 @@ function renderDataCheck(check) {
   // year at once, so the whole-file totals stay beside them.
   const year = check.year;
   const scope = year ? `in ${year}` : 'all time';
-  $('#data-check').replaceChildren(
+  setChildren($('#data-check'), 
     el('div', { class: `msg ${kind}` }, check.verdict),
     el('dl', { class: 'kv' },
       el('dt', {}, `Rows ${scope}`),
@@ -570,12 +778,12 @@ function renderDataCheck(check) {
 
 function renderIssues(issues) {
   if (issues.length === 0) {
-    $('#issues').replaceChildren(el('div', { class: 'msg msg-ok' },
+    setChildren($('#issues'), el('div', { class: 'msg msg-ok' },
       'Every project accounts for 100% of its scope, every deliverable splits '
       + '100% between the team, and every deliverable has a TS Phase.'));
     return;
   }
-  $('#issues').replaceChildren(...issues.map((issue) => {
+  setChildren($('#issues'), ...issues.map((issue) => {
     const level = issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info';
     // Anything that names a project gets a way straight to it.
     const project = issue.project
@@ -596,7 +804,7 @@ function renderTimesheets() {
   if (!check) return;
   renderCapacity(check);
 
-  $('#ts-cards').replaceChildren(...Object.entries(check.per_engineer).map(([name, e]) =>
+  setChildren($('#ts-cards'), ...Object.entries(check.per_engineer).map(([name, e]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, `${name} — ${e.sheet}`),
       el('div', { class: 'value' }, fmt.int(e.all_time_rows)),
@@ -610,7 +818,7 @@ function renderTimesheets() {
 
   const select = $('#ts-engineer');
   const chosen = select.value;
-  select.replaceChildren(...Object.keys(check.per_engineer).map(
+  setChildren(select, ...Object.keys(check.per_engineer).map(
     (name) => el('option', { value: name }, name)));
   if (chosen) select.value = chosen;
 }
@@ -618,12 +826,12 @@ function renderTimesheets() {
 function renderCapacity(check) {
   const cap = check.capacity;
   const target = $('#ts-capacity');
-  if (!cap) { target.replaceChildren(); return; }
+  if (!cap) { setChildren(target); return; }
   const used = cap.rows_used / cap.total_capacity;
   const meter = cap.over_capacity ? 'bad' : cap.low_headroom ? 'warn' : '';
   const warnings = check.capacity_warnings || [];
 
-  target.replaceChildren(el('div', { class: 'panel' },
+  setChildren(target, el('div', { class: 'panel' },
     el('h3', {}, 'Room left in the workbook'),
     el('p', { class: 'muted' },
       `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}, `
@@ -714,7 +922,7 @@ async function checkTimesheetFile() {
   if (!file) { toast('Choose an export file first.', 'bad'); return; }
 
   const result = $('#ts-result');
-  result.replaceChildren(el('p', { class: 'muted' },
+  setChildren(result, el('p', { class: 'muted' },
     el('span', { class: 'spin' }), ` Reading ${file.name}…`));
 
   const base64 = await new Promise((resolve, reject) => {
@@ -735,7 +943,7 @@ async function checkTimesheetFile() {
     state.stagedImport = parsed;
     renderImportResult(parsed);
   } catch (error) {
-    result.replaceChildren(...(error.errors || [error.message]).map(
+    setChildren(result, ...(error.errors || [error.message]).map(
       (message) => el('div', { class: 'msg msg-bad' }, message)));
   }
 }
@@ -752,7 +960,7 @@ function renderImportResult(parsed) {
     el('td', { class: 'num' }, fmt.hours(row.OvertimeHours)),
     el('td', { class: 'num' }, fmt.hours(row.TotalHours))));
 
-  $('#ts-result').replaceChildren(
+  setChildren($('#ts-result'), 
     ...(parsed.errors || []).map((m) => el('div', { class: 'msg msg-bad' }, m)),
     ...(parsed.warnings || []).map((m) => el('div', { class: 'msg msg-warn' }, m)),
     el('div', { class: 'msg msg-info' },
@@ -803,7 +1011,7 @@ async function applyImport(mode) {
     markSaved(result.save);
     state.stagedImport = null;
     $('#ts-file').value = '';
-    $('#ts-result').replaceChildren(el('div', { class: 'msg msg-ok' },
+    setChildren($('#ts-result'), el('div', { class: 'msg msg-ok' },
       `${result.engineer} now has ${fmt.int(result.rows)} rows. ${result.data_check.verdict}`));
     toast(`${result.engineer} updated (${fmt.int(result.rows)} rows).`, 'ok');
     await refreshAll();
@@ -820,7 +1028,7 @@ async function discardImport() {
   }
   state.stagedImport = null;
   $('#ts-file').value = '';
-  $('#ts-result').replaceChildren();
+  setChildren($('#ts-result'));
 }
 
 /* -------------------------------------------------------------- projects */
@@ -904,7 +1112,7 @@ function sortProjectsBy(column) {
 function renderProjects() {
   const projectSelect = $('#project-filter');
   const chosen = projectSelect.value || 'all';
-  projectSelect.replaceChildren(
+  setChildren(projectSelect, 
     el('option', { value: 'all' }, `All projects (${state.projects.length})`),
     ...state.projects.map((p) => el('option', { value: p.number },
       `${p.number} — ${p.name}`)));
@@ -914,7 +1122,7 @@ function renderProjects() {
   const chosenStatus = statusSelect.value || 'all';
   const statuses = (state.reference.statuses || []).filter(
     (name) => state.projects.some((p) => p.status === name));
-  statusSelect.replaceChildren(
+  setChildren(statusSelect, 
     el('option', { value: 'all' }, 'Any status'),
     ...statuses.map((name) => el('option', { value: name },
       `${name} (${state.projects.filter((p) => p.status === name).length})`)));
@@ -930,7 +1138,7 @@ function renderProjects() {
 
   sortProjects(rows, byNumber);
 
-  $('#projects-table').replaceChildren(
+  setChildren($('#projects-table'), 
     el('thead', {}, el('tr', {}, [
       ...PROJECT_COLUMNS.map((column) => projectHeader(column)),
       el('th', {}, ''),
@@ -1047,7 +1255,7 @@ function renderDetail() {
   const { project, draft, metrics: figures } = state.detail;
   const isNew = !project;
 
-  $('#project-detail').replaceChildren(
+  setChildren($('#project-detail'), 
     el('div', { class: 'crumb' },
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: closeDetail },
         '‹ All projects'),
@@ -1153,7 +1361,7 @@ function refreshTotals() {
   }
   const note = $('#weight-note');
   if (note) {
-    note.replaceChildren(
+    setChildren(note, 
       el('span', { class: `pill ${complete ? 'pill-ok' : 'pill-bad'}` },
         `${(total * 100).toFixed(1)}%`),
       el('span', { class: 'muted' }, complete
@@ -1197,7 +1405,7 @@ function deliverableRow(d, position) {
     onchange: (e) => {
       set('type_code', e.target.value);
       set('step_no', null);
-      stepSelect.replaceChildren(...stepOptions(e.target.value));
+      setChildren(stepSelect, ...stepOptions(e.target.value));
       stepSelect.value = '';
     },
   }, state.reference.project_types.map((t) =>
@@ -1283,7 +1491,7 @@ async function saveDetail() {
     closeDetail();
     await refreshAll();
   } catch (error) {
-    $('#detail-errors').replaceChildren(
+    setChildren($('#detail-errors'), 
       el('ul', {}, (error.errors || [error.message]).map((e) => el('li', {}, e))));
     button.disabled = false;
   }
@@ -1310,7 +1518,7 @@ async function removeProject(project) {
 
 function renderReference() {
   const unlocked = state.status && state.status.reference_unlocked;
-  $('#reference-lock').replaceChildren(unlocked
+  setChildren($('#reference-lock'), unlocked
     ? el('div', { class: 'row', style: 'margin:0' },
         el('span', { class: 'pill pill-warn' }, 'unlocked for editing'),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: lockReference }, 'Lock'),
@@ -1344,7 +1552,7 @@ function renderReference() {
       })
     : (opts.percent ? fmt.pct0(obj[key]) : (obj[key] ?? '—'));
 
-  $('#reference-body').replaceChildren(
+  setChildren($('#reference-body'), 
     unlocked
       ? el('div', { class: 'msg msg-warn' },
           'These tables decide how every deliverable earns credit. A change here '
@@ -1495,7 +1703,7 @@ async function saveReference() {
 async function refreshAll() {
   const status = await api('/api/status');
   state.status = status;
-  if (!status.open) { showShell(false); await renderChooser(state.browseFolder); return; }
+  if (!status.open) { showShell(false); await renderChooser(); return; }
 
   const yearParam = state.year === null ? 'all' : state.year;
   const [overview, projects] = await Promise.all([
@@ -1507,8 +1715,12 @@ async function refreshAll() {
   state.projectMetrics = projects.metrics;
 
   $('#unit-title').textContent = status.unit ? status.unit.name : 'Workload';
-  $('#workbook-path').textContent = status.workbook;
-  $('#workbook-path').title = `${status.workbook} — backups in ${status.backups}`;
+  // The file lives on the server now, so its path is nobody's business but
+  // the administrator's; what a person needs is which unit they are in.
+  $('#workbook-path').textContent =
+    `${(state.me || {}).display_name || ''}${state.me ? ' · ' : ''}`
+    + `${status.projects} project(s) · ${status.deliverables} deliverable(s)`;
+  $('#workbook-path').title = 'Switch unit to open another workbook';
   markSaved({ saved: !status.unsaved_changes, pending: status.unsaved_changes });
 
   renderTimesheets();
@@ -1528,10 +1740,10 @@ async function setupReports() {
     state.year = first.period.year;
     if (!state.reportMember) state.reportMember = first.engineers[0];
     const yearSelect = $('#report-year');
-    yearSelect.replaceChildren(...first.periods.years.map(
+    setChildren(yearSelect, ...first.periods.years.map(
       (y) => el('option', { value: y }, y)));
     yearSelect.value = String(first.periods.plan_year);
-    $('#report-quarter').replaceChildren(...first.periods.quarters.map(
+    setChildren($('#report-quarter'), ...first.periods.quarters.map(
       (q) => el('option', { value: q }, q)));
     $('#report-quarter-field').hidden = true;
     renderReports();
@@ -1587,9 +1799,14 @@ function wire() {
     $(id).addEventListener('change', () => renderTaskTable(state.tasks));
   }
   $('#task-search').addEventListener('input', () => renderTaskTable(state.tasks));
-  $('#btn-pick').addEventListener('click', pickFile);
-  $('#btn-add-unit').addEventListener('click', addUnit);
-  $('#unit-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') addUnit(); });
+  $('#btn-new-unit').addEventListener('click', newUnit);
+  $('#btn-upload-unit').addEventListener('click', uploadUnit);
+  $('#btn-signout-chooser').addEventListener('click', signOut);
+  $('#btn-account-chooser').addEventListener('click', openAccountPanel);
+  $('#btn-account').addEventListener('click', openAccountPanel);
+  $('#unit-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') newUnit();
+  });
 
   $('#btn-save').addEventListener('click', async () => {
     const result = await api('/api/save', { method: 'POST' });
@@ -1609,7 +1826,7 @@ function wire() {
     state.referenceDraft = null;
     state.detail = null;
     showShell(false);
-    await renderChooser(state.browseFolder);
+    await renderChooser();
   });
   // reports
   $('#report-period').addEventListener('change', () => {
@@ -1620,10 +1837,6 @@ function wire() {
   $('#report-year').addEventListener('change', loadReport);
   $('#report-quarter').addEventListener('change', loadReport);
   $('#btn-print').addEventListener('click', () => window.print());
-
-  $('#chooser-browse-wrap').addEventListener('toggle', (event) => {
-    if (event.target.open) renderChooser(state.browseFolder);
-  });
 
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal-cancel').addEventListener('click', closeModal);
@@ -1649,6 +1862,9 @@ function wire() {
 (async function start() {
   wire();
   try {
+    const who = await api('/api/auth/me');
+    if (!who.user) { window.location.href = '/login.html'; return; }
+    state.me = who.user;
     const status = await api('/api/status');
     state.status = status;
     if (status.open) await enterApp();
@@ -1713,13 +1929,13 @@ function renderReports() {
   const data = state.report;
   if (!data) return;
 
-  $('#report-subtabs').replaceChildren(...REPORT_VIEWS.map(([key, label]) =>
+  setChildren($('#report-subtabs'), ...REPORT_VIEWS.map(([key, label]) =>
     el('button', {
       class: `subtab ${state.reportView === key ? 'is-active' : ''}`, type: 'button',
       onclick: () => { state.reportView = key; renderReports(); },
     }, label)));
 
-  $('#report-header').replaceChildren(
+  setChildren($('#report-header'), 
     el('div', { class: 'print-head' },
       el('h1', {}, data.unit ? data.unit.name : 'Workload'),
       el('p', {}, `${REPORT_VIEWS.find(([k]) => k === state.reportView)[1]}`
@@ -1730,7 +1946,7 @@ function renderReports() {
     dashboard: renderDashboard, engineers: renderEngineerKpis,
     member: renderTeamMember, scorecard: renderScorecard, review: renderReview,
   };
-  body.replaceChildren(views[state.reportView](data));
+  setChildren(body, views[state.reportView](data));
 }
 
 /* -- Dashboard ---------------------------------------------------------- */
@@ -2140,7 +2356,7 @@ function renderTeam() {
   $('#btn-add-engineer').title = room > 0 ? ''
     : `A unit can hold ${data.max_engineers} engineers.`;
 
-  $('#team-body').replaceChildren(
+  setChildren($('#team-body'), 
     el('div', { class: 'msg msg-info' },
       'Adding someone gives them a timesheet sheet of their own, a place in the '
       + 'stack that builds Timesheet Raw, a column for their share of every '
@@ -2283,7 +2499,7 @@ function renderTasks() {
 /** Keep a filter's chosen value across a re-render. */
 function fillFilter(select, allLabel, options) {
   const chosen = select.value;
-  select.replaceChildren(
+  setChildren(select, 
     el('option', { value: 'all' }, allLabel),
     ...options.map((o) => el('option', { value: o.value }, o.label)));
   select.value = options.some((o) => o.value === chosen) ? chosen : 'all';
@@ -2296,7 +2512,7 @@ function renderTaskLoad(data) {
   const window_ = `${fmt.date(load.from)} → ${fmt.date(load.to)}`;
   const verdictTone = { overloaded: 'bad', 'on plan': 'ok', underloaded: 'warn' };
 
-  $('#task-load').replaceChildren(el('section', { class: 'panel' },
+  setChildren($('#task-load'), el('section', { class: 'panel' },
     el('h3', {}, 'Who is loaded, and who is not'),
     el('p', { class: 'muted' },
       `Open work due in the next ${load.weeks} week(s) — ${window_} — against `
@@ -2375,7 +2591,7 @@ function renderTaskTable(data) {
       : status === 'Blocked' ? 'pill-bad'
         : status === 'In progress' ? 'pill-warn' : 'pill-info');
 
-  $('#task-body').replaceChildren(
+  setChildren($('#task-body'), 
     el('p', { class: 'muted' },
       `${fmt.int(rows.length)} task(s) shown`
       + (f.showDone || !hidden ? '' : ` · ${fmt.int(hidden)} done and hidden`)),

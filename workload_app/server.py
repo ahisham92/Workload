@@ -1,686 +1,37 @@
-"""A small local web server in front of the workbook.
+"""The local web server: a thin transport in front of :mod:`workload_app.app`.
 
-Deliberately built on the standard library: the only third-party package the
-app needs is openpyxl, for reading uploaded exports.  Uploads arrive as base64
-inside a JSON body rather than as multipart forms, which keeps the request
-handling short and works the same on every supported Python version.
+Used when the app runs on someone's own machine.  On a host it is replaced by
+:mod:`workload_app.wsgi`, which serves the same application object -- the
+routing, the accounts and the workbook handling are shared, and only the way
+bytes arrive differs.
 """
 
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
-import threading
-import traceback
-import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import config as cfg, library, metrics, reports, timesheets
-from .timesheets import ImportError_, ParsedTimesheet
-from .library import NotAWorkbook
-from .tasks import TaskError
-from .workbook import ValidationError, WorkloadWorkbook, iso
-from .xlsx_io import XlsxError
-
-STATIC_DIR = Path(__file__).parent / "static"
-MAX_UPLOAD_BYTES = 64 * 1024 * 1024
-
-
-class ApiError(Exception):
-    def __init__(self, status: int, message: str, errors: Optional[List[str]] = None):
-        super().__init__(message)
-        self.status = status
-        self.message = message
-        self.errors = errors or [message]
-
-
-class WorkloadService:
-    """Holds the chosen workbook, if one is open yet, and serialises access."""
-
-    def __init__(self, path: Optional[Path] = None, *, autosave: bool = True):
-        self.path: Optional[Path] = None
-        self.unit: Optional[Dict[str, Any]] = None
-        self.autosave = autosave
-        self._lock = threading.RLock()
-        self._wb: Optional[WorkloadWorkbook] = None
-        self._staged: Dict[str, ParsedTimesheet] = {}
-        self._unlocked = False
-        self._stack_raised_to: Optional[int] = None
-        if path is not None:
-            self.open(path)
-
-    # -- choosing a workbook ---------------------------------------------
-    @property
-    def is_open(self) -> bool:
-        return self._wb is not None
-
-    @property
-    def workbook(self) -> WorkloadWorkbook:
-        """The open workbook, or a clear refusal if none has been chosen."""
-        if self._wb is None:
-            raise ApiError(
-                HTTPStatus.CONFLICT,
-                "No workbook is open. Choose your Workload file first.",
-            )
-        return self._wb
-
-    def open(self, path: Union[str, Path], *, name: Optional[str] = None,
-             remember: bool = True) -> Dict[str, Any]:
-        with self._lock:
-            resolved = library.validate(Path(path))
-            if self._wb is not None and self._wb.dirty:
-                self._wb.save()
-            self._wb = WorkloadWorkbook(resolved)
-            self.path = resolved
-            self._staged.clear()
-            self._unlocked = False
-            self._stack_raised_to = self._widen_stack()
-            if remember:
-                self.unit = library.save_unit(name or resolved.stem, resolved)
-            return self.status()
-
-    def open_unit(self, unit_id: str) -> Dict[str, Any]:
-        unit = library.find_unit(unit_id)
-        if unit is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is no longer saved.")
-        result = self.open(unit["workbook"], name=unit["name"])
-        library.touch_unit(unit_id)
-        return result
-
-    def pick_file(self) -> Dict[str, Any]:
-        """Ask the operating system for a file, on its own dialog."""
-        chosen = library.pick_file()
-        return {"path": chosen, "cancelled": chosen is None}
-
-    def close(self) -> Dict[str, Any]:
-        with self._lock:
-            if self._wb is not None and self._wb.dirty:
-                self._wb.save()
-            self._wb = None
-            self.path = None
-            self.unit = None
-            self._unlocked = False
-            self._stack_raised_to = None
-            self._staged.clear()
-            return self.status()
-
-    def library(self, folder: Optional[str] = None) -> Dict[str, Any]:
-        data: Dict[str, Any] = {
-            "units": library.units(),
-            "suggestions": library.candidates(),
-            "cwd": str(Path.cwd()),
-            "home": str(Path.home()),
-        }
-        if folder is not None:
-            data["browse"] = library.browse(folder)
-        return data
-
-    # -- helpers ---------------------------------------------------------
-    def _widen_stack(self) -> Optional[int]:
-        """Deepen the per-sheet stack as soon as a workbook is opened.
-
-        The workbook ships reading 6,000 rows from each monthly sheet, and that
-        is the limit an engineer's own sheet reaches first.  Widening it is a
-        one-line change to the VSTACK with no recalculation cost -- unlike the
-        consolidated limit -- so it is done here rather than offered as a
-        button nobody would have a reason to decline.
-        """
-        wb = self._wb
-        if wb is None:
-            return None
-        report = wb.timesheet_capacity()
-        if not report["source_is_short"]:
-            return None
-        target = report["suggested_source_last_row"]
-        wb.extend_timesheet_capacity(source_last_row=target)
-        if self.autosave:
-            wb.save()
-        return target
-
-    def _commit(self) -> Dict[str, Any]:
-        if self.autosave:
-            return self.workbook.save()
-        return {"saved": False, "pending": True}
-
-    def _known_job_numbers(self) -> set:
-        wb = self.workbook
-        return {p.number for p in wb.projects()} | set(wb.non_project_codes())
-
-    # -- reads -----------------------------------------------------------
-    def status(self) -> Dict[str, Any]:
-        with self._lock:
-            if self._wb is None:
-                return {"open": False, "workbook": None, "unit": None,
-                        "autosave": self.autosave}
-            return {
-                "open": True,
-                "unit": self.unit,
-                "reference_unlocked": self._unlocked,
-                "engineers": self._wb.engineer_names(),
-                "workbook": str(self.path),
-                "workbook_name": self.path.name,
-                "folder": str(self.path.parent),
-                "autosave": self.autosave,
-                "unsaved_changes": self._wb.dirty,
-                "sheets": self._wb.raw.sheet_names,
-                "projects": len(self._wb.projects()),
-                "deliverables": len(self._wb.deliverables()),
-                "actuals_last_row": self._wb.actuals_last_row(),
-                "capacity": self._wb.timesheet_capacity(),
-                "stack_raised_to": self._stack_raised_to,
-                "backups": str(self.path.parent / cfg.BACKUP_DIRNAME),
-            }
-
-    def reference(self) -> Dict[str, Any]:
-        with self._lock:
-            return self.workbook.reference()
-
-    def overview(self, year: Optional[int]) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
-            data = metrics.overview(wb, year)
-            data["available_years"] = metrics.available_years(wb, index)
-            return data
-
-    def projects(self) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
-            return {
-                "projects": [p.to_dict() for p in wb.projects()],
-                "metrics": metrics.project_rows(wb, index),
-            }
-
-    def deliverables(self) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
-            return {
-                "deliverables": [d.to_dict() for d in wb.deliverables()],
-                "metrics": metrics.deliverable_rows(wb, index),
-                "actuals_last_row": wb.actuals_last_row(),
-            }
-
-    # -- the team --------------------------------------------------------
-    def team(self) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            return {
-                "engineers": wb.team(),
-                "years": sorted(wb._availability_years().values()),
-                "max_engineers": cfg.MAX_ENGINEERS,
-                "built_in_slots": cfg.ENGINEER_BUILT_IN_SLOTS,
-            }
-
-    def add_engineer(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.add_engineer(body)
-            result["save"] = self._commit()
-            return result
-
-    def update_engineer(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.update_engineer(engineer, body)
-            result["save"] = self._commit()
-            return result
-
-    def remove_engineer(self, engineer: str) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.remove_engineer(engineer)
-            result["save"] = self._commit()
-            return result
-
-    def reports(self, kind: str, year: Optional[int],
-                quarter: Optional[str]) -> Dict[str, Any]:
-        """Every report figure for one period, computed in a single pass."""
-        with self._lock:
-            wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
-            data = reports.build(wb, kind, year, quarter, index=index).to_dict()
-            data["periods"] = self._periods(wb)
-            data["unit"] = self.unit
-            data["issues"] = wb.register_issues()
-            data["definitions"] = wb.definitions()
-            period = data["period"]
-            data["data_check"] = wb.data_check(
-                period["year"] if period["kind"] == "year" else None)
-            return data
-
-    def _periods(self, wb) -> Dict[str, Any]:
-        quarters = reports.read_quarters(wb)
-        years = sorted({q.year for q in quarters if q.year})
-        return {
-            "years": years,
-            "quarters": sorted({q.label.split("-")[0] for q in quarters
-                                if not q.opening}),
-            "plan_year": wb.plan_year(),
-        }
-
-    def timesheet_status(self) -> Dict[str, Any]:
-        with self._lock:
-            return self.workbook.data_check()
-
-    # -- writes ----------------------------------------------------------
-    def add_project(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            project = self.workbook.add_project(body)
-            return {"project": project.to_dict(), "save": self._commit()}
-
-    def update_project(self, number: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            project = self.workbook.update_project(number, body)
-            return {"project": project.to_dict(), "save": self._commit()}
-
-    def delete_project(self, number: str, cascade: bool) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.delete_project(number, cascade=cascade)
-            result["save"] = self._commit()
-            return result
-
-    def add_deliverable(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            deliverable = self.workbook.add_deliverable(body)
-            return {"deliverable": deliverable.to_dict(), "save": self._commit()}
-
-    def update_deliverable(self, row: int, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            deliverable = self.workbook.update_deliverable(row, body)
-            return {"deliverable": deliverable.to_dict(), "save": self._commit()}
-
-    def save_project_with_deliverables(self, number: Optional[str],
-                                       body: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a project and its whole deliverable set in one go."""
-        with self._lock:
-            result = self.workbook.save_project_with_deliverables(
-                number, body.get("project", {}), body.get("deliverables", []))
-            result["save"] = self._commit()
-            return result
-
-    def project_detail(self, number: str) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            project = wb.project(number)
-            if project is None:
-                raise ApiError(HTTPStatus.NOT_FOUND,
-                               f"No project numbered {number!r}.")
-            index = metrics.TimesheetIndex(wb)
-            rows = {m["row"]: m for m in metrics.deliverable_rows(wb, index)}
-            attached = [d for d in wb.deliverables()
-                        if d.project_number == project.number]
-            figures = [m for m in metrics.project_rows(wb, index)
-                       if m["number"] == project.number]
-            return {
-                "project": project.to_dict(),
-                "metrics": figures[0] if figures else None,
-                "deliverables": [
-                    {**d.to_dict(), "computed": rows.get(d.row)} for d in attached
-                ],
-            }
-
-    def delete_deliverable(self, row: int) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.delete_deliverable(row)
-            result["save"] = self._commit()
-            return result
-
-    def save(self) -> Dict[str, Any]:
-        with self._lock:
-            if self._wb is None:
-                return {"saved": False}
-            return self._wb.save()
-
-    def reload(self) -> Dict[str, Any]:
-        with self._lock:
-            self.workbook.reload()
-            self._staged.clear()
-            return self.status()
-
-    # -- timesheets ------------------------------------------------------
-    def stage_timesheet(self, engineer: str, filename: str, data: bytes,
-                        *, registered_only: bool = True) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            if engineer not in wb.ts_sheets():
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    f"{engineer!r} is not one of this workbook's engineers "
-                    f"({', '.join(wb.ts_sheets())}).",
-                )
-            engineers = {e.short_name: e for e in wb.engineers()}
-            pattern = engineers[engineer].pattern if engineer in engineers else None
-            parsed = timesheets.parse(
-                engineer, filename, data, wb.timesheet_headers(engineer),
-                name_pattern=pattern,
-                known_job_numbers=self._known_job_numbers(),
-                registered_only=registered_only,
-                keep_job_types=cfg.PROPOSAL_JOB_TYPES,
-            )
-            existing = self._existing_rows(engineer)
-            duplicates = timesheets.find_duplicates(
-                existing, parsed.rows, parsed.headers) if parsed.rows else 0
-            token = uuid.uuid4().hex
-            self._staged[token] = parsed
-            payload = parsed.to_dict()
-            payload["token"] = token
-            payload["existing_rows"] = len(existing)
-            payload["duplicate_rows_if_appended"] = duplicates
-            return payload
-
-    def _existing_rows(self, engineer: str) -> List[List[Any]]:
-        from .xlsx_io import col_to_index, index_to_col
-        width = col_to_index(cfg.TS_LAST_COLUMN)
-        columns = [index_to_col(i) for i in range(1, width + 1)]
-        return [
-            [row.get(col) for col in columns]
-            for row in self.workbook.timesheet_rows(engineer, columns)
-        ]
-
-    def apply_timesheet(self, token: str, mode: str) -> Dict[str, Any]:
-        with self._lock:
-            parsed = self._staged.pop(token, None)
-            if parsed is None:
-                raise ApiError(
-                    HTTPStatus.NOT_FOUND,
-                    "That import has expired. Upload the export again.",
-                )
-            if parsed.errors:
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    "The export still has errors that must be fixed first.",
-                    parsed.errors,
-                )
-            if mode == "append":
-                rows = self._existing_rows(parsed.engineer) + list(parsed.rows)
-            elif mode == "replace":
-                rows = list(parsed.rows)
-            else:
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    "Mode must be 'replace' (the monthly routine) or 'append'.",
-                )
-            wb = self.workbook
-            result = wb.replace_timesheet(parsed.engineer, rows)
-            result["mode"] = mode
-            result["save"] = self._commit()
-            result["data_check"] = wb.data_check()
-            return result
-
-    # -- reference tables ------------------------------------------------
-    def unlock(self, password: str) -> Dict[str, Any]:
-        """Open the reference tables for editing.
-
-        A deterrent against a stray keystroke changing a credit percentage,
-        not a security control: the same values are editable in Excel by
-        anyone who can open the file.
-        """
-        with self._lock:
-            if password != cfg.REFERENCE_PASSWORD:
-                raise ApiError(HTTPStatus.FORBIDDEN, "That password is not right.")
-            self._unlocked = True
-            return {"unlocked": True}
-
-    def lock(self) -> Dict[str, Any]:
-        with self._lock:
-            self._unlocked = False
-            return {"unlocked": False}
-
-    def save_reference(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            if not self._unlocked:
-                raise ApiError(
-                    HTTPStatus.FORBIDDEN,
-                    "The reference tables are locked. Unlock them first.",
-                )
-            wb = self.workbook
-            result = wb.save_reference(
-                body.get("project_types"), body.get("credit_steps"))
-            if body.get("scorecard_factors") is not None:
-                result.update(wb.save_scorecard_factors(body["scorecard_factors"]))
-            result["save"] = self._commit()
-            return result
-
-    def extend_capacity(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            current = wb.timesheet_capacity()
-            raw = body.get("raw_last_row")
-            source = body.get("source_last_row")
-            if not raw and not source:
-                raw = current["suggested_raw_last_row"]
-            result = wb.extend_timesheet_capacity(
-                raw_last_row=int(raw) if raw else None,
-                source_last_row=int(source) if source else None,
-            )
-            result["save"] = self._commit()
-            result["capacity"] = wb.timesheet_capacity()
-            return result
-
-    # -- tasks -----------------------------------------------------------
-    def tasks(self) -> Dict[str, Any]:
-        """The list, the load it puts on the team, and what a task may refer to."""
-        with self._lock:
-            wb = self.workbook
-            deliverables = [
-                {
-                    "row": d.row,
-                    "name": d.name,
-                    "project_number": d.project_number,
-                    "date": iso(d.status_date),
-                }
-                for d in wb.deliverables()
-            ]
-            return {
-                "tasks": wb.tasks(),
-                "settings": wb.task_settings(),
-                "load": wb.task_load(),
-                "engineers": wb.engineer_names(),
-                "projects": [{"number": p.number, "name": p.name}
-                             for p in wb.projects()],
-                "deliverables": deliverables,
-                "statuses": list(cfg.TASK_STATUSES),
-                "kinds": list(cfg.TASK_KINDS),
-                "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday",
-                             "Friday", "Saturday", "Sunday"],
-            }
-
-    def add_task(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            task = self.workbook.save_task(body)
-            return {"task": task, "save": self._commit()}
-
-    def update_task(self, task_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            task = self.workbook.save_task(body, task_id=task_id)
-            return {"task": task, "save": self._commit()}
-
-    def delete_task(self, task_id: int) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.delete_task(task_id)
-            result["save"] = self._commit()
-            return result
-
-    def delete_task_series(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.delete_task_series(str(body.get("series") or ""))
-            result["save"] = self._commit()
-            return result
-
-    def save_task_settings(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            result = {"settings": self.workbook.save_task_settings(body)}
-            result["save"] = self._commit()
-            return result
-
-    def generate_submission_tasks(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            row = body.get("deliverable_row")
-            result = self.workbook.generate_submission_tasks(
-                only_row=int(row) if row not in (None, "") else None,
-                include_past=bool(body.get("include_past")))
-            result["save"] = self._commit()
-            return result
-
-    def generate_weekly_meetings(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            result = self.workbook.generate_weekly_meetings(body)
-            result["save"] = self._commit()
-            return result
-
-    def discard_timesheet(self, token: str) -> Dict[str, Any]:
-        with self._lock:
-            self._staged.pop(token, None)
-            return {"discarded": True}
-
-
-# --------------------------------------------------------------------------
-# routing
-# --------------------------------------------------------------------------
-
-Route = Tuple[str, str, Callable[..., Any]]
-
-
-def build_routes(service: WorkloadService) -> List[Route]:
-    """``(method, pattern, handler)``; ``{}`` in a pattern captures a segment."""
-    return [
-        ("GET", "/api/status", lambda q, b: service.status()),
-        ("GET", "/api/units",
-         lambda q, b: service.library(q.get("folder", [None])[0])),
-        ("POST", "/api/units/pick", lambda q, b: service.pick_file()),
-        ("POST", "/api/units/open",
-         lambda q, b: (service.open_unit(b["unit_id"]) if b.get("unit_id")
-                       else service.open(b.get("path", ""), name=b.get("name")))),
-        ("POST", "/api/units/close", lambda q, b: service.close()),
-        ("DELETE", "/api/units/{}", lambda q, b, unit_id: _forget(unit_id)),
-        ("POST", "/api/reference/unlock",
-         lambda q, b: service.unlock(b.get("password", ""))),
-        ("POST", "/api/reference/lock", lambda q, b: service.lock()),
-        ("PUT", "/api/reference", lambda q, b: service.save_reference(b)),
-        ("GET", "/api/reference", lambda q, b: service.reference()),
-        ("GET", "/api/overview", lambda q, b: service.overview(_year(q))),
-        ("GET", "/api/projects", lambda q, b: service.projects()),
-        ("POST", "/api/projects", lambda q, b: service.add_project(b)),
-        ("PUT", "/api/projects/{}", lambda q, b, number: service.update_project(number, b)),
-        ("DELETE", "/api/projects/{}",
-         lambda q, b, number: service.delete_project(number, _flag(q, "cascade"))),
-        ("GET", "/api/deliverables", lambda q, b: service.deliverables()),
-        ("GET", "/api/projects/{}", lambda q, b, number: service.project_detail(number)),
-        ("POST", "/api/projects/full",
-         lambda q, b: service.save_project_with_deliverables(None, b)),
-        ("PUT", "/api/projects/{}/full",
-         lambda q, b, number: service.save_project_with_deliverables(number, b)),
-        ("POST", "/api/deliverables", lambda q, b: service.add_deliverable(b)),
-        ("PUT", "/api/deliverables/{}",
-         lambda q, b, row: service.update_deliverable(_int(row), b)),
-        ("DELETE", "/api/deliverables/{}",
-         lambda q, b, row: service.delete_deliverable(_int(row))),
-        ("GET", "/api/team", lambda q, b: service.team()),
-        ("POST", "/api/team", lambda q, b: service.add_engineer(b)),
-        ("PUT", "/api/team/{}", lambda q, b, name: service.update_engineer(name, b)),
-        ("DELETE", "/api/team/{}", lambda q, b, name: service.remove_engineer(name)),
-        ("GET", "/api/reports",
-         lambda q, b: service.reports(
-             q.get("period", ["year"])[0], _year(q), q.get("quarter", [None])[0])),
-        ("GET", "/api/tasks", lambda q, b: service.tasks()),
-        ("POST", "/api/tasks", lambda q, b: service.add_task(b)),
-        ("PUT", "/api/tasks/settings", lambda q, b: service.save_task_settings(b)),
-        ("POST", "/api/tasks/series/delete",
-         lambda q, b: service.delete_task_series(b)),
-        ("POST", "/api/tasks/generate/submissions",
-         lambda q, b: service.generate_submission_tasks(b)),
-        ("POST", "/api/tasks/generate/meetings",
-         lambda q, b: service.generate_weekly_meetings(b)),
-        ("PUT", "/api/tasks/{}", lambda q, b, task_id: service.update_task(_int(task_id), b)),
-        ("DELETE", "/api/tasks/{}", lambda q, b, task_id: service.delete_task(_int(task_id))),
-        ("GET", "/api/timesheets", lambda q, b: service.timesheet_status()),
-        ("POST", "/api/timesheets/stage", lambda q, b: _stage(service, b)),
-        ("POST", "/api/timesheets/apply",
-         lambda q, b: service.apply_timesheet(b.get("token", ""), b.get("mode", "replace"))),
-        ("POST", "/api/timesheets/capacity", lambda q, b: service.extend_capacity(b)),
-        ("POST", "/api/timesheets/discard",
-         lambda q, b: service.discard_timesheet(b.get("token", ""))),
-        ("POST", "/api/save", lambda q, b: service.save()),
-        ("POST", "/api/reload", lambda q, b: service.reload()),
-    ]
-
-
-def _forget(unit_id: str) -> Dict[str, Any]:
-    library.forget_unit(unit_id)
-    return {"forgotten": unit_id}
-
-
-def _year(query: Dict[str, List[str]]) -> Optional[int]:
-    values = query.get("year")
-    if not values or not values[0] or values[0] == "all":
-        return None
-    try:
-        return int(values[0])
-    except ValueError:
-        raise ApiError(HTTPStatus.BAD_REQUEST, f"{values[0]!r} is not a year.")
-
-
-def _flag(query: Dict[str, List[str]], name: str) -> bool:
-    values = query.get(name)
-    return bool(values) and values[0].lower() in {"1", "true", "yes"}
-
-
-def _int(value: str) -> int:
-    try:
-        return int(value)
-    except ValueError:
-        raise ApiError(HTTPStatus.BAD_REQUEST, f"{value!r} is not a row number.")
-
-
-def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:
-    engineer = body.get("engineer", "")
-    filename = body.get("filename", "upload.xlsx")
-    content = body.get("content_base64")
-    if not content:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "No file content was uploaded.")
-    try:
-        data = base64.b64decode(content)
-    except Exception:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "The upload was not valid base64.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise ApiError(
-            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-            f"That file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
-        )
-    return service.stage_timesheet(
-        engineer, filename, data,
-        registered_only=bool(body.get("registered_only", True)),
-    )
+from .app import Request, WorkloadApp, parse_cookies
+from .service import ApiError, MAX_UPLOAD_BYTES
+
+# Re-exported so existing imports keep working.
+__all__ = ["Handler", "make_server", "WorkloadApp", "ApiError"]
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WorkloadInput/1.0"
-    service: WorkloadService = None       # set by make_server
-    routes: List[Route] = []
+    server_version = "Workload/2.0"
+    app: WorkloadApp = None                   # set by make_server
 
-    # -- plumbing --------------------------------------------------------
     def log_message(self, fmt: str, *args: Any) -> None:
-        if self.server.quiet:                      # type: ignore[attr-defined]
+        if getattr(self.server, "quiet", False):
             return
         super().log_message(fmt, *args)
 
-    def _send(self, status: int, payload: bytes, content_type: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(payload)
-
-    def _send_json(self, status: int, data: Any) -> None:
-        self._send(status, json.dumps(data, default=str).encode("utf-8"),
-                   "application/json; charset=utf-8")
-
+    # -- request ---------------------------------------------------------
     def _read_body(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
@@ -698,78 +49,49 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(HTTPStatus.BAD_REQUEST, "Request body must be an object.")
         return body
 
-    # -- dispatch --------------------------------------------------------
-    def _match(self, method: str, path: str):
-        wanted = [p for p in path.strip("/").split("/") if p != ""]
-        for route_method, pattern, handler in self.routes:
-            if route_method != method:
-                continue
-            parts = [p for p in pattern.strip("/").split("/") if p != ""]
-            if len(parts) != len(wanted):
-                continue
-            captured: List[str] = []
-            for expected, actual in zip(parts, wanted):
-                if expected == "{}":
-                    captured.append(actual)
-                elif expected != actual:
-                    break
-            else:
-                return handler, captured
-        return None, []
-
     def _handle(self, method: str) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
         try:
-            if path.startswith("/api/"):
-                handler, captured = self._match(method, path)
-                if handler is None:
-                    raise ApiError(HTTPStatus.NOT_FOUND, f"No route for {method} {path}.")
-                body = self._read_body() if method in {"POST", "PUT", "DELETE"} else {}
-                query = parse_qs(parsed.query)
-                self._send_json(HTTPStatus.OK, handler(query, body, *captured))
-                return
-            if method not in {"GET", "HEAD"}:
-                raise ApiError(HTTPStatus.METHOD_NOT_ALLOWED, "Method not allowed.")
-            self._serve_static(path)
+            body = self._read_body() if method in {"POST", "PUT", "DELETE"} else {}
         except ApiError as exc:
             self._send_json(exc.status, {"error": exc.message, "errors": exc.errors})
-        except (ValidationError, TaskError) as exc:
-            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY,
-                            {"error": "The change was rejected.", "errors": exc.errors})
-        except NotAWorkbook as exc:
-            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY,
-                            {"error": str(exc), "errors": [str(exc)]})
-        except ImportError_ as exc:
-            self._send_json(HTTPStatus.BAD_REQUEST,
-                            {"error": str(exc), "errors": [str(exc)]})
-        except XlsxError as exc:
-            self._send_json(HTTPStatus.CONFLICT,
-                            {"error": str(exc), "errors": [str(exc)]})
+            return
+
+        request = Request(
+            method=method,
+            path=parsed.path,
+            query=parse_qs(parsed.query),
+            body=body,
+            cookies=parse_cookies(self.headers.get("Cookie")),
+            secure=self.headers.get("X-Forwarded-Proto", "").lower() == "https",
+        )
+        response = self.app.handle(request)
+        try:
+            self.send_response(response.status)
+            self.send_header("Content-Type", response.content_type)
+            self.send_header("Content-Length", str(len(response.body)))
+            self.send_header("Cache-Control", "no-store")
+            for name, value in response.headers:
+                self.send_header(name, value)
+            self.end_headers()
+            if method != "HEAD":
+                self.wfile.write(response.body)
         except BrokenPipeError:
             pass
-        except Exception as exc:                       # pragma: no cover - safety net
-            traceback.print_exc()
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {
-                "error": f"{type(exc).__name__}: {exc}",
-                "errors": [f"{type(exc).__name__}: {exc}"],
-            })
 
-    def _serve_static(self, path: str) -> None:
-        name = "index.html" if path in ("/", "") else path.lstrip("/")
-        target = (STATIC_DIR / name).resolve()
-        if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.is_file():
-            self._send(HTTPStatus.NOT_FOUND, b"Not found", "text/plain; charset=utf-8")
-            return
-        content_type, _ = mimetypes.guess_type(str(target))
-        self._send(HTTPStatus.OK, target.read_bytes(),
-                   content_type or "application/octet-stream")
+    def _send_json(self, status: int, data: Any) -> None:
+        payload = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_GET(self) -> None:      # noqa: N802
         self._handle("GET")
 
     def do_HEAD(self) -> None:     # noqa: N802
-        self._handle("GET")
+        self._handle("HEAD")
 
     def do_POST(self) -> None:     # noqa: N802
         self._handle("POST")
@@ -781,13 +103,13 @@ class Handler(BaseHTTPRequestHandler):
         self._handle("DELETE")
 
 
-def make_server(workbook: Optional[Path] = None, host: str = "127.0.0.1",
+def make_server(data_dir: Optional[Path] = None, host: str = "127.0.0.1",
                 port: int = 8765, *, autosave: bool = True,
-                quiet: bool = False) -> ThreadingHTTPServer:
-    service = WorkloadService(workbook, autosave=autosave)
-    routes = build_routes(service)
-    handler = type("BoundHandler", (Handler,), {"service": service, "routes": routes})
+                quiet: bool = False, app: Optional[WorkloadApp] = None
+                ) -> ThreadingHTTPServer:
+    application = app or WorkloadApp(data_dir, autosave=autosave)
+    handler = type("BoundHandler", (Handler,), {"app": application})
     server = ThreadingHTTPServer((host, port), handler)
     server.quiet = quiet                              # type: ignore[attr-defined]
-    server.service = service                          # type: ignore[attr-defined]
+    server.app = application                          # type: ignore[attr-defined]
     return server

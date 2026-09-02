@@ -8,9 +8,13 @@ venv/
 backups/
 
 # You supply the workbook; it is never committed. Put a copy here to run the
-# tests, or point WORKLOAD_TEST_WORKBOOK at your own.
-data/
+# tests, or point WORKLOAD_TEST_WORKBOOK at your own.  Only this folder: the
+# blank template in workload_app/data is code, and is committed.
+/data/
 
 
 # Excel's lock file, which appears beside an open workbook.
 ~$*.xlsx
+
+# Accounts and each account's workbooks, when the app runs from the checkout.
+instance/

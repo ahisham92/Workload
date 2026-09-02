@@ -341,18 +341,19 @@ textarea { resize: vertical; min-height: 56px; }
 
 .unit-grid { display: grid; gap: 10px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-.unit-card { position: relative; border: 1px solid var(--border);
+.unit-card { position: relative; display: flex; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface); }
 .unit-card:hover { border-color: var(--accent); }
 .unit-card.missing { opacity: .6; }
-.unit-open { display: flex; flex-direction: column; gap: 3px; width: 100%;
-  text-align: left; background: none; border: 0; font: inherit; color: var(--text);
-  padding: 13px 40px 13px 15px; cursor: pointer; border-radius: var(--radius); }
+.unit-open { display: flex; flex-direction: column; gap: 3px; flex: 1;
+  min-width: 0; text-align: left; background: none; border: 0; font: inherit;
+  color: var(--text); padding: 13px 8px 13px 15px; cursor: pointer;
+  border-radius: var(--radius); }
 .unit-open:disabled { cursor: not-allowed; }
 .unit-open b { font-size: 15px; }
 .unit-open span { font-size: 11.5px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
-.unit-forget { position: absolute; top: 8px; right: 8px; padding: 2px 7px; }
+
 
 .add-unit { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 14px; }
 .add-unit > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
@@ -602,3 +603,24 @@ tr.row-done .task-name { text-decoration: line-through; }
   cursor: pointer; user-select: none; }
 .check-chip:has(input:checked) { border-color: var(--accent);
   background: var(--surface-2); font-weight: 600; }
+
+/* -- signing in ----------------------------------------------------------- */
+.login-page { display: grid; place-items: center; min-height: 100vh;
+  padding: 24px; }
+.login-card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 26px 28px;
+  width: 100%; max-width: 420px; }
+.login-card .chooser-head { margin-bottom: 18px; }
+.login-card .field { margin-bottom: 12px; }
+.btn-wide { width: 100%; padding: 10px; }
+.login-note { margin-top: 16px; }
+.login-note code { font-family: var(--mono); font-size: 11.5px;
+  background: var(--surface-2); padding: 2px 5px; border-radius: 4px; }
+
+/* -- units and accounts --------------------------------------------------- */
+.chooser-account { margin-left: auto; display: flex; align-items: center;
+  gap: 10px; }
+.chooser-actions { margin-top: 18px; border-top: 1px solid var(--border);
+  padding-top: 16px; }
+.unit-tools { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
+.account-panel .row-actions { margin-top: 14px; gap: 8px; }

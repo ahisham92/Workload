@@ -1,70 +1,156 @@
-"""The HTTP layer, driven against a real server on a real workbook copy."""
+"""The HTTP layer, driven against a real server with a real account signed in.
+
+Every request here carries a session cookie, because without one the app
+answers nothing: that is the point of the login.  The isolation tests are the
+ones to read first -- they are what make one account's workbook private.
+"""
 
 import base64
 import datetime as dt
 import io
 import json
+import shutil
 import threading
 import urllib.error
 import urllib.request
 
 import pytest
 
+from workload_app import storage
 from workload_app.server import make_server
+
+PASSWORD = "a-good-long-password"
 
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
-    from workload_app import library
-    monkeypatch.setattr(library, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setenv("WORKLOAD_DATA_DIR", str(tmp_path / "instance"))
 
 
-def _serve(workbook):
-    httpd = make_server(workbook, "127.0.0.1", 0, quiet=True)
+class Client(str):
+    """The base URL, and the cookie that says who is asking."""
+
+    cookie: str = ""
+    app = None
+    user = None
+
+
+def _serve(data_dir):
+    httpd = make_server(data_dir, "127.0.0.1", 0, quiet=True)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     return httpd
 
 
+def _sign_in(base: str, username: str, password: str) -> str:
+    request = urllib.request.Request(
+        base + "/api/auth/login", method="POST",
+        data=json.dumps({"username": username, "password": password}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request) as response:
+        cookie = response.headers.get("Set-Cookie", "")
+    return cookie.split(";")[0]
+
+
+def _account(httpd, base, username="ahmed", *, admin=True) -> Client:
+    app = httpd.app
+    user = app.accounts.create_user(username, PASSWORD, is_admin=admin)
+    client = Client(base)
+    client.cookie = _sign_in(base, username, PASSWORD)
+    client.app = app
+    client.user = user
+    return client
+
+
+def _adopt(client: Client, workbook, name="Marine Structures") -> str:
+    """Put a workbook into the signed-in account without a 3 MB upload."""
+    app = client.app
+    unit = app.accounts.create_unit(client.user["id"], name, "")
+    target = storage.unit_path(app.data_dir, client.user["id"],
+                               f"{unit['id']}.xlsx")
+    shutil.copy(workbook, target)
+    app.accounts_update_filename(client.user["id"], unit["id"], target.name)
+    return unit["id"]
+
+
 @pytest.fixture
-def server(workbook_copy):
-    httpd = _serve(workbook_copy)
-    yield f"http://127.0.0.1:{httpd.server_address[1]}"
+def empty_server(tmp_path):
+    """Signed in, with no unit open -- as a new account starts."""
+    httpd = _serve(tmp_path / "instance")
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    client = _account(httpd, base)
+    yield client
+    httpd.app.close_all()
     httpd.shutdown()
     httpd.server_close()
 
 
 @pytest.fixture
-def empty_server():
-    """A server started with no workbook, as it is when you just run it."""
-    httpd = _serve(None)
-    yield f"http://127.0.0.1:{httpd.server_address[1]}"
-    httpd.shutdown()
-    httpd.server_close()
+def server(empty_server, workbook_copy):
+    """Signed in, with the real workbook open as this account's unit."""
+    unit_id = _adopt(empty_server, workbook_copy)
+    call(empty_server, f"/api/units/{unit_id}/open", "POST")
+    return empty_server
+
+
+@pytest.fixture
+def stranger(server):
+    """A second account, signed in, that has nothing of its own."""
+    client = _account(_ServerHolder(server), str(server), "osama", admin=False)
+    return client
+
+
+class _ServerHolder:
+    """Lets ``_account`` reuse the running server behind an existing client."""
+
+    def __init__(self, client: Client):
+        self.app = client.app
 
 
 def call(base, path, method="GET", body=None):
+    headers = {"Content-Type": "application/json"}
+    cookie = getattr(base, "cookie", "")
+    if cookie:
+        headers["Cookie"] = cookie
     request = urllib.request.Request(
-        base + path, method=method,
+        str(base) + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request) as response:
+            _keep_cookie(base, response)
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
 
 
+def _keep_cookie(base, response) -> None:
+    """Follow a re-issued session the way a browser would."""
+    issued = response.headers.get("Set-Cookie")
+    if issued and hasattr(base, "cookie"):
+        base.cookie = issued.split(";")[0]
+
+
+def get(base, path):
+    """A plain GET that carries the cookie, for the pages rather than the API."""
+    cookie = getattr(base, "cookie", "")
+    request = urllib.request.Request(
+        str(base) + path,
+        headers={"Cookie": cookie} if cookie else {})
+    return urllib.request.urlopen(request)
+
+
 class TestStaticAndRouting:
     def test_the_page_is_served(self, server):
-        with urllib.request.urlopen(server + "/") as response:
+        with get(server, "/") as response:
             assert response.status == 200
-            assert b"Workload" in response.read()
+            body = response.read()
+            assert b"Workload" in body and b"view-overview" in body
 
     @pytest.mark.parametrize("path", ["/app.css", "/app.js"])
     def test_assets_are_served(self, server, path):
-        with urllib.request.urlopen(server + path) as response:
+        with get(server, path) as response:
             assert response.status == 200
 
     def test_an_unknown_api_path_is_a_404(self, server):
@@ -73,17 +159,17 @@ class TestStaticAndRouting:
 
     def test_paths_cannot_escape_the_static_directory(self, server):
         try:
-            with urllib.request.urlopen(server + "/../workbook.py") as response:
+            with get(server, "/../workbook.py") as response:
                 assert response.status == 404
         except urllib.error.HTTPError as error:
             assert error.code in (400, 404)
 
 
 class TestReads:
-    def test_status(self, server, workbook_copy):
+    def test_status(self, server):
         status, body = call(server, "/api/status")
         assert status == 200
-        assert body["workbook"] == str(workbook_copy)
+        assert body["unit"]["name"] == "Marine Structures"
         assert body["projects"] == 40
         assert body["unsaved_changes"] is False
 
@@ -262,95 +348,204 @@ class TestTimesheetEndpoints:
         assert status == 400
 
 
-class TestChoosingAUnit:
-    """A unit is a name and the workbook behind it; nothing opens until one is."""
+class TestUnits:
+    """A unit is a name and a workbook, and it belongs to one account."""
 
-    def test_it_starts_with_none_open(self, empty_server):
+    def test_an_account_starts_with_nothing_open(self, empty_server):
         status, body = call(empty_server, "/api/status")
         assert status == 200
         assert body["open"] is False
-        assert body["workbook"] is None
         assert body["unit"] is None
 
-    def test_the_registers_are_refused_until_one_is_chosen(self, empty_server):
+    def test_the_registers_are_refused_until_one_is_open(self, empty_server):
         for path in ("/api/projects", "/api/deliverables", "/api/reference",
-                     "/api/overview", "/api/timesheets"):
+                     "/api/overview", "/api/timesheets", "/api/tasks"):
             status, body = call(empty_server, path)
             assert status == 409, path
             assert "No workbook is open" in body["error"]
 
-    def test_the_page_still_loads_so_you_can_choose(self, empty_server):
-        with urllib.request.urlopen(empty_server + "/") as response:
-            assert response.status == 200
-
-    def test_the_list_starts_empty_with_somewhere_to_look(self, empty_server):
-        status, body = call(empty_server, "/api/units")
-        assert status == 200
-        assert body["units"] == []
-        assert "cwd" in body and "suggestions" in body
-
-    def test_opening_one_names_it_and_makes_everything_work(self, empty_server,
-                                                            workbook_copy):
-        status, body = call(empty_server, "/api/units/open", "POST",
-                            {"path": str(workbook_copy), "name": "Marine Structures"})
+    def test_a_new_unit_starts_from_the_blank_template(self, empty_server):
+        status, body = call(empty_server, "/api/units", "POST",
+                            {"name": "New unit"})
         assert status == 200
         assert body["open"] is True
-        assert body["unit"]["name"] == "Marine Structures"
+        assert body["unit"]["name"] == "New unit"
+        # The template carries the model but none of anybody's data.
+        assert body["projects"] == 0
+        assert body["deliverables"] == 0
+        assert body["engineers"] == ["Engineer 1", "Engineer 2", "Engineer 3"]
+        _status, reference = call(empty_server, "/api/reference")
+        assert len(reference["project_types"]) > 5
+
+    def test_a_workbook_can_be_uploaded_as_a_unit(self, empty_server, workbook_copy):
+        content = base64.b64encode(workbook_copy.read_bytes()).decode()
+        status, body = call(empty_server, "/api/units/upload", "POST", {
+            "name": "Marine Structures", "filename": "Workload.xlsx",
+            "content_base64": content,
+        })
+        assert status == 200
         assert body["projects"] == 40
         assert body["engineers"] == ["Ahmed", "Osama", "Kirolos"]
-        status, body = call(empty_server, "/api/projects")
-        assert status == 200 and len(body["projects"]) == 40
 
-    def test_an_opened_unit_is_remembered_and_can_be_reopened_by_id(
-            self, empty_server, workbook_copy):
-        call(empty_server, "/api/units/open", "POST",
-             {"path": str(workbook_copy), "name": "Marine Structures"})
-        _status, body = call(empty_server, "/api/units")
-        assert [u["name"] for u in body["units"]] == ["Marine Structures"]
-        unit_id = body["units"][0]["id"]
-
-        call(empty_server, "/api/units/close", "POST")
-        status, body = call(empty_server, "/api/units/open", "POST",
-                            {"unit_id": unit_id})
-        assert status == 200 and body["unit"]["name"] == "Marine Structures"
-
-    def test_a_unit_that_is_no_longer_saved_is_reported(self, empty_server):
-        status, body = call(empty_server, "/api/units/open", "POST",
-                            {"unit_id": "nope"})
-        assert status == 404
-        assert "no longer saved" in body["error"]
-
-    def test_forgetting_a_unit(self, empty_server, workbook_copy):
-        call(empty_server, "/api/units/open", "POST",
-             {"path": str(workbook_copy), "name": "Marine Structures"})
-        _status, body = call(empty_server, "/api/units")
-        unit_id = body["units"][0]["id"]
-        status, _ = call(empty_server, f"/api/units/{unit_id}", "DELETE")
-        assert status == 200
-        _status, body = call(empty_server, "/api/units")
-        assert body["units"] == []
-
-    def test_the_wrong_file_is_refused_with_a_reason(self, empty_server, tmp_path):
-        other = tmp_path / "notes.txt"
-        other.write_text("hello")
-        status, body = call(empty_server, "/api/units/open", "POST",
-                            {"path": str(other)})
+    def test_something_that_is_not_a_workbook_is_refused(self, empty_server):
+        status, body = call(empty_server, "/api/units/upload", "POST", {
+            "name": "Nonsense", "filename": "notes.xlsx",
+            "content_base64": base64.b64encode(b"not a spreadsheet").decode(),
+        })
         assert status == 422
-        assert "not an .xlsx file" in body["error"]
+        assert "not readable as a spreadsheet" in body["error"]
+        # And it leaves nothing behind.
+        _status, units = call(empty_server, "/api/units")
+        assert units["units"] == []
 
-    def test_closing_saves_and_lets_you_pick_again(self, server):
-        call(server, "/api/projects", "POST", {
-            "number": "CLOSE-0100D", "name": "x", "budget_mm": 1, "status": "Active"})
-        status, body = call(server, "/api/units/close", "POST")
-        assert status == 200 and body["open"] is False
-        status, _ = call(server, "/api/projects")
-        assert status == 409
+    def test_units_are_listed_renamed_and_deleted(self, server):
+        _status, listed = call(server, "/api/units")
+        assert [u["name"] for u in listed["units"]] == ["Marine Structures"]
+        unit_id = listed["units"][0]["id"]
+        assert listed["units"][0]["exists"] is True
 
-    def test_browsing_a_folder(self, empty_server, workbook_copy):
-        folder = str(workbook_copy.parent)
-        _status, body = call(empty_server, f"/api/units?folder={folder}")
-        assert body["browse"]["folder"] == folder
-        assert any(f["name"] == workbook_copy.name for f in body["browse"]["files"])
+        status, renamed = call(server, f"/api/units/{unit_id}", "PUT",
+                               {"name": "Marine Structures East"})
+        assert status == 200 and renamed["unit"]["name"] == "Marine Structures East"
+
+        status, _ = call(server, f"/api/units/{unit_id}", "DELETE")
+        assert status == 200
+        _status, listed = call(server, "/api/units")
+        assert listed["units"] == []
+
+    def test_the_workbook_can_be_taken_away_again(self, server):
+        _status, listed = call(server, "/api/units")
+        unit_id = listed["units"][0]["id"]
+        status, body = call(server, f"/api/units/{unit_id}/download")
+        assert status == 200
+        data = base64.b64decode(body["content_base64"])
+        assert data[:2] == b"PK"                      # a real xlsx
+        assert body["filename"].endswith(".xlsx")
+        assert body["size_bytes"] == len(data)
+
+    def test_two_units_of_the_same_name_are_refused(self, server):
+        status, body = call(server, "/api/units", "POST",
+                            {"name": "Marine Structures"})
+        assert status == 422
+        assert "already have a unit" in body["errors"][0]
+
+
+class TestPrivacy:
+    """The point of the login: one account cannot reach another's work."""
+
+    def test_nothing_is_answered_without_a_session(self, server):
+        anonymous = Client(str(server))               # no cookie
+        for method, path in (("GET", "/api/status"), ("GET", "/api/units"),
+                             ("GET", "/api/projects"), ("GET", "/api/tasks"),
+                             ("POST", "/api/save")):
+            status, body = call(anonymous, path, method)
+            assert status == 401, path
+            assert "Sign in" in body["error"]
+
+    def test_the_app_shell_is_behind_the_login(self, server):
+        anonymous = Client(str(server))
+        with urllib.request.urlopen(str(anonymous) + "/") as response:
+            page = response.read()
+        assert b"login-form" in page
+        assert b"view-overview" not in page
+
+    def test_another_account_cannot_open_your_unit(self, server, stranger):
+        _status, mine = call(server, "/api/units")
+        unit_id = mine["units"][0]["id"]
+
+        _status, theirs = call(stranger, "/api/units")
+        assert theirs["units"] == []
+
+        for method, path in (("POST", f"/api/units/{unit_id}/open"),
+                             ("GET", f"/api/units/{unit_id}/download"),
+                             ("PUT", f"/api/units/{unit_id}"),
+                             ("DELETE", f"/api/units/{unit_id}")):
+            status, body = call(stranger, path, method,
+                                {} if method in ("PUT", "POST") else None)
+            assert status == 404, path
+            assert "not yours" in body["error"]
+
+    def test_one_account_working_does_not_disturb_another(self, server, stranger):
+        call(stranger, "/api/units", "POST", {"name": "Their unit"})
+        status, theirs = call(stranger, "/api/status")
+        assert theirs["projects"] == 0                # their blank template
+        status, mine = call(server, "/api/status")
+        assert mine["projects"] == 40                 # still my workbook
+
+    def test_administration_is_for_administrators(self, server, stranger):
+        status, _ = call(server, "/api/admin/users")
+        assert status == 200
+        status, body = call(stranger, "/api/admin/users")
+        assert status == 403 and "administrators" in body["error"]
+
+    def test_signing_out_ends_the_session(self, server):
+        status, _ = call(server, "/api/auth/logout", "POST")
+        assert status == 200
+        status, _ = call(server, "/api/status")
+        assert status == 401
+
+
+class TestAccounts:
+    def test_who_am_i_is_public_and_honest(self, server):
+        status, body = call(server, "/api/auth/me")
+        assert status == 200 and body["user"]["username"] == "ahmed"
+        anonymous = Client(str(server))
+        status, body = call(anonymous, "/api/auth/me")
+        assert status == 200 and body["user"] is None
+        assert body["any_accounts"] is True
+
+    def test_a_wrong_password_says_nothing_useful(self, server):
+        status, body = call(server, "/api/auth/login", "POST",
+                            {"username": "ahmed", "password": "wrong"})
+        assert status == 401
+        assert body["error"] == ("That username and password do not match an "
+                                 "account.")
+        status, body = call(server, "/api/auth/login", "POST",
+                            {"username": "nobody", "password": "wrong"})
+        assert body["error"].startswith("That username and password")
+
+    def test_an_administrator_can_add_and_remove_accounts(self, server):
+        status, made = call(server, "/api/admin/users", "POST",
+                            {"username": "kirolos", "display_name": "Kirolos"})
+        assert status == 200
+        assert made["password"], "a generated password comes back once"
+        assert made["user"]["is_admin"] is False
+
+        # And that password works.
+        cookie = _sign_in(str(server), "kirolos", made["password"])
+        theirs = Client(str(server))
+        theirs.cookie = cookie
+        status, body = call(theirs, "/api/auth/me")
+        assert body["user"]["username"] == "kirolos"
+
+        status, _ = call(server, f"/api/admin/users/{made['user']['id']}", "DELETE")
+        assert status == 200
+        status, _ = call(theirs, "/api/status")
+        assert status == 401                          # their session went too
+
+    def test_the_last_administrator_cannot_be_removed(self, server):
+        me = call(server, "/api/auth/me")[1]["user"]
+        status, body = call(server, f"/api/admin/users/{me['id']}", "DELETE")
+        assert status == 422
+        assert "signed in to" in body["errors"][0]
+
+    def test_a_password_can_be_changed_and_the_session_survives(self, server):
+        status, _ = call(server, "/api/auth/password", "POST", {
+            "current_password": PASSWORD, "new_password": "another-long-one"})
+        assert status == 200
+        status, _ = call(server, "/api/status")
+        assert status == 200                          # still signed in here
+
+    def test_a_password_change_needs_the_current_one(self, server):
+        status, body = call(server, "/api/auth/password", "POST", {
+            "current_password": "not it", "new_password": "another-long-one"})
+        assert status == 403 and "current password" in body["error"]
+
+    def test_a_short_password_is_refused(self, server):
+        status, body = call(server, "/api/admin/users", "POST",
+                            {"username": "shorty", "password": "abc"})
+        assert status == 422
+        assert "at least" in body["errors"][0]
 
 
 class TestCapacityEndpoint:
@@ -792,7 +987,7 @@ class TestTheStackIsWidenedOnOpen:
         assert status["capacity"]["raw_last_row"] == 8000
 
     def test_a_workbook_already_deep_enough_is_not_rewritten(self, workbook_copy):
-        from workload_app.server import WorkloadService
+        from workload_app.service import WorkloadService
         first = WorkloadService(workbook_copy)
         assert first._stack_raised_to == 25000
         again = WorkloadService(workbook_copy)
