@@ -17,40 +17,40 @@
         <h1>Workload</h1>
         <p class="muted">Workload, efficiency and delivery planning</p>
       </div>
+      <div class="chooser-account">
+        <span id="chooser-user" class="muted"></span>
+        <button class="btn btn-sm" id="btn-account-chooser" type="button">Account</button>
+        <button class="btn btn-sm" id="btn-signout-chooser" type="button">Sign out</button>
+      </div>
     </header>
 
     <div id="unit-list"></div>
 
-    <details id="add-unit" class="add-unit">
-      <summary>Add a unit</summary>
+    <div class="chooser-actions">
       <div class="add-unit-body">
         <p class="muted">
-          A unit is a name and the workbook that belongs to it. Close that file in
-          Excel first — Excel keeps its own copy in memory and would overwrite
-          anything written while it is open.
+          A unit is a name and the workbook behind it. Start a new one from the
+          blank template — the full model with no data in it — or bring a
+          Workload workbook you already have. Either way the file is yours
+          alone, and you can take a copy back out at any time.
         </p>
         <div class="row">
           <label class="field grow">
             <span>Unit name</span>
             <input type="text" id="unit-name" placeholder="Marine Structures" spellcheck="false">
           </label>
+          <button class="btn btn-primary" id="btn-new-unit" type="button">Start blank</button>
         </div>
         <div class="row">
           <label class="field grow">
-            <span>Workbook</span>
-            <input type="text" id="unit-path" placeholder="No file chosen" spellcheck="false">
+            <span>Or upload a Workload workbook (.xlsx)</span>
+            <input type="file" id="unit-file" accept=".xlsx,.xlsm">
           </label>
-          <button class="btn" id="btn-pick" type="button">Choose file…</button>
-          <button class="btn btn-primary" id="btn-add-unit" type="button">Add unit</button>
+          <button class="btn" id="btn-upload-unit" type="button">Upload</button>
         </div>
         <div id="chooser-error"></div>
-        <div id="chooser-suggestions"></div>
-        <details id="chooser-browse-wrap">
-          <summary>Browse folders</summary>
-          <div id="chooser-browse"></div>
-        </details>
       </div>
-    </details>
+    </div>
   </div>
 </section>
 
@@ -68,6 +68,7 @@
     <button id="btn-save" class="btn btn-ghost btn-sm" type="button">Save</button>
     <button id="btn-reload" class="btn btn-ghost btn-sm" type="button">Reload</button>
     <button id="btn-change" class="btn btn-sm" type="button">Switch unit</button>
+    <button id="btn-account" class="btn btn-sm" type="button">Account</button>
   </div>
 </header>
 

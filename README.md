@@ -1,34 +1,61 @@
-# Workload Input
+# Workload
 
-An input application for the **Workload & Profit Plan** workbook. It gives the
-three monthly jobs a proper front end — pasting each engineer's timesheet,
-adding a project, and adding a project's deliverables — while the workbook
-itself stays the calculation engine and the place you read results.
+An application for the **Workload & Profit Plan** workbook. It gives the monthly
+jobs a proper front end — pasting each engineer's timesheet, adding a project,
+adding its deliverables, planning tasks — and its own reports, while the
+workbook stays the model everything is calculated from.
 
-The workbook is edited in place. It is not exported, rebuilt or re-saved by a
-spreadsheet library: only the cells you change are rewritten, so all 14 charts,
+The workbook is edited surgically. It is not exported, rebuilt or re-saved by a
+spreadsheet library: only the cells that change are rewritten, so all 14 charts,
 the drawings, the threaded comments, the conditional formatting, the data
 validations and every formula come through untouched.
 
+**It runs the same way on your own machine and on a host.** Same login, same
+storage, same code — see [DEPLOY.md](DEPLOY.md) for PythonAnywhere.
+
 ```
 pip install -r requirements.txt
+python -m workload_app.admin add <username> --admin     # once: make an account
 python -m workload_app
 ```
 
-Your browser opens on <http://127.0.0.1:8765/> and asks which **unit** to work
-on. Stop the app with Ctrl+C.
+Your browser opens on <http://127.0.0.1:8765/> and asks you to sign in. Stop the
+app with Ctrl+C.
 
-The app carries no workbook of its own: it edits the file you point it at, in
-place. Close that file in Excel first — Excel keeps its own copy in memory and
-would overwrite anything written while it is open.
+## Accounts
+
+Every visitor signs in, and an account sees only its own work. There is no
+public sign-up: an administrator makes each account, from the **Accounts**
+panel in the app or with `python -m workload_app.admin add`. Passwords are
+stored as salted PBKDF2-HMAC-SHA256 (240,000 rounds), never as text; a session
+is a random token whose digest alone is stored, in a cookie that is `HttpOnly`,
+`SameSite=Lax`, and `Secure` as soon as the site is served over HTTPS. Changing
+a password ends every other session.
+
+Two accounts cannot see each other. Each has its own folder of workbooks and its
+own rows in the database, and every request is filtered by the account it came
+from — the tests in `tests/test_server.py::TestPrivacy` are the ones that hold
+that down.
 
 ## Units
 
-A unit is a name and the workbook that belongs to it — Marine Structures and its
-file, another discipline and its own. Add one with **Choose file…** (your
-operating system's own dialog), give it a name, and it is remembered in
-`~/.workload_app.json`. **Switch unit** in the header puts one down and picks up
-another; each keeps its own place.
+A unit is a name and the workbook behind it — Marine Structures and its file,
+another discipline and its own. One account can hold up to twelve. **Switch
+unit** in the header puts one down and picks up another; each keeps its place.
+
+A unit starts in one of two ways:
+
+- **Start blank** — from the template that ships with the app: the whole model,
+  formulas, charts, project types, rules of credit, the scorecard and the
+  glossary, with no projects, no deliverables, no hours and generic engineer
+  names. Build `workload_app/data/template.xlsx` with
+  `python tools/build_template.py <your workbook>`.
+- **Upload** a Workload workbook you already have.
+
+The app owns the file from then on: it lives in that account's folder and is
+saved after every change, with a timestamped backup beside it. **⭳ on a unit
+downloads the workbook as it stands**, so the data is never trapped — that is
+the way to open it in Excel, and the way to take it somewhere else.
 
 ## The team
 
@@ -230,8 +257,12 @@ found later in a red cell:
   deleting part of the model.
 - The workbook is saved with a full-recalculation flag, so Excel recomputes
   everything the next time it is opened.
-- **Close the workbook in Excel before running the app.** Excel holds its own
-  copy in memory and will overwrite whatever the app wrote when you next save.
+- The app owns its copy of each workbook, so nothing you have open in Excel can
+  overwrite it. To read one in Excel, download it (⭳ on the unit); to bring
+  changes back, upload it as a unit again.
+- On a host with more than one worker process, a writer takes an exclusive lock
+  on the file and a reader that finds the file changed underneath re-reads it
+  before answering.
 
 Run with `--no-autosave` to hold changes in memory and write them only when you
 press **Save now**.
@@ -251,7 +282,11 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | Path | What it is |
 | --- | --- |
 | `workload_app/xlsx_io.py` | Reads and writes cells directly in the spreadsheet XML |
-| `workload_app/library.py` | Units: finding, checking and remembering workbooks |
+| `workload_app/accounts.py` | Accounts, passwords, sessions and each account's units |
+| `workload_app/storage.py` | Where an account's workbooks live, and the template |
+| `workload_app/app.py` | The application: routes, access, and who is asking |
+| `workload_app/service.py` | One open workbook, and every change that can be made |
+| `workload_app/library.py` | Checking that a file really is a Workload workbook |
 | `workload_app/capacity.py` | The row caps on the consolidated timesheet |
 | `workload_app/config.py` | Where every input lives — sheets, rows, columns |
 | `workload_app/workbook.py` | The registers as a domain model, and the validation |
@@ -261,7 +296,10 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
-| `workload_app/server.py` | The local HTTP server and JSON API |
+| `workload_app/server.py` | The local HTTP transport |
+| `workload_app/wsgi.py` | The transport a host uses (PythonAnywhere) |
+| `workload_app/admin.py` | Making accounts from a console |
+| `tools/build_template.py` | Building the blank workbook that ships with the app |
 | `workload_app/static/` | The single-page front end (no build step) |
 
 If the workbook is restructured, `config.py` is the file to edit — the code
@@ -281,15 +319,20 @@ last calculated, so the two stay in step.
 ## Command line
 
 ```
-python -m workload_app [-w WORKBOOK] [--host HOST] [-p PORT]
+python -m workload_app [-d DATA_DIR] [--host HOST] [-p PORT]
                        [--no-autosave] [--no-browser] [-q]
+
+python -m workload_app.admin add <username> [--admin] [--name NAME]
+python -m workload_app.admin list
+python -m workload_app.admin password <username>
+python -m workload_app.admin remove <username>
+python -m workload_app.admin import <username> <workbook.xlsx> [--name NAME]
 ```
 
-`--workbook` is optional; without it the app asks in the browser and remembers
-what you chose in `~/.workload_app.json`.
-
-The app binds to `127.0.0.1` — it is reachable only from your own machine. It
-has no authentication, so do not put it on a shared interface.
+Accounts and workbooks live in `$WORKLOAD_DATA_DIR`, or `./instance` if that is
+not set. The local server binds to `127.0.0.1`, so it is reachable only from
+your own machine; to put it on the open internet use the WSGI entry point and
+HTTPS, which is what [DEPLOY.md](DEPLOY.md) describes.
 
 ## Tests
 
@@ -307,28 +350,33 @@ themselves and say so.
 
 The suite covers the XML surgery (including that every sheet reassembles byte
 for byte and that only the intended parts of the file change), the row caps and
-what happens when they are exceeded, choosing a workbook, the validation rules,
-the import — including the stub `<dimension>` that the real export writes — and
-the arithmetic, cross-checked against the values the workbook itself last
+what happens when they are exceeded, the validation rules, the import —
+including the stub `<dimension>` that the real export writes — and the
+arithmetic, cross-checked against the values the workbook itself last
 calculated.
+
+It also covers what makes the site safe to put on the internet: that a password
+never reaches the database as text, that a session token is stored only as a
+digest, that every endpoint refuses a request with no session, that one account
+cannot open, download, rename or delete another's unit, and that the same
+application answers correctly through the WSGI entry point a host uses.
 
 ## The monthly routine
 
-1. Close the workbook in Excel.
-2. Start the app and choose the workbook.
-3. **Timesheets** — upload each engineer's export, check the summary, Replace.
+1. Sign in and open the unit.
+2. **Timesheets** — upload each engineer's export, check the summary, Replace.
    Leave "only rows for projects in the register" ticked.
-4. **Timesheets** — check the room left in the workbook. If it warns, raise the
+3. **Timesheets** — check the room left in the workbook. If it warns, raise the
    limit before going further, or the newest rows will not count.
-5. **Overview** — check the data check reads "All rows matched to an engineer",
+4. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
-6. **Projects** — open each active project and move its deliverables' steps on.
+5. **Projects** — open each active project and move its deliverables' steps on.
    **Team** — only when someone joins or leaves.
-7. **Tasks** — check who is overloaded for the weeks ahead, and let a new
+6. **Tasks** — check who is overloaded for the weeks ahead, and let a new
    deliverable date fill in its week of preparation.
-8. **Reports** — read the Dashboard and Management Review, and print whichever
+7. **Reports** — read the Dashboard and Management Review, and print whichever
    view you need for the meeting.
-9. Open the workbook itself only for `Delivery Sequence` and `Profit Plan`,
+8. Download the workbook (⭳) when you want `Delivery Sequence` or `Profit Plan`,
    which are not yet in the app.
 
 Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
@@ -349,6 +397,21 @@ Donuts are used where the question really is part-to-whole and there are few
 enough segments to read at a glance. Comparing planned against actual against
 earned is a bar chart, because that is a comparison of magnitudes, and a pie
 would make it harder to read rather than easier.
+
+## Where the data is
+
+```
+$WORKLOAD_DATA_DIR/            (or ./instance)
+├── accounts.db                accounts, sessions, and each account's units
+└── users/
+    └── 7/                     one folder per account
+        ├── 3f2b….xlsx         one workbook per unit
+        └── backups/           a timestamped copy before every write
+```
+
+That folder is the whole application state. Back it up and you have backed up
+everything; move it to another machine and everyone signs in to find their work
+where they left it. The code carries only the blank template.
 
 ## Still to come
 

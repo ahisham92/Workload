@@ -1,4 +1,8 @@
-"""Command line entry point: ``python -m workload_app``."""
+"""Command line entry point: ``python -m workload_app``.
+
+Runs the app on this machine, with the same accounts, the same login and the
+same storage as a hosted copy -- so what is tested locally is what is deployed.
+"""
 
 from __future__ import annotations
 
@@ -8,22 +12,23 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from . import __version__, config as cfg, library
-from .library import NotAWorkbook
+from . import __version__
 from .server import make_server
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="workload_app",
         description=(
-            "Enter timesheets, projects and deliverables into the Workload & "
-            "Profit Plan workbook without touching the spreadsheet by hand."
+            "Enter timesheets, projects, deliverables and tasks into the "
+            "Workload & Profit Plan workbook without touching the spreadsheet "
+            "by hand."
         ),
     )
     parser.add_argument(
-        "-w", "--workbook", type=Path, default=None,
-        help="path to your Workload workbook; omit it and the app opens a "
-             "chooser in the browser",
+        "-d", "--data-dir", type=Path, default=None,
+        help="where accounts and workbooks live "
+             "(default: $WORKLOAD_DATA_DIR, else ./instance)",
     )
     parser.add_argument("--host", default="127.0.0.1",
                         help="interface to listen on (default: 127.0.0.1)")
@@ -45,31 +50,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
-    workbook = None
-    if args.workbook is not None:
-        try:
-            workbook = library.validate(args.workbook)
-        except NotAWorkbook as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-
     try:
-        server = make_server(workbook, args.host, args.port,
+        server = make_server(args.data_dir, args.host, args.port,
                              autosave=not args.no_autosave, quiet=args.quiet)
     except OSError as exc:
         print(f"error: cannot listen on {args.host}:{args.port} ({exc})",
               file=sys.stderr)
         return 2
 
+    app = server.app                                 # type: ignore[attr-defined]
     url = f"http://{args.host}:{args.port}/"
-    print(f"Workload input app {__version__}")
-    if workbook is None:
-        print("  workbook : none yet — choose one in the browser")
-    else:
-        print(f"  workbook : {workbook}")
-        print(f"  backups  : {workbook.parent / cfg.BACKUP_DIRNAME}")
+    print(f"Workload {__version__}")
+    print(f"  data     : {app.data_dir}")
     print(f"  autosave : {'on' if not args.no_autosave else 'off'}")
     print(f"  open     : {url}")
+    if app.accounts.user_count() == 0:
+        print()
+        print("  There are no accounts yet, so nobody can sign in. Make one:")
+        print("    python -m workload_app.admin add <username> --admin")
+        print()
     print("Press Ctrl+C to stop.")
 
     if not args.no_browser:
@@ -79,10 +78,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
-        service = server.service                     # type: ignore[attr-defined]
-        result = service.save()
-        if result.get("saved"):
-            print(f"Saved pending changes to {service.path}")
+        app.close_all()
         server.server_close()
     return 0
 
