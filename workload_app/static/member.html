@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My workload</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark">W</span>
+    <div class="brand-text">
+      <h1 id="member-name">My workload</h1>
+      <p id="member-unit" class="muted"></p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <label class="field inline">
+      <span>Unit</span>
+      <select id="member-unit-select"></select>
+    </label>
+    <label class="field inline">
+      <span>Year</span>
+      <select id="member-year"></select>
+    </label>
+    <button id="btn-print" class="btn btn-sm" type="button">Print</button>
+    <button id="btn-password" class="btn btn-sm" type="button">Password</button>
+    <button id="btn-signout" class="btn btn-sm" type="button">Sign out</button>
+  </div>
+</header>
+
+<main id="member-main">
+  <div class="view-head">
+    <div>
+      <h2 id="member-title">My workload</h2>
+      <p class="muted" id="member-sub">Your own figures for the year chosen on the right. Nothing here can be changed from this account.</p>
+    </div>
+  </div>
+
+  <div id="member-message"></div>
+  <div id="member-cards" class="cards"></div>
+
+  <section class="panel">
+    <h3>My projects</h3>
+    <p class="muted">The projects you hold a share of, or booked time to. Budget, planned, actual and earned are your share of each one.</p>
+    <div id="member-projects"></div>
+  </section>
+
+  <div class="split">
+    <section class="panel">
+      <h3>My month by month</h3>
+      <p class="muted">Effort and value in each finished month of the year.</p>
+      <div id="member-months"></div>
+    </section>
+    <section class="panel">
+      <h3>My timesheet</h3>
+      <div id="member-timesheet"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h3>My tasks</h3>
+    <p class="muted">Tasks with your name on them. A shared task shows your share of its hours.</p>
+    <div id="member-tasks"></div>
+  </section>
+
+  <details class="panel" id="member-definitions-panel">
+    <summary><b>What these measures mean</b></summary>
+    <div id="member-definitions"></div>
+  </details>
+</main>
+
+<div class="modal-backdrop" id="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h3 id="modal-title">Change password</h3>
+      <button class="btn btn-ghost" id="modal-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <form id="modal-form" class="modal-body"></form>
+    <div class="modal-foot">
+      <div id="modal-errors" class="errors"></div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="modal-cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="modal-submit" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="member.js"></script>
+</body>
+</html>

@@ -43,6 +43,15 @@ It asks for a password twice, or generates one if you press Enter. Write it
 down — it cannot be read back. Later accounts can be made from the app's own
 **Accounts** panel, or with the same command.
 
+Accounts come in two kinds. A **manager** runs a team: they own units and edit
+them. A **team member** signs in to a read-only page of their own figures, and
+is given that by their manager from the **Team** tab (*Give access* beside an
+engineer). To make one from the console instead:
+
+```bash
+python -m workload_app.admin add osama --member
+```
+
 ## 3. Create the web app
 
 On the **Web** tab:
@@ -74,6 +83,7 @@ from workload_app.wsgi import application       # noqa: E402,F401
    | --- | --- |
    | `/app.css` | `/home/<you>/Workload/workload_app/static/app.css` |
    | `/app.js` | `/home/<you>/Workload/workload_app/static/app.js` |
+   | `/member.js` | `/home/<you>/Workload/workload_app/static/member.js` |
    | `/charts.js` | `/home/<you>/Workload/workload_app/static/charts.js` |
 
 6. **Force HTTPS**: on. The session cookie is marked `Secure` as soon as the

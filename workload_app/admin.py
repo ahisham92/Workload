@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--name", default="", help="the name shown in the app")
     add.add_argument("--admin", action="store_true",
                      help="may create and remove other accounts")
+    add.add_argument("--member", action="store_true",
+                     help="a read-only team member account, given sight of one "
+                          "engineer by their manager")
     add.add_argument("--password", default=None,
                      help="omit to be asked, or to have one generated")
 
@@ -76,10 +79,13 @@ def _add(db: Accounts, data_dir: Path, args) -> int:
     generated = password is None
     if generated:
         password = accounts_module.generated_password()
+    role = accounts_module.ROLE_MEMBER if args.member else accounts_module.ROLE_MANAGER
     user = db.create_user(args.username, password, display_name=args.name,
-                          is_admin=args.admin)
-    print(f"Created {user['username']}"
-          + (" (administrator)" if user["is_admin"] else ""))
+                          is_admin=args.admin, role=role)
+    print(f"Created {user['username']} ({user['role']})"
+          + (", administrator" if user["is_admin"] else ""))
+    if user["role"] == accounts_module.ROLE_MEMBER:
+        print("  A manager gives them sight of one engineer from their Team tab.")
     if generated:
         print(f"  password: {password}")
         print("  Write it down now; it cannot be read back.")
@@ -94,7 +100,7 @@ def _list(db: Accounts, data_dir: Path, args) -> int:
     width = max(len(u["username"]) for u in users)
     for user in users:
         marker = "admin" if user["is_admin"] else "     "
-        print(f"{user['username']:<{width}}  {marker}  "
+        print(f"{user['username']:<{width}}  {user['role']:<7}  {marker}  "
               f"{user['units'] or 0} unit(s)  last seen {user['last_seen'] or 'never'}")
     return 0
 

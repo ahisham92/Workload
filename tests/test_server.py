@@ -566,9 +566,16 @@ class TestCapacityEndpoint:
         assert body["capacity"]["low_headroom"] is False
         assert body["helper_rows_added"] == 4000
 
-    def test_it_defaults_to_the_suggested_limit(self, server):
+    def test_the_suggestion_is_25000_entries(self, server):
+        # What the button offers, without paying the minute it takes to do it:
+        # raising the consolidated limit rewrites 138,000 formulas.
+        _status, body = call(server, "/api/timesheets")
+        assert body["capacity"]["suggested_raw_last_row"] == 25000
+
+    def test_it_defaults_to_that_suggestion(self, server):
         status, body = call(server, "/api/timesheets/capacity", "POST", {})
-        assert status == 200 and body["raw_last_row"] == 12000
+        assert status == 200 and body["raw_last_row"] == 25000
+        assert body["capacity"]["total_capacity"] == 24997
 
     def test_an_impossible_limit_is_refused(self, server):
         status, body = call(server, "/api/timesheets/capacity", "POST",

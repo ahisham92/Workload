@@ -25,8 +25,9 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import accounts as accounts_module, storage
-from .accounts import AccountError, Accounts
+from . import accounts as accounts_module, member as member_view, storage
+from .accounts import (AccountError, Accounts, ROLE_MANAGER,
+                       ROLE_MEMBER)
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
 from .tasks import TaskError
@@ -77,8 +78,12 @@ class Context:
 
 
 Handler = Callable[..., Any]
-#: ``(method, pattern, handler, access)`` where access is one of
-#: ``public`` (no account), ``user`` (any account) or ``admin``.
+#: ``(method, pattern, handler, access)`` where access is one of ``public``
+#: (no account), ``user`` (any account), ``manager`` (an account that owns
+#: units and may change them) or ``admin`` (an account that makes accounts).
+#: A team member reaches only the ``user`` routes and their own read-only view,
+#: which is what makes their account read-only: not a hidden button, a missing
+#: route.
 Route = Tuple[str, str, Handler, str]
 
 
@@ -163,6 +168,11 @@ class WorkloadApp:
             if access == "admin" and not ctx.user["is_admin"]:
                 raise ApiError(HTTPStatus.FORBIDDEN,
                                "That is for administrators.")
+            if access == "manager" and ctx.user["role"] != ROLE_MANAGER:
+                raise ApiError(
+                    HTTPStatus.FORBIDDEN,
+                    "Your account can see your own work, and nothing else can "
+                    "be changed from it.")
             ctx.service = self.service_for(ctx.user["id"])
             ctx.service.refresh()
         return Response.json(HTTPStatus.OK,
@@ -174,12 +184,18 @@ class WorkloadApp:
         self._authenticate(request, ctx)
         name = "index.html" if request.path in ("/", "") else request.path.lstrip("/")
         # The app shell is behind the login: an unknown visitor is given the
-        # sign-in page and nothing else.
-        if name in ("index.html", "") and ctx.user is None:
-            name = "login.html"
+        # sign-in page and nothing else, and a team member is given their own
+        # page rather than the manager's, which they could not use anyway.
+        if name in ("index.html", ""):
+            if ctx.user is None:
+                name = "login.html"
+            elif ctx.user["role"] == ROLE_MEMBER:
+                name = "member.html"
         if name == "login.html" and ctx.user is not None:
             return Response(HTTPStatus.SEE_OTHER, b"",
                             "text/plain; charset=utf-8", [("Location", "/")])
+        if name == "index.html" and ctx.user and ctx.user["role"] == ROLE_MEMBER:
+            name = "member.html"
         target = (STATIC_DIR / name).resolve()
         if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.is_file():
             return Response(HTTPStatus.NOT_FOUND, b"Not found",
@@ -275,7 +291,8 @@ class WorkloadApp:
         user = self.accounts.create_user(
             body.get("username", ""), password,
             display_name=body.get("display_name", ""),
-            is_admin=bool(body.get("is_admin")))
+            is_admin=bool(body.get("is_admin")),
+            role=body.get("role") or ROLE_MANAGER)
         # The password is shown once, here, because nobody can read it back.
         return {"user": user,
                 "password": password if generated else None}
@@ -312,6 +329,26 @@ class WorkloadApp:
 
     def units(self, ctx: Context, query, body) -> Dict[str, Any]:
         user_id = ctx.user["id"]
+        if ctx.user["role"] == ROLE_MEMBER:
+            # A member owns nothing; they see what a manager has shown them.
+            return {
+                "units": [
+                    {
+                        "id": row["unit_id"],
+                        "name": row["unit_name"],
+                        "engineer": row["engineer"],
+                        "manager": row["owner_name"] or "",
+                        "opened_at": row["created_at"],
+                        "exists": storage.unit_path(
+                            self.data_dir, row["owner_id"],
+                            row["filename"]).is_file(),
+                    }
+                    for row in self.accounts.memberships(user_id)
+                ],
+                "limit": 0,
+                "read_only": True,
+                "template_available": False,
+            }
         out = []
         for unit in self.accounts.units(user_id):
             path = storage.unit_path(self.data_dir, user_id, unit["filename"])
@@ -429,6 +466,137 @@ class WorkloadApp:
             "content_base64": base64.b64encode(data).decode("ascii"),
         }
 
+    # ------------------------------------------------------------------
+    # a team member's own page
+    # ------------------------------------------------------------------
+
+    def my_view(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """One engineer's own figures, and nothing else in the unit.
+
+        The permission is a row in ``memberships``; without one this answers
+        Not Found, and with one it answers only what :mod:`member` builds.
+        """
+        user_id = ctx.user["id"]
+        granted = self.accounts.memberships(user_id)
+        if not granted:
+            raise ApiError(
+                HTTPStatus.NOT_FOUND,
+                "No unit has been shared with you yet. Your manager can do "
+                "that from their Team tab.")
+
+        wanted = (query.get("unit") or [None])[0]
+        row = next((g for g in granted if g["unit_id"] == wanted), granted[0])
+        path = storage.unit_path(self.data_dir, row["owner_id"], row["filename"])
+        if not path.is_file():
+            raise ApiError(HTTPStatus.NOT_FOUND,
+                           "That workbook is not there any more.")
+
+        service = ctx.service
+        if service.path != path or not service.read_only:
+            service.open(path, unit={"id": row["unit_id"],
+                                     "name": row["unit_name"]},
+                         read_only=True)
+
+        kind = (query.get("period") or ["year"])[0]
+        data = member_view.build(
+            service.workbook, row["engineer"], kind=kind, year=_year(query),
+            quarter=(query.get("quarter") or [None])[0])
+        data["unit"] = {"id": row["unit_id"], "name": row["unit_name"],
+                        "manager": row.get("owner_name") or ""}
+        data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
+                          "engineer": g["engineer"]} for g in granted]
+        return data
+
+    # ------------------------------------------------------------------
+    # who on the team has an account
+    # ------------------------------------------------------------------
+
+    def team_access(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {
+            "unit": {"id": unit["id"], "name": unit["name"]},
+            "members": self.accounts.unit_members(unit["id"]),
+            "engineers": ctx.service.workbook.engineer_names(),
+        }
+
+    def grant_access(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """Give one person a read-only account for their own figures."""
+        unit = self._open_unit_or_refuse(ctx)
+        engineer = str(body.get("engineer") or "").strip()
+        if engineer not in ctx.service.workbook.engineer_names():
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           f"{engineer!r} is not on this unit's team.")
+
+        username = str(body.get("username") or "").strip().lower()
+        existing = next((u for u in self.accounts.users()
+                         if u["username"] == accounts_module.clean_username(username)),
+                        None) if username else None
+
+        password = None
+        if existing is None:
+            password = (body.get("password") or "").strip() \
+                or accounts_module.generated_password()
+            user = self.accounts.create_user(
+                username, password, display_name=body.get("display_name") or engineer,
+                role=ROLE_MEMBER)
+        else:
+            if existing["role"] != ROLE_MEMBER:
+                raise ApiError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    f"{existing['username']} is a manager account; a manager "
+                    f"cannot also be given one person's view.")
+            user = existing
+
+        self.accounts.grant(user_id=user["id"], unit_id=unit["id"],
+                            engineer=engineer, granted_by=ctx.user["id"])
+        return {"user": user, "engineer": engineer,
+                "password": password}          # shown once, never stored
+
+    def revoke_access(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        target = int(user_id)
+        if self.accounts.membership(target, unit["id"]) is None:
+            raise ApiError(HTTPStatus.NOT_FOUND,
+                           "That account has no access to this unit.")
+        self.accounts.revoke(user_id=target, unit_id=unit["id"])
+        self._services.pop(target, None)
+        return {"revoked": target}
+
+    def update_engineer(self, ctx: Context, query, body, name) -> Dict[str, Any]:
+        """Rename or re-rate an engineer, and keep any access in step."""
+        result = ctx.service.update_engineer(name, body)
+        unit = ctx.service.unit
+        renamed = result.get("engineer") or name
+        if unit and renamed != name:
+            # Otherwise a rename would quietly cut that person off from their
+            # own page, which looks exactly like a bug to them.
+            self.accounts.rename_engineer_in_memberships(unit["id"], name, renamed)
+        return result
+
+    def remove_engineer(self, ctx: Context, query, body, name) -> Dict[str, Any]:
+        """Remove an engineer, and with them any access given in their name."""
+        result = ctx.service.remove_engineer(name)
+        unit = ctx.service.unit
+        if unit:
+            for row in self.accounts.unit_members(unit["id"]):
+                if row["engineer"] == name:
+                    self.accounts.revoke(user_id=row["user_id"],
+                                         unit_id=unit["id"])
+                    self._services.pop(row["user_id"], None)
+                    result.setdefault("access_revoked", []).append(row["username"])
+        return result
+
+    def _open_unit_or_refuse(self, ctx: Context) -> Dict[str, Any]:
+        """The unit this manager has open, or a plain refusal."""
+        unit = ctx.service.unit if ctx.service else None
+        if not unit:
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "Open the unit first; access is given per unit.")
+        owned = self.accounts.unit(ctx.user["id"], unit["id"])
+        if owned is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        return owned
+
     def _check_room(self, user_id: int) -> None:
         if len(self.accounts.units(user_id)) >= storage.MAX_UNITS_PER_USER:
             raise ApiError(
@@ -461,93 +629,97 @@ class WorkloadApp:
             ("POST", "/api/admin/users/{}/admin", self.set_admin, "admin"),
             ("DELETE", "/api/admin/users/{}", self.delete_user, "admin"),
 
+            # -- a team member's own page, which is all they can reach
+            ("GET", "/api/me", self.my_view, "user"),
+
             # -- this account's units
             ("GET", "/api/units", self.units, "user"),
-            ("POST", "/api/units", self.create_unit, "user"),
-            ("POST", "/api/units/upload", self.upload_unit, "user"),
-            ("POST", "/api/units/{}/open", self.open_unit, "user"),
-            ("PUT", "/api/units/{}", self.rename_unit, "user"),
-            ("DELETE", "/api/units/{}", self.delete_unit, "user"),
-            ("GET", "/api/units/{}/download", self.download_unit, "user"),
+            ("POST", "/api/units", self.create_unit, "manager"),
+            ("POST", "/api/units/upload", self.upload_unit, "manager"),
+            ("POST", "/api/units/{}/open", self.open_unit, "manager"),
+            ("PUT", "/api/units/{}", self.rename_unit, "manager"),
+            ("DELETE", "/api/units/{}", self.delete_unit, "manager"),
+            ("GET", "/api/units/{}/download", self.download_unit, "manager"),
             ("POST", "/api/units/close",
-             lambda ctx, q, b: ctx.service.close(), "user"),
+             lambda ctx, q, b: ctx.service.close(), "manager"),
 
             # -- the workbook that account has open
-            ("GET", "/api/status", lambda ctx, q, b: ctx.service.status(), "user"),
-            ("GET", "/api/reference", lambda ctx, q, b: ctx.service.reference(), "user"),
+            ("GET", "/api/status", lambda ctx, q, b: ctx.service.status(), "manager"),
+            ("GET", "/api/reference", lambda ctx, q, b: ctx.service.reference(), "manager"),
             ("POST", "/api/reference/unlock",
-             lambda ctx, q, b: ctx.service.unlock(b.get("password", "")), "user"),
+             lambda ctx, q, b: ctx.service.unlock(b.get("password", "")), "manager"),
             ("POST", "/api/reference/lock",
-             lambda ctx, q, b: ctx.service.lock(), "user"),
+             lambda ctx, q, b: ctx.service.lock(), "manager"),
             ("PUT", "/api/reference",
-             lambda ctx, q, b: ctx.service.save_reference(b), "user"),
+             lambda ctx, q, b: ctx.service.save_reference(b), "manager"),
             ("GET", "/api/overview",
-             lambda ctx, q, b: ctx.service.overview(_year(q)), "user"),
-            ("GET", "/api/projects", lambda ctx, q, b: ctx.service.projects(), "user"),
+             lambda ctx, q, b: ctx.service.overview(_year(q)), "manager"),
+            ("GET", "/api/projects", lambda ctx, q, b: ctx.service.projects(), "manager"),
             ("POST", "/api/projects",
-             lambda ctx, q, b: ctx.service.add_project(b), "user"),
+             lambda ctx, q, b: ctx.service.add_project(b), "manager"),
             ("PUT", "/api/projects/{}",
-             lambda ctx, q, b, number: ctx.service.update_project(number, b), "user"),
+             lambda ctx, q, b, number: ctx.service.update_project(number, b), "manager"),
             ("DELETE", "/api/projects/{}",
              lambda ctx, q, b, number: ctx.service.delete_project(
-                 number, _flag(q, "cascade")), "user"),
+                 number, _flag(q, "cascade")), "manager"),
             ("GET", "/api/deliverables",
-             lambda ctx, q, b: ctx.service.deliverables(), "user"),
+             lambda ctx, q, b: ctx.service.deliverables(), "manager"),
             ("GET", "/api/projects/{}",
-             lambda ctx, q, b, number: ctx.service.project_detail(number), "user"),
+             lambda ctx, q, b, number: ctx.service.project_detail(number), "manager"),
             ("POST", "/api/projects/full",
              lambda ctx, q, b: ctx.service.save_project_with_deliverables(None, b),
-             "user"),
+             "manager"),
             ("PUT", "/api/projects/{}/full",
              lambda ctx, q, b, number: ctx.service.save_project_with_deliverables(
-                 number, b), "user"),
+                 number, b), "manager"),
             ("POST", "/api/deliverables",
-             lambda ctx, q, b: ctx.service.add_deliverable(b), "user"),
+             lambda ctx, q, b: ctx.service.add_deliverable(b), "manager"),
             ("PUT", "/api/deliverables/{}",
              lambda ctx, q, b, row: ctx.service.update_deliverable(_int(row), b),
-             "user"),
+             "manager"),
             ("DELETE", "/api/deliverables/{}",
-             lambda ctx, q, b, row: ctx.service.delete_deliverable(_int(row)), "user"),
-            ("GET", "/api/team", lambda ctx, q, b: ctx.service.team(), "user"),
-            ("POST", "/api/team", lambda ctx, q, b: ctx.service.add_engineer(b), "user"),
-            ("PUT", "/api/team/{}",
-             lambda ctx, q, b, name: ctx.service.update_engineer(name, b), "user"),
-            ("DELETE", "/api/team/{}",
-             lambda ctx, q, b, name: ctx.service.remove_engineer(name), "user"),
+             lambda ctx, q, b, row: ctx.service.delete_deliverable(_int(row)), "manager"),
+            ("GET", "/api/team", lambda ctx, q, b: ctx.service.team(), "manager"),
+            ("GET", "/api/team/access", self.team_access, "manager"),
+            ("POST", "/api/team/access", self.grant_access, "manager"),
+            ("DELETE", "/api/team/access/{}", self.revoke_access, "manager"),
+            ("POST", "/api/team", lambda ctx, q, b: ctx.service.add_engineer(b), "manager"),
+            ("PUT", "/api/team/{}", self.update_engineer, "manager"),
+            ("DELETE", "/api/team/{}", self.remove_engineer, "manager"),
             ("GET", "/api/reports",
              lambda ctx, q, b: ctx.service.reports(
                  q.get("period", ["year"])[0], _year(q),
-                 q.get("quarter", [None])[0]), "user"),
-            ("GET", "/api/tasks", lambda ctx, q, b: ctx.service.tasks(), "user"),
-            ("POST", "/api/tasks", lambda ctx, q, b: ctx.service.add_task(b), "user"),
+                 q.get("quarter", [None])[0]), "manager"),
+            ("GET", "/api/tasks", lambda ctx, q, b: ctx.service.tasks(), "manager"),
+            ("POST", "/api/tasks", lambda ctx, q, b: ctx.service.add_task(b), "manager"),
             ("PUT", "/api/tasks/settings",
-             lambda ctx, q, b: ctx.service.save_task_settings(b), "user"),
+             lambda ctx, q, b: ctx.service.save_task_settings(b), "manager"),
             ("POST", "/api/tasks/series/delete",
-             lambda ctx, q, b: ctx.service.delete_task_series(b), "user"),
+             lambda ctx, q, b: ctx.service.delete_task_series(b), "manager"),
             ("POST", "/api/tasks/generate/submissions",
-             lambda ctx, q, b: ctx.service.generate_submission_tasks(b), "user"),
+             lambda ctx, q, b: ctx.service.generate_submission_tasks(b), "manager"),
             ("POST", "/api/tasks/generate/meetings",
-             lambda ctx, q, b: ctx.service.generate_weekly_meetings(b), "user"),
+             lambda ctx, q, b: ctx.service.generate_weekly_meetings(b), "manager"),
             ("PUT", "/api/tasks/{}",
              lambda ctx, q, b, task_id: ctx.service.update_task(_int(task_id), b),
-             "user"),
+             "manager"),
             ("DELETE", "/api/tasks/{}",
              lambda ctx, q, b, task_id: ctx.service.delete_task(_int(task_id)),
-             "user"),
+             "manager"),
             ("GET", "/api/timesheets",
-             lambda ctx, q, b: ctx.service.timesheet_status(), "user"),
+             lambda ctx, q, b: ctx.service.timesheet_status(), "manager"),
             ("POST", "/api/timesheets/stage",
-             lambda ctx, q, b: _stage(ctx.service, b), "user"),
+             lambda ctx, q, b: _stage(ctx.service, b), "manager"),
             ("POST", "/api/timesheets/apply",
              lambda ctx, q, b: ctx.service.apply_timesheet(
-                 b.get("token", ""), b.get("mode", "replace")), "user"),
+                 b.get("token", ""), b.get("mode", "replace")), "manager"),
             ("POST", "/api/timesheets/capacity",
-             lambda ctx, q, b: ctx.service.extend_capacity(b), "user"),
+             lambda ctx, q, b: ctx.service.extend_capacity(b), "manager"),
             ("POST", "/api/timesheets/discard",
              lambda ctx, q, b: ctx.service.discard_timesheet(b.get("token", "")),
-             "user"),
-            ("POST", "/api/save", lambda ctx, q, b: ctx.service.save(), "user"),
-            ("POST", "/api/reload", lambda ctx, q, b: ctx.service.reload(), "user"),
+             "manager"),
+            ("POST", "/api/save", lambda ctx, q, b: ctx.service.save(), "manager"),
+            ("POST", "/api/reload", lambda ctx, q, b: ctx.service.reload(), "manager"),
         ]
 
 

@@ -26,16 +26,37 @@ app with Ctrl+C.
 
 Every visitor signs in, and an account sees only its own work. There is no
 public sign-up: an administrator makes each account, from the **Accounts**
-panel in the app or with `python -m workload_app.admin add`. Passwords are
-stored as salted PBKDF2-HMAC-SHA256 (240,000 rounds), never as text; a session
-is a random token whose digest alone is stored, in a cookie that is `HttpOnly`,
-`SameSite=Lax`, and `Secure` as soon as the site is served over HTTPS. Changing
-a password ends every other session.
+panel in the app or with `python -m workload_app.admin add`.
 
-Two accounts cannot see each other. Each has its own folder of workbooks and its
-own rows in the database, and every request is filtered by the account it came
-from — the tests in `tests/test_server.py::TestPrivacy` are the ones that hold
-that down.
+There are two kinds:
+
+**A manager** runs a team. They create units, upload or start a workbook, enter
+timesheets, projects, deliverables and tasks, and read every report. This is
+the account the site starts with.
+
+**A team member** — Osama, Kirolos — signs in to **one page: their own**. Their
+man-months, their earned value, their CPI and utilisation, the projects they
+hold a share of, their own timesheet rows, their own tasks. Nobody else's name,
+score or hours is in what the server sends them, and there is nothing on the
+page to press: a member account has no write route anywhere in the app, and no
+read route into the rest of the unit either. It is not a hidden button, it is a
+missing route, and `tests/test_roles.py` is a list of the things a member
+account is refused.
+
+A manager gives someone that access from the **Team** tab: *Give access* beside
+an engineer creates their sign-in (with a password shown once) and points it at
+that person. Renaming the engineer keeps the access pointed at them; removing
+the engineer takes the access away with them.
+
+Passwords are stored as salted PBKDF2-HMAC-SHA256 (240,000 rounds), never as
+text; a session is a random token whose digest alone is stored, in a cookie that
+is `HttpOnly`, `SameSite=Lax`, and `Secure` as soon as the site is served over
+HTTPS. Changing a password ends every other session.
+
+Two accounts cannot see each other. Each manager has their own folder of
+workbooks and their own rows in the database, and every request is filtered by
+the account it came from — the tests in `tests/test_server.py::TestPrivacy` are
+the ones that hold that down.
 
 ## Units
 
@@ -228,11 +249,12 @@ somebody had to find. The Timesheets tab shows how much room is left against
 both limits and warns before either runs out.
 
 Raising the consolidated limit is the heavier of the two, and stays a decision:
-it rewrites every one of those 138,000 references and extends the per-row
-helper formulas to match, and two of those helper columns cost roughly the
-square of the limit to recalculate. So the app suggests a few years of headroom
-rather than the maximum — and importing only registered work is usually the
-cheaper fix.
+it rewrites every one of those 138,000 references and extends the per-row helper
+formulas to match, which takes about a minute. **The button raises it to 25,000
+as well**, so afterwards the whole timesheet has one limit rather than two —
+about a decade of work for a team this size. Excel then takes a little longer to
+recalculate the file, which is the reason it is a button rather than something
+the app does on its own.
 
 ## Rules it enforces
 
@@ -294,6 +316,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
+| `workload_app/member.py` | What one engineer is allowed to see of their unit |
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/server.py` | The local HTTP transport |
@@ -322,7 +345,7 @@ last calculated, so the two stay in step.
 python -m workload_app [-d DATA_DIR] [--host HOST] [-p PORT]
                        [--no-autosave] [--no-browser] [-q]
 
-python -m workload_app.admin add <username> [--admin] [--name NAME]
+python -m workload_app.admin add <username> [--admin] [--member] [--name NAME]
 python -m workload_app.admin list
 python -m workload_app.admin password <username>
 python -m workload_app.admin remove <username>

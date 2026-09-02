@@ -34,6 +34,13 @@ SESSION_DAYS = 14
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,31}$")
 MIN_PASSWORD = 10
 
+#: What an account is for.  A manager owns units and edits them; a member is
+#: given sight of one engineer's own figures in one unit, and can change
+#: nothing at all.  An administrator is a manager who may also make accounts.
+ROLE_MANAGER = "manager"
+ROLE_MEMBER = "member"
+ROLES = [ROLE_MANAGER, ROLE_MEMBER]
+
 
 class AccountError(ValueError):
     """Something an administrator or a visitor did that cannot be accepted."""
@@ -52,6 +59,7 @@ CREATE TABLE IF NOT EXISTS users (
     salt          BLOB NOT NULL,
     iterations    INTEGER NOT NULL,
     is_admin      INTEGER NOT NULL DEFAULT 0,
+    role          TEXT NOT NULL DEFAULT 'manager',
     created_at    TEXT NOT NULL,
     last_seen     TEXT
 );
@@ -74,6 +82,18 @@ CREATE TABLE IF NOT EXISTS units (
     UNIQUE (user_id, name)
 );
 CREATE INDEX IF NOT EXISTS units_user ON units(user_id);
+
+-- Which engineer, in which unit, a member account is allowed to see.  One row
+-- per person per unit; the unit's own row says whose workbook it is.
+CREATE TABLE IF NOT EXISTS memberships (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id    TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+    engineer   TEXT NOT NULL,
+    granted_by INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, unit_id)
+);
+CREATE INDEX IF NOT EXISTS memberships_unit ON memberships(unit_id);
 """
 
 
@@ -89,6 +109,17 @@ class Accounts:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(SCHEMA)
+            self._migrate(db)
+
+    @staticmethod
+    def _migrate(db: sqlite3.Connection) -> None:
+        """Bring a database made before roles existed up to date."""
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+        if "role" not in columns:
+            # Everyone who already had an account was a manager by definition:
+            # they were the only kind there was.
+            db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL "
+                       "DEFAULT 'manager'")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
@@ -118,20 +149,24 @@ class Accounts:
         return _public_user(row) if row else None
 
     def create_user(self, username: str, password: str, *,
-                    display_name: str = "", is_admin: bool = False
-                    ) -> Dict[str, Any]:
+                    display_name: str = "", is_admin: bool = False,
+                    role: str = ROLE_MANAGER) -> Dict[str, Any]:
         username = clean_username(username)
         check_password(password, username)
+        if role not in ROLES:
+            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        if is_admin and role != ROLE_MANAGER:
+            raise AccountError("Only a manager account can be an administrator.")
         salt = secrets.token_bytes(SALT_BYTES)
         digest = _hash(password, salt, ITERATIONS)
         try:
             with self._connect() as db:
                 cursor = db.execute(
                     "INSERT INTO users (username, display_name, password_hash, "
-                    "salt, iterations, is_admin, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "salt, iterations, is_admin, role, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (username, (display_name or "").strip(), digest, salt,
-                     ITERATIONS, 1 if is_admin else 0, now()),
+                     ITERATIONS, 1 if is_admin else 0, role, now()),
                 )
                 user_id = cursor.lastrowid
         except sqlite3.IntegrityError:
@@ -157,6 +192,13 @@ class Accounts:
 
     def set_admin(self, user_id: int, is_admin: bool) -> None:
         with self._connect() as db:
+            row = db.execute("SELECT role FROM users WHERE id = ?",
+                             (user_id,)).fetchone()
+            if is_admin and row and row["role"] != ROLE_MANAGER:
+                raise AccountError(
+                    "A team member account cannot manage accounts. Make it a "
+                    "manager first."
+                )
             if not is_admin and self._other_admins(db, user_id) == 0:
                 raise AccountError(
                     "That is the only administrator; make someone else one first."
@@ -306,6 +348,83 @@ class Accounts:
         return unit
 
 
+    # -- memberships -----------------------------------------------------
+    #
+    # A member account sees one engineer, in one unit, and only what belongs to
+    # that engineer.  The row below is the whole of that permission: no row, no
+    # sight of anything.
+
+    def grant(self, *, user_id: int, unit_id: str, engineer: str,
+              granted_by: Optional[int] = None) -> Dict[str, Any]:
+        engineer = str(engineer or "").strip()
+        if not engineer:
+            raise AccountError("Say which engineer this account is.")
+        with self._connect() as db:
+            row = db.execute("SELECT role FROM users WHERE id = ?",
+                             (user_id,)).fetchone()
+            if row is None:
+                raise AccountError("That account no longer exists.")
+            if row["role"] != ROLE_MEMBER:
+                raise AccountError(
+                    "Only a team member account can be given one person's view. "
+                    "A manager already sees the whole unit."
+                )
+            db.execute(
+                "INSERT INTO memberships (user_id, unit_id, engineer, "
+                "granted_by, created_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, unit_id) DO UPDATE SET engineer = ?",
+                (user_id, unit_id, engineer, granted_by, now(), engineer),
+            )
+        return {"user_id": user_id, "unit_id": unit_id, "engineer": engineer}
+
+    def revoke(self, *, user_id: int, unit_id: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM memberships WHERE user_id = ? AND unit_id = ?",
+                       (user_id, unit_id))
+
+    def membership(self, user_id: int, unit_id: str) -> Optional[Dict[str, Any]]:
+        """The permission itself, with the unit it points at."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT m.*, u.name AS unit_name, u.filename, u.user_id AS owner_id "
+                "FROM memberships m JOIN units u ON u.id = m.unit_id "
+                "WHERE m.user_id = ? AND m.unit_id = ?",
+                (user_id, unit_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def memberships(self, user_id: int) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT m.*, u.name AS unit_name, u.filename, u.user_id AS owner_id, "
+                "o.display_name AS owner_name "
+                "FROM memberships m JOIN units u ON u.id = m.unit_id "
+                "JOIN users o ON o.id = u.user_id "
+                "WHERE m.user_id = ? ORDER BY u.name",
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def unit_members(self, unit_id: str) -> List[Dict[str, Any]]:
+        """Who has been given sight of this unit, and as whom."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT m.engineer, m.created_at, u.id AS user_id, u.username, "
+                "u.display_name, u.last_seen "
+                "FROM memberships m JOIN users u ON u.id = m.user_id "
+                "WHERE m.unit_id = ? ORDER BY u.username",
+                (unit_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def rename_engineer_in_memberships(self, unit_id: str, old: str,
+                                       new: str) -> None:
+        """Follow a rename on the Team tab, so access is not silently lost."""
+        with self._connect() as db:
+            db.execute("UPDATE memberships SET engineer = ? "
+                       "WHERE unit_id = ? AND engineer = ?", (new, unit_id, old))
+
+
 # --------------------------------------------------------------------------
 # the small print
 # --------------------------------------------------------------------------
@@ -327,6 +446,7 @@ def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
         "username": row["username"],
         "display_name": row["display_name"] or row["username"],
         "is_admin": bool(row["is_admin"]),
+        "role": row["role"] if "role" in row.keys() else ROLE_MANAGER,
         "created_at": row["created_at"],
         "last_seen": row["last_seen"],
         "units": row["units"] if "units" in row.keys() else None,
