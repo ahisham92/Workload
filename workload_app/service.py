@@ -457,8 +457,12 @@ class WorkloadService:
                     "Mode must be 'replace' (the monthly routine) or 'append'.",
                 )
             wb = self.workbook
+            # Make room before writing: a row past the limit is on the sheet
+            # but reaches nothing, and that is the one failure nobody sees.
+            room = wb.ensure_room_for(parsed.engineer, len(rows))
             result = wb.replace_timesheet(parsed.engineer, rows)
             result["mode"] = mode
+            result["capacity_raised"] = room if room.get("raised") else None
             result["save"] = self._commit()
             result["data_check"] = wb.data_check()
             return result

@@ -137,15 +137,26 @@ def report(wb: Workbook, rows_per_engineer: Dict[str, int],
 
 
 def suggest_raw_last_row(rows_used: int, current: int) -> int:
-    """Raise it once, to the same 25,000 the stack reads from each sheet.
+    """Where the limit should be for a timesheet of this size.
 
-    Aiming at a few years of headroom meant coming back to this every couple of
-    years and having a second number to explain.  25,000 entries is a decade of
-    a team this size, and matching the per-sheet limit means the timesheet has
-    one limit rather than two.
+    25,000 entries -- the same number the stack reads from each sheet -- until
+    the timesheet itself is bigger than that, and then it follows the data:
+    the rows in hand plus room for a few more years, rounded up to a tidy
+    number.  Nobody should ever have to work out this number themselves.
     """
-    return max(current, rows_used + cfg.TS_RAW_FIRST_DATA_ROW,
-               cfg.TS_RAW_TARGET_LAST_ROW)
+    wanted = rows_used + cfg.TS_RAW_GROWTH_HEADROOM + cfg.TS_RAW_FIRST_DATA_ROW
+    step = cfg.TS_RAW_GROWTH_STEP
+    rounded = -(-wanted // step) * step          # up to the next whole step
+    return max(current, cfg.TS_RAW_TARGET_LAST_ROW, rounded)
+
+
+def suggest_source_last_row(rows_on_one_sheet: int, current: int) -> int:
+    """The same, for how far down each monthly sheet the stack reads."""
+    wanted = (rows_on_one_sheet + cfg.TS_RAW_GROWTH_HEADROOM
+              + cfg.TS_FIRST_DATA_ROW)
+    step = cfg.TS_RAW_GROWTH_STEP
+    rounded = -(-wanted // step) * step
+    return max(current, cfg.TS_SOURCE_TARGET_LAST_ROW, rounded)
 
 
 def messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -173,11 +184,13 @@ def messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
         out.append({
             "level": "warning",
             "message": (
-                f"Only {data['headroom']:,} rows left before the timesheet "
-                f"outgrows the workbook ({data['rows_used']:,} of "
-                f"{data['total_capacity']:,} used). Past that point the newest "
-                f"rows stop counting. Raise the limit to "
-                f"{data['suggested_raw_last_row']:,} before the next import."
+                f"Only {data['headroom']:,} rows left of the "
+                f"{data['total_capacity']:,} the workbook reads "
+                f"({data['rows_used']:,} used). The next import that does not "
+                f"fit will raise the limit to "
+                f"{data['suggested_raw_last_row']:,} by itself, which takes "
+                f"about a minute — press the button now if you would rather "
+                f"that happened at a quiet moment."
             ),
         })
     for name, sheet in data["per_sheet"].items():

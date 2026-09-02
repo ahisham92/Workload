@@ -222,7 +222,7 @@ whoever booked first. The year's hero tops the scorecard for the period, with a
 tally of months won beside it, so a steady month-by-month winner is visible even
 when someone else leads on total value delivered.
 
-## The two row limits that lose an engineer's hours
+## The row limits, and why they can no longer lose an hour
 
 `Timesheet Raw` builds itself by stacking the monthly sheets:
 
@@ -233,28 +233,36 @@ VSTACK('TS Ahmed'!A4:P6000, 'TS Osama'!A4:P6000, 'TS Kirolos'!A4:P6000)
 There are two limits in that one line. Each sheet is read only as far as
 row 6,000, and every formula that reads the result — around 138,000 of them
 across `Phasing`, `Timesheet Daily`, `Deliverable Actuals`, `Proposals` and
-`Work Calendar` — reads rows 4 to 8,000 of the consolidated sheet: 7,997 rows
-for the whole team together.
+`Work Calendar` — reads rows 4 to 8,000 of the consolidated sheet: **7,997
+entries** for the whole team together, which is what the workbook ships with.
 
-Once either limit is passed, the surplus rows still appear on the sheet but
-reach no calculation at all: no project actuals, no dashboard, no CPI. Nothing
-in the workbook says so. Because the sheets stack in order, it is the rows at
-the bottom of the stack that stop counting first — you update the last
-engineer, and nothing moves.
+Past either limit a row still appears on the sheet but reaches no calculation
+at all: no project actuals, no dashboard, no CPI. Nothing in the workbook says
+so. It is the one failure in this app nobody would notice, which is why it is
+handled three ways:
 
-**The app widens the per-sheet limit to 25,000 the moment it opens a
-workbook.** That is a one-line change to the `VSTACK` with no recalculation
-cost, so there was never a reason to leave it at 6,000 or to make it a button
-somebody had to find. The Timesheets tab shows how much room is left against
-both limits and warns before either runs out.
+1. **The per-sheet limit goes to 25,000 the moment the app opens a workbook.**
+   It is a one-line change to the `VSTACK` with no recalculation cost.
+2. **An import that would not fit raises the limit before writing anything.**
+   The app works out what the timesheet will hold once the import lands; if
+   that is more than the workbook reads, it widens both limits to fit — with
+   years of room to spare — and the import result says so. Rows are never
+   written past what is read.
+3. **The Timesheets tab shows how much room is left** and offers the same
+   raise as a button, for doing it at a quiet moment rather than mid-import.
 
-Raising the consolidated limit is the heavier of the two, and stays a decision:
-it rewrites every one of those 138,000 references and extends the per-row helper
-formulas to match, which takes about a minute. **The button raises it to 25,000
-as well**, so afterwards the whole timesheet has one limit rather than two —
-about a decade of work for a team this size. Excel then takes a little longer to
-recalculate the file, which is the reason it is a button rather than something
-the app does on its own.
+Raising the consolidated limit is the heavy one: it rewrites every one of those
+138,000 references and extends the per-row helper formulas to match, which
+takes about a minute, and Excel then takes a little longer to recalculate the
+file. That is why it is not done on the way in, and why the app will only go so
+far on its own — past 60,000 entries an import is **refused, before a single
+row is written**, with a message saying to import only registered work or
+archive the earliest years. Refusing loudly is the one thing that is always
+better than dropping rows quietly.
+
+The limit follows the timesheet from there: 25,000 entries until the timesheet
+itself is bigger than that, and then the rows in hand plus room for a few more
+years, rounded up.
 
 ## Rules it enforces
 
@@ -389,8 +397,8 @@ application answers correctly through the WSGI entry point a host uses.
 1. Sign in and open the unit.
 2. **Timesheets** — upload each engineer's export, check the summary, Replace.
    Leave "only rows for projects in the register" ticked.
-3. **Timesheets** — check the room left in the workbook. If it warns, raise the
-   limit before going further, or the newest rows will not count.
+3. **Timesheets** — glance at the room left. Nothing has to be done about it:
+   an import that does not fit raises the limit itself.
 4. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
 5. **Projects** — open each active project and move its deliverables' steps on.

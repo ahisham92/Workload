@@ -85,7 +85,8 @@ class TestOverflow:
         assert capacity.suggest_raw_last_row(100, 40000) == 40000
 
     def test_a_timesheet_bigger_than_the_target_gets_room_for_itself(self):
-        assert capacity.suggest_raw_last_row(30000, 8000) == 30004
+        # Its own rows, plus room for a few more years, rounded up.
+        assert capacity.suggest_raw_last_row(30000, 8000) == 40000
 
 
 class TestExtending:
@@ -226,3 +227,90 @@ class TestTheDefaultStackIsTooShallow:
         assert warning["level"] == "warning"
         for name in report["stack_order"]:
             assert name not in warning["message"]
+
+
+class TestMakingRoomForAnImport:
+    """The limit follows the timesheet, so an import can never lose rows.
+
+    The targets are patched down here so the test does not spend a minute
+    rewriting 138,000 formulas; the behaviour under test is the same.
+    """
+
+    @pytest.fixture(autouse=True)
+    def small_targets(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TS_RAW_TARGET_LAST_ROW", 9000)
+        monkeypatch.setattr(cfg, "TS_SOURCE_TARGET_LAST_ROW", 9000)
+        monkeypatch.setattr(cfg, "TS_RAW_GROWTH_HEADROOM", 500)
+        monkeypatch.setattr(cfg, "TS_RAW_GROWTH_STEP", 1000)
+        monkeypatch.setattr(cfg, "TS_RAW_AUTO_MAX", 12000)
+
+    def test_an_import_that_fits_changes_nothing(self, wb):
+        before = wb.timesheet_capacity()
+        room = wb.ensure_room_for("Kirolos", 900)
+        assert room["raised"] is False
+        assert wb.timesheet_capacity()["raw_last_row"] == before["raw_last_row"]
+
+    def test_an_import_that_does_not_fit_raises_the_limit(self, wb):
+        # 7,682 rows already, 7,997 read: this asks for 1,500 more than fits.
+        room = wb.ensure_room_for("Kirolos", 2500)
+        assert room["raised"] is True
+        assert room["raw_from"] == 8000
+        assert room["raw_last_row"] >= 9000
+        assert "entries" in room["why"]
+
+        after = wb.timesheet_capacity()
+        assert after["over_capacity"] is False
+        # Room to spare, so next month does not pay for this again.
+        assert after["headroom"] > 0
+
+    def test_the_stack_is_deepened_with_it(self, wb):
+        room = wb.ensure_room_for("Kirolos", 2500)
+        # Each sheet is read as deep as the consolidated sheet: one number.
+        assert room["source_last_row"] == room["raw_last_row"]
+
+    def test_a_single_sheet_that_outgrows_its_own_limit_is_handled(self, wb, monkeypatch):
+        # Only the decision is under test here: actually rewriting the workbook
+        # for a sheet this size is a minute of formula surgery.
+        asked = {}
+        monkeypatch.setattr(cfg, "TS_RAW_AUTO_MAX", 40000)
+        monkeypatch.setattr(
+            wb, "extend_timesheet_capacity",
+            lambda **kw: asked.update(kw) or {
+                "raw_last_row": kw.get("raw_last_row") or 8000,
+                "source_last_row": kw.get("source_last_row") or 6000})
+        room = wb.ensure_room_for("Osama", 8000)
+        assert room["raised"] is True
+        # One sheet needs 8,000 rows, so the stack has to read that deep.
+        assert asked["source_last_row"] >= 8000 + cfg.TS_FIRST_DATA_ROW - 1
+        assert asked["raw_last_row"] >= 14759
+
+    def test_something_far_too_big_is_refused_before_anything_is_written(self, wb):  # noqa: E501
+        before = wb.timesheet_capacity()
+        with pytest.raises(ValidationError) as error:
+            wb.ensure_room_for("Kirolos", 40000)
+        message = error.value.errors[0]
+        assert "Nothing was written" in message
+        assert "12,000" in message                 # the ceiling it will not pass
+        assert wb.timesheet_capacity()["raw_last_row"] == before["raw_last_row"]
+
+    def test_running_it_twice_only_raises_once(self, wb):
+        first = wb.ensure_room_for("Kirolos", 2500)
+        second = wb.ensure_room_for("Kirolos", 2500)
+        assert first["raised"] is True
+        assert second["raised"] is False
+
+
+class TestTheSuggestionGrows:
+    def test_it_starts_at_the_target(self):
+        assert capacity.suggest_raw_last_row(100, 8000) == cfg.TS_RAW_TARGET_LAST_ROW
+
+    def test_and_follows_the_timesheet_once_it_is_bigger(self):
+        assert capacity.suggest_raw_last_row(24000, 8000) == 30000
+        assert capacity.suggest_raw_last_row(40000, 8000) == 50000
+
+    def test_it_never_pulls_a_limit_back_down(self):
+        assert capacity.suggest_raw_last_row(100, 40000) == 40000
+
+    def test_the_per_sheet_suggestion_works_the_same_way(self):
+        assert capacity.suggest_source_last_row(100, 6000) == 25000
+        assert capacity.suggest_source_last_row(30000, 25000) == 40000

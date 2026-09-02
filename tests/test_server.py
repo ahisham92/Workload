@@ -1073,3 +1073,58 @@ class TestTasks:
         _status, data = call(server, "/api/tasks")
         assert all(t["deliverable_row"] == target["row"] for t in data["tasks"])
         assert all(t["kind"] == "Submission" for t in data["tasks"])
+
+
+class TestAnImportNeverLosesRows:
+    """The failure nobody would notice: rows written past what is read."""
+
+    def _export(self, readonly_wb, count):
+        """A well-formed export of ``count`` rows for one engineer."""
+        openpyxl = pytest.importorskip("openpyxl")
+        headers = readonly_wb.timesheet_headers("Kirolos")
+        numbers = [p.number for p in readonly_wb.projects()][:5]
+        book = openpyxl.Workbook()
+        sheet = book.active
+        sheet.append(headers)
+        index = {h: i for i, h in enumerate(headers)}
+        for position in range(count):
+            row = [None] * len(headers)
+            row[index["Job Type"]] = "1-Projects"
+            row[index["JobNumber"]] = numbers[position % len(numbers)]
+            row[index["FullName"]] = "Kirolos Nabil"
+            row[index["Date"]] = dt.date(2026, 1, 1) + dt.timedelta(
+                days=position % 300)
+            row[index["Phase"]] = 4
+            row[index["RegularHours"]] = 1
+            row[index["TotalHours"]] = 1
+            sheet.append(row)
+        buffer = io.BytesIO()
+        book.save(buffer)
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    def test_an_import_past_the_limit_raises_it_and_keeps_every_row(
+            self, server, readonly_wb):
+        _status, before = call(server, "/api/timesheets")
+        assert before["capacity"]["headroom"] < 1000, "the fixture is nearly full"
+
+        content = self._export(readonly_wb, 2000)
+        _status, staged = call(server, "/api/timesheets/stage", "POST", {
+            "engineer": "Kirolos", "filename": "k.xlsx",
+            "content_base64": content, "registered_only": True})
+        status, applied = call(server, "/api/timesheets/apply", "POST",
+                               {"token": staged["token"], "mode": "replace"})
+        assert status == 200, (staged.get("errors"), applied)
+        assert applied["rows"] == 2000
+
+        raised = applied["capacity_raised"]
+        assert raised and raised["raised"] is True
+        assert raised["entries_from"] == 7997
+        assert raised["entries"] > raised["entries_from"]
+
+        _status, after = call(server, "/api/timesheets")
+        capacity = after["capacity"]
+        assert capacity["over_capacity"] is False
+        assert capacity["rows_used"] <= capacity["total_capacity"]
+        assert after["capacity_warnings"] == []
+        # Every row of the import is inside what the workbook reads.
+        assert after["per_engineer"]["Kirolos"]["all_time_rows"] == 2000

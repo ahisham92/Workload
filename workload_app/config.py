@@ -246,6 +246,15 @@ TS_RAW_DEFAULT_LAST_ROW = 8000
 #: reads from each sheet, so one number covers the whole timesheet and nobody
 #: has to think about two limits again.
 TS_RAW_TARGET_LAST_ROW = 25000
+#: Never leave less than this much room when raising the limit for an import,
+#: so the next month's import does not have to raise it again.
+TS_RAW_GROWTH_HEADROOM = 5000
+#: Raising the limit is rounded up to a tidy multiple of this.
+TS_RAW_GROWTH_STEP = 5000
+#: How far the app will raise the limit on its own during an import.  Past this
+#: the workbook becomes slow enough in Excel that it is a decision rather than
+#: a detail, so the import is refused and says so.
+TS_RAW_AUTO_MAX = 60000
 
 #: Per-row helper formulas on the consolidated view; they have to reach as far
 #: as the cap does.
