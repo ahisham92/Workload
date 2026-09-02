@@ -1582,6 +1582,65 @@ class WorkloadWorkbook:
     def capacity_messages(self) -> List[Dict[str, str]]:
         return capacity.messages(self.timesheet_capacity())
 
+    def ensure_room_for(self, engineer: str, rows: int) -> Dict[str, Any]:
+        """Make sure ``rows`` for this engineer will actually be read.
+
+        Called before an import writes anything.  A row past either limit stays
+        on the sheet but reaches no formula, which is the one failure in this
+        app nobody would notice, so the limits are raised to fit rather than
+        the rows quietly ignored.  If fitting them would take the workbook past
+        what is sensible to open in Excel, the import is refused instead --
+        loudly, and before a single row is written.
+        """
+        current = self.timesheet_capacity()
+        counts = dict(self.rows_per_engineer())
+        counts[engineer] = rows
+        needed_total = sum(counts.values())
+        needed_sheet = max(counts.values())
+
+        source = current["source_last_row"]
+        raw = current["raw_last_row"]
+        want_source = source
+        want_raw = raw
+
+        if needed_sheet > current["per_sheet_capacity"]:
+            want_source = capacity.suggest_source_last_row(needed_sheet, source)
+        if needed_total > current["total_capacity"]:
+            want_raw = capacity.suggest_raw_last_row(needed_total, raw)
+
+        if want_source == source and want_raw == raw:
+            return {"raised": False, "raw_last_row": raw, "source_last_row": source}
+
+        # Something has to move, so move both together: the stack can only
+        # produce what the sheets under it are read for, and reading each sheet
+        # as deep as the consolidated one costs nothing -- it is one formula --
+        # and leaves a single number to remember.
+        want_source = max(want_source, want_raw)
+
+        if want_raw > cfg.TS_RAW_AUTO_MAX:
+            raise ValidationError([
+                f"That import would take the timesheet to {needed_total:,} "
+                f"entries, and the workbook would have to read "
+                f"{want_raw:,} rows to see them all — past the "
+                f"{cfg.TS_RAW_AUTO_MAX:,} this app will set on its own, because "
+                f"beyond that the file becomes slow to open in Excel. Nothing "
+                f"was written. Import with 'only rows for projects in the "
+                f"register' ticked, or archive the earliest years first."
+            ])
+
+        result = self.extend_timesheet_capacity(
+            raw_last_row=want_raw if want_raw > raw else None,
+            source_last_row=want_source if want_source > source else None)
+        return {
+            "raised": True,
+            "raw_from": raw, "raw_last_row": result["raw_last_row"],
+            "source_from": source, "source_last_row": result["source_last_row"],
+            "entries": result["raw_last_row"] - cfg.TS_RAW_FIRST_DATA_ROW + 1,
+            "entries_from": raw - cfg.TS_RAW_FIRST_DATA_ROW + 1,
+            "why": (f"the import brings the timesheet to {needed_total:,} "
+                    f"entries"),
+        }
+
     def extend_timesheet_capacity(self, *, raw_last_row: Optional[int] = None,
                                   source_last_row: Optional[int] = None
                                   ) -> Dict[str, Any]:

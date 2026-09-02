@@ -848,8 +848,10 @@ function renderCapacity(check) {
     el('h3', {}, 'Room left in the workbook'),
     el('p', { class: 'muted' },
       `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}, `
-      + `stacked from each monthly sheet down to row ${cap.source_last_row.toLocaleString()}. `
-      + 'Rows past either limit stay on the sheet but reach nothing.'),
+      + `stacked from each monthly sheet down to row ${cap.source_last_row.toLocaleString()} `
+      + `— ${cap.total_capacity.toLocaleString()} entries in all. An import that `
+      + 'would not fit raises the limit itself before writing anything, so no '
+      + 'entry is ever left on the sheet unread.'),
     el('div', { class: `meter ${meter}` },
       el('span', { style: `width:${Math.min(100, Math.round(used * 100))}%` })),
     el('p', { class: 'muted' },
@@ -1025,8 +1027,20 @@ async function applyImport(mode) {
     markSaved(result.save);
     state.stagedImport = null;
     $('#ts-file').value = '';
-    setChildren($('#ts-result'), el('div', { class: 'msg msg-ok' },
-      `${result.engineer} now has ${fmt.int(result.rows)} rows. ${result.data_check.verdict}`));
+    const raised = result.capacity_raised;
+    setChildren($('#ts-result'),
+      el('div', { class: 'msg msg-ok' },
+        `${result.engineer} now has ${fmt.int(result.rows)} rows. `
+        + `${result.data_check.verdict}`),
+      // The app raises the limit itself rather than letting rows land on the
+      // sheet where nothing reads them; it should say so when it does.
+      raised
+        ? el('div', { class: 'msg msg-info' },
+            `The workbook now reads ${fmt.int(raised.entries)} entries `
+            + `(it read ${fmt.int(raised.entries_from)} before) — raised `
+            + `automatically because ${raised.why}, so nothing was missed. `
+            + 'Excel will take a little longer to recalculate the file.')
+        : null);
     toast(`${result.engineer} updated (${fmt.int(result.rows)} rows).`, 'ok');
     await refreshAll();
   } catch (error) {
