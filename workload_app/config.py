@@ -242,6 +242,10 @@ TS_SOURCE_TARGET_LAST_ROW = 25000
 #: the stack runs Ahmed, Osama, Kirolos, it is the last engineer's rows that
 #: silently drop off the end first.
 TS_RAW_DEFAULT_LAST_ROW = 8000
+#: What the app raises it to when asked: the same 25,000 entries the stack
+#: reads from each sheet, so one number covers the whole timesheet and nobody
+#: has to think about two limits again.
+TS_RAW_TARGET_LAST_ROW = 25000
 
 #: Per-row helper formulas on the consolidated view; they have to reach as far
 #: as the cap does.

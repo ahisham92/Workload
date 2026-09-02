@@ -136,15 +136,16 @@ def report(wb: Workbook, rows_per_engineer: Dict[str, int],
     }
 
 
-def suggest_raw_last_row(rows_used: int, current: int, *, years: int = 3) -> int:
-    """A cap with a few years of headroom, rounded to a tidy number.
+def suggest_raw_last_row(rows_used: int, current: int) -> int:
+    """Raise it once, to the same 25,000 the stack reads from each sheet.
 
-    The helper columns on ``Timesheet Raw`` cost roughly the square of the cap
-    to recalculate, so this deliberately does not reach for the maximum.
+    Aiming at a few years of headroom meant coming back to this every couple of
+    years and having a second number to explain.  25,000 entries is a decade of
+    a team this size, and matching the per-sheet limit means the timesheet has
+    one limit rather than two.
     """
-    growth_per_year = 1500        # ~500 rows a year each, for three engineers
-    wanted = rows_used + years * growth_per_year + cfg.TS_RAW_FIRST_DATA_ROW
-    return max(current, int(round(wanted / 1000.0)) * 1000)
+    return max(current, rows_used + cfg.TS_RAW_FIRST_DATA_ROW,
+               cfg.TS_RAW_TARGET_LAST_ROW)
 
 
 def messages(data: Dict[str, Any]) -> List[Dict[str, str]]:

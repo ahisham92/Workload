@@ -73,10 +73,19 @@ class TestOverflow:
         assert report["per_sheet"]["Ahmed"]["over"] is True
         assert any("TS Ahmed holds" in m["message"] for m in capacity.messages(report))
 
-    def test_the_suggestion_leaves_years_of_headroom(self, readonly_wb):
+    def test_the_suggestion_is_the_same_25000_as_the_stack(self, readonly_wb):
+        # One limit for the whole timesheet: the consolidated sheet is raised
+        # to the same number of entries the stack reads from each sheet.
         report = readonly_wb.timesheet_capacity()
-        assert report["suggested_raw_last_row"] == 12000
+        assert report["suggested_raw_last_row"] == cfg.TS_RAW_TARGET_LAST_ROW
+        assert report["suggested_raw_last_row"] == 25000
         assert report["suggested_raw_last_row"] > report["raw_last_row"]
+
+    def test_a_workbook_already_past_it_is_not_pulled_back(self):
+        assert capacity.suggest_raw_last_row(100, 40000) == 40000
+
+    def test_a_timesheet_bigger_than_the_target_gets_room_for_itself(self):
+        assert capacity.suggest_raw_last_row(30000, 8000) == 30004
 
 
 class TestExtending:

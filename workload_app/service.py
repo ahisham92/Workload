@@ -75,6 +75,8 @@ class WorkloadService:
         self._unlocked = False
         self._stack_raised_to: Optional[int] = None
         self._file_stamp = None
+        #: A member's view of somebody else's workbook never writes to it.
+        self.read_only = False
         if path is not None:
             self.open(path)
 
@@ -94,8 +96,14 @@ class WorkloadService:
         return self._wb
 
     def open(self, path: Union[str, Path], *,
-             unit: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Open a workbook file, and remember which unit it is."""
+             unit: Optional[Dict[str, Any]] = None,
+             read_only: bool = False) -> Dict[str, Any]:
+        """Open a workbook file, and remember which unit it is.
+
+        ``read_only`` is for a member looking at their manager's workbook:
+        nothing is written to it, not even the widening the app would otherwise
+        do on the way in.
+        """
         with self._lock:
             resolved = library.validate(Path(path))
             if self._wb is not None and self._wb.dirty:
@@ -103,9 +111,10 @@ class WorkloadService:
             self._wb = WorkloadWorkbook(resolved)
             self.path = resolved
             self.unit = unit
+            self.read_only = read_only
             self._staged.clear()
             self._unlocked = False
-            self._stack_raised_to = self._widen_stack()
+            self._stack_raised_to = None if read_only else self._widen_stack()
             self._stamp()
             return self.status()
 
@@ -116,6 +125,7 @@ class WorkloadService:
             self._wb = None
             self.path = None
             self.unit = None
+            self.read_only = False
             self._unlocked = False
             self._stack_raised_to = None
             self._staged.clear()
@@ -180,6 +190,9 @@ class WorkloadService:
 
     def _save_locked(self) -> Dict[str, Any]:
         """Write the workbook with the file held exclusively."""
+        if self.read_only:
+            raise ApiError(HTTPStatus.FORBIDDEN,
+                           "This workbook is open for reading only.")
         with _file_lock(self.path):
             result = self.workbook.save()
         self._stamp()

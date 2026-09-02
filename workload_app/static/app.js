@@ -15,6 +15,7 @@ const state = {
   referenceDraft: null,
   projectSort: { key: null, dir: 1 },   // null = the register's own order
   tasks: null,           // the task list, its settings and the load it makes
+  access: null,          // who on the team has a read-only account
   me: null,              // the signed-in account
   units: [],
 };
@@ -352,11 +353,17 @@ async function openAdmin() {
       + 'account starts with no units and sees nothing of anyone else\'s.'),
     el('table', {},
       el('thead', {}, el('tr', {},
-        ['Username', 'Name', 'Units', 'Last seen', 'Role', ''].map(
+        ['Username', 'Name', 'Kind', 'Units', 'Last seen', 'Role', ''].map(
           (h) => el('th', {}, h)))),
       el('tbody', {}, data.users.map((user) => el('tr', {},
         el('td', {}, el('b', {}, user.username)),
         el('td', {}, user.display_name),
+        el('td', {}, el('span', {
+          class: `pill ${user.role === 'member' ? 'pill-info' : 'pill-ok'}`,
+          title: user.role === 'member'
+            ? 'Sees one person\'s own figures, read-only'
+            : 'Owns units and edits them',
+        }, user.role === 'member' ? 'team member' : 'manager')),
         el('td', { class: 'num' }, fmt.int(user.units || 0)),
         el('td', {}, user.last_seen ? String(user.last_seen).slice(0, 10) : 'never'),
         el('td', {}, user.is_admin
@@ -364,9 +371,10 @@ async function openAdmin() {
         el('td', { class: 'row-actions' },
           el('button', { class: 'btn btn-sm', type: 'button',
             onclick: () => resetPassword(user) }, 'Reset password'),
-          el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
-            title: user.is_admin ? 'Take away administrator' : 'Make administrator',
-            onclick: () => toggleAdmin(user) }, user.is_admin ? '↓' : '↑'),
+          user.role === 'member' ? null
+            : el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+              title: user.is_admin ? 'Take away administrator' : 'Make administrator',
+              onclick: () => toggleAdmin(user) }, user.is_admin ? '↓' : '↑'),
           user.id === (state.me || {}).id ? null
             : el('button', { class: 'btn btn-sm btn-danger', type: 'button',
               onclick: () => deleteAccount(user) }, '✕')))))),
@@ -382,13 +390,18 @@ async function newAccount() {
     { name: 'username', label: 'Username', full: true,
       hint: 'letters, digits, dot, dash or underscore' },
     { name: 'display_name', label: 'Name shown in the app', full: true },
+    { name: 'role', label: 'Kind of account', type: 'select', full: true,
+      hint: 'a manager owns units and edits them; a team member only sees '
+        + 'their own figures, and is given them from a manager\'s Team tab',
+      options: [{ value: 'manager', label: 'Manager — runs a team' },
+        { value: 'member', label: 'Team member — read-only' }] },
     { name: 'password', label: 'Password', type: 'password', full: true,
       hint: 'leave blank and one is generated for you' },
     { name: 'is_admin', label: 'May manage accounts', type: 'checks', full: true,
-      options: [{ value: 'yes', label: 'Administrator' }] },
+      options: [{ value: 'yes', label: 'Administrator (managers only)' }] },
   ], async () => {
     const body = modalValues();
-    body.is_admin = (body.is_admin || []).length > 0;
+    body.is_admin = (body.is_admin || []).length > 0 && body.role !== 'member';
     const result = await api('/api/admin/users', { method: 'POST', body });
     closeModal();
     if (result.password) {
@@ -399,7 +412,7 @@ async function newAccount() {
       toast(`Account ${result.user.username} created.`, 'ok');
     }
     await openAdmin();
-  }, {});
+  }, { role: 'manager' });
 }
 
 async function resetPassword(user) {
@@ -851,7 +864,7 @@ function renderCapacity(check) {
       (cap.over_capacity || cap.low_headroom)
         ? el('button', { class: 'btn btn-primary', type: 'button',
             onclick: () => extendCapacity(cap) },
-            `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} rows`)
+            `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} entries`)
         : null,
       cap.source_is_short
         ? el('button', { class: 'btn', type: 'button',
@@ -897,13 +910,14 @@ async function extendCapacity(cap) {
     ? cap.suggested_source_last_row : null;
   if (!window.confirm(
     `Raise the limit from ${cap.raw_last_row.toLocaleString()} to `
-    + `${cap.suggested_raw_last_row.toLocaleString()} rows?\n\n`
-    + 'This rewrites every formula that reads the consolidated timesheet and adds '
-    + 'the per-row helper formulas to match. A backup is taken first.\n\n'
-    + 'Excel will take noticeably longer to recalculate afterwards. Importing with '
-    + '"only rows for projects in the register" may free up enough room without this.')) return;
+    + `${cap.suggested_raw_last_row.toLocaleString()} entries?\n\n`
+    + 'This is a one-off: it rewrites every formula that reads the consolidated '
+    + 'timesheet and adds the per-row helper formulas to match, which takes about '
+    + 'a minute. A backup is taken first.\n\n'
+    + 'Afterwards the whole timesheet has one limit — 25,000 entries — and Excel '
+    + 'takes a little longer to recalculate the file.')) return;
   try {
-    toast('Rewriting formulas — this takes a few seconds…');
+    toast('Rewriting formulas — this takes about a minute…');
     const result = await api('/api/timesheets/capacity', {
       method: 'POST',
       body: { raw_last_row: cap.suggested_raw_last_row, source_last_row: source },
@@ -2342,7 +2356,12 @@ function renderReview(data) {
 state.team = null;
 
 async function loadTeam() {
-  state.team = await api('/api/team');
+  const [team, access] = await Promise.all([
+    api('/api/team'),
+    api('/api/team/access').catch(() => ({ members: [] })),
+  ]);
+  state.team = team;
+  state.access = access;
   renderTeam();
 }
 
@@ -2366,10 +2385,14 @@ function renderTeam() {
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {},
         ['#', 'Engineer', 'Timesheet name pattern', 'Hours / month',
-         ...years.map(String), 'Timesheet rows', ''].map((h, i) =>
-          el('th', { class: i === 0 || i >= 3 ? 'num' : '' }, h)))),
+         ...years.map(String), 'Timesheet rows', 'Their sign-in', ''].map((h, i) =>
+          el('th', { class: i === 0 || (i >= 3 && i < years.length + 5) ? 'num' : '' }, h)))),
       el('tbody', {}, data.engineers.map(
-        (person, position) => engineerRow(person, position, years))))));
+        (person, position) => engineerRow(person, position, years))))),
+
+    el('p', { class: 'muted' },
+      'A sign-in lets that person see their own workload, projects, hours and '
+      + 'tasks — and nothing else in the unit. They cannot change anything.'));
 }
 
 function engineerRow(person, position, years) {
@@ -2398,7 +2421,66 @@ function engineerRow(person, position, years) {
     el('td', { class: 'num' },
       el('span', {}, fmt.int(person.rows)),
       el('span', { class: 'slot-note' }, ` · ${person.sheet || 'no sheet'}`)),
+    el('td', {}, accessCell(person)),
     el('td', {}, actions));
+}
+
+/** Who, if anyone, signs in as this engineer. */
+function accessCell(person) {
+  const granted = ((state.access || {}).members || []).find(
+    (m) => m.engineer === person.short_name);
+  if (!granted) {
+    return el('button', {
+      class: 'btn btn-sm', type: 'button',
+      onclick: () => openAccessModal(person),
+    }, 'Give access');
+  }
+  return el('div', { class: 'who' },
+    el('span', { class: 'who-chip', title: `signs in as ${granted.username}` },
+      granted.display_name || granted.username),
+    el('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: 'Take the access away',
+      onclick: () => revokeAccess(person, granted),
+    }, '✕'));
+}
+
+function openAccessModal(person) {
+  openModal(`Give ${person.short_name} a sign-in`, [
+    { name: 'username', label: 'Username', full: true,
+      hint: 'what they type to sign in — letters, digits, dot, dash, underscore' },
+    { name: 'display_name', label: 'Their name', full: true },
+    { name: 'password', label: 'Password', type: 'password', full: true,
+      hint: 'leave blank and one is generated for you' },
+  ], async () => {
+    const body = { ...modalValues(), engineer: person.short_name };
+    const result = await api('/api/team/access', { method: 'POST', body });
+    closeModal();
+    if (result.password) {
+      window.alert(`${person.short_name} can now sign in.\n\n`
+        + `Username: ${result.user.username}\nPassword: ${result.password}\n\n`
+        + 'Write it down now — it cannot be read back. They see only their own '
+        + 'figures, and can change nothing.');
+    } else {
+      toast(`${result.user.username} now signs in as ${person.short_name}.`, 'ok');
+    }
+    await loadTeam();
+  }, {
+    username: person.short_name.toLowerCase().replace(/[^a-z0-9._-]/g, ''),
+    display_name: person.short_name,
+  });
+}
+
+async function revokeAccess(person, granted) {
+  if (!window.confirm(
+    `Take away ${granted.username}'s sign-in for ${person.short_name}?\n\n`
+    + 'The account stays, but it can no longer see this unit.')) return;
+  try {
+    await api(`/api/team/access/${granted.user_id}`, { method: 'DELETE' });
+    toast('Access taken away.', 'ok');
+    await loadTeam();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
 }
 
 function openEngineerModal(person) {
