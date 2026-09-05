@@ -122,7 +122,39 @@
                     }
 
                     int scale = plan.Scale > 0 ? plan.Scale : viewScale;
-                    double planZ = plan.Origin != null ? plan.Origin.Z : plan.GenLevel.Elevation;
+
+                    // Which height a detail line has to be drawn at to count as
+                    // being in this plan's plane. Revit refuses the wrong one, so
+                    // the candidates are tried on a line that is thrown away.
+                    var candidateHeights = new System.Collections.Generic.List<double>();
+                    if (plan.Origin != null) candidateHeights.Add(plan.Origin.Z);
+                    candidateHeights.Add(plan.GenLevel.Elevation);
+                    candidateHeights.Add(plan.GenLevel.ProjectElevation);
+                    candidateHeights.Add(0.0);
+
+                    double planZ = candidateHeights[0];
+                    bool planeFound = false;
+                    foreach (double height in candidateHeights)
+                    {
+                        try
+                        {
+                            Autodesk.Revit.DB.DetailCurve probe = theDoc.Create.NewDetailCurve(plan,
+                                Autodesk.Revit.DB.Line.CreateBound(
+                                    new Autodesk.Revit.DB.XYZ(0, 0, height),
+                                    new Autodesk.Revit.DB.XYZ(toFeet(1000.0), 0, height)));
+                            theDoc.Delete(probe.Id);
+                            planZ = height;
+                            planeFound = true;
+                            break;
+                        }
+                        catch { /* not this plane; try the next */ }
+                    }
+                    if (!planeFound)
+                    {
+                        skipped.Add(plan.Name + ": nothing can be drawn in this view - "
+                            + "it may be locked by a view template");
+                        continue;
+                    }
                     double cutAt = plan.GenLevel.Elevation + toFeet(planCutOffsetMm);
                     Autodesk.Revit.DB.XYZ right = plan.RightDirection;
                     Autodesk.Revit.DB.XYZ up = plan.UpDirection;
@@ -150,8 +182,12 @@
                     }
 
                     int onThisPlan = 0;
+                    string firstComplaint = null;
+                    int refused = 0;
                     foreach (Autodesk.Revit.DB.ElementId id in ids)
                     {
+                      try
+                      {
                         double[] n = numberOf[id];
                         // Only the columns this plan cuts.
                         if (cutAt < n[N_BASE_Z_FT] - 1e-6 || cutAt > n[N_TOP_Z_FT] + 1e-6) continue;
@@ -246,10 +282,21 @@
 
                         taggedCount++;
                         onThisPlan++;
+                      }
+                      catch (System.Exception ex)
+                      {
+                        refused++;
+                        if (firstComplaint == null) firstComplaint = ex.Message;
+                      }
                     }
 
-                    tagged.Add(string.Format(inv, "{0}  ->  {1} column{2}",
-                        plan.Name, onThisPlan, onThisPlan == 1 ? "" : "s"));
+                    tagged.Add(string.Format(inv, "{0}  ->  {1} column{2}{3}",
+                        plan.Name, onThisPlan, onThisPlan == 1 ? "" : "s",
+                        refused == 0 ? "" : string.Format(inv, ", {0} refused: {1}",
+                            refused, firstComplaint)));
+                    if (refused > 0)
+                        skipped.Add(string.Format(inv, "{0}: {1} column{2} refused - {3}",
+                            plan.Name, refused, refused == 1 ? "" : "s", firstComplaint));
                 }
                 catch (System.Exception ex)
                 {
@@ -264,7 +311,9 @@
         done.MainInstruction = string.Format(inv, "{0} column{1} tagged.",
             taggedCount, taggedCount == 1 ? "" : "s");
         done.MainContent = string.Format(inv,
-            "{0} left alone, having something written beside them already.{1}",
+            "{0} left alone, having something written beside them already. "
+            + "Nothing tagged at all usually means the plan does not cut any column: "
+            + "planCutOffsetMm is how far above the level it cuts.{1}",
             leftAlone,
             skipped.Count == 0 ? "" : "\n\n" + string.Join("\n", skipped.ToArray()));
         done.ExpandedContent = string.Join("\n", tagged.ToArray());
