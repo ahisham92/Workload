@@ -107,6 +107,39 @@ def body_of(path):
     return "\n".join(body)
 
 
+def between(text, start, end):
+    """The lines between two markers, the markers themselves left out."""
+    lines = text.splitlines()
+    first = next(i for i, line in enumerate(lines) if start in line)
+    last = next(i for i, line in enumerate(lines) if end in line)
+    return "\n".join(lines[first + 1:last])
+
+
+def build_table():
+    """The table script: the sections script's settings and analysis, with a
+    tail that draws the table on sections instead of making them. Sharing the
+    analysis is the point - the table has to count what the sections counted."""
+    sections = (HERE / "devkit" / "ColumnSectionsDevKit.cs").read_text(encoding="utf-8")
+    head = (HERE / "devkit" / "parts" / "table-head.cs").read_text(encoding="utf-8")
+    tail = (HERE / "devkit" / "parts" / "table-tail.cs").read_text(encoding="utf-8")
+
+    # The one setting the table script must not inherit: it counts the whole
+    # model, whatever happens to be selected while it runs.
+    settings = between(sections, "SHARED SETTINGS START", "SHARED SETTINGS END")
+    settings = settings.replace(
+        "bool useSelectionWhenAny = true;",
+        "bool useSelectionWhenAny = false;   // the table always counts the whole model")
+
+    out = HERE / "devkit" / "ColumnTableDevKit.cs"
+    out.write_text("\n".join([
+        head.rstrip("\n"),
+        settings,
+        between(sections, "SHARED ANALYSIS START", "SHARED ANALYSIS END"),
+        tail.rstrip("\n") + "\n",
+    ]), encoding="utf-8")
+    print("wrote %s (%d lines)" % (out, len(out.read_text().splitlines())))
+
+
 def main():
     parts = [HEADER]
     for name in SHARED:
@@ -122,6 +155,8 @@ def main():
     # A .txt of each pasteable file as well: some machines will not open, mail
     # or download a .cs, and these are only ever copied out of, never compiled
     # where they sit.
+    build_table()
+
     pasteable = [
         HERE / "devkit" / "ColumnSectionsDevKit.cs",
         HERE / "devkit" / "ColumnTableDevKit.cs",

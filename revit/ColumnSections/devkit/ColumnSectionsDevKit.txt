@@ -29,6 +29,7 @@ Autodesk.Revit.DB.Document theDoc = doc;
 // Autodesk.Revit.DB.Document theDoc = app.ActiveUIDocument.Document;
 // Autodesk.Revit.DB.Document theDoc = commandData.Application.ActiveUIDocument.Document;
 
+// >>> SHARED SETTINGS START - the table script is built from this block too
 // --------------------------------------------------------------- settings --
 // Rounded before anything is compared, so a millimetre out is not a new type.
 double sizeToleranceMm = 5.0;
@@ -124,6 +125,17 @@ int maxLocationRows = 12;
 // A column is ON the axis within this of the grid line, and NEAR it beyond.
 double onAxisToleranceMm = 100.0;
 
+// Work on the columns you have selected, where any are. The table script sets
+// this false: it counts the whole model however you leave it here.
+bool useSelectionWhenAny = true;
+
+// Used by the table script only: which sections it draws on, how far above the
+// crop the table hangs, and whether it clears what it drew before.
+bool onlyTheActiveView = false;
+string viewNameContains = "COL SECTION";
+bool clearExistingAnnotation = true;
+double tableGapAboveViewMm = 4.0;
+
 // The left location cell names the grid running parallel to Y, the right one
 // the grid running parallel to X. True swaps the two columns over.
 bool swapAxisColumns = false;
@@ -140,6 +152,9 @@ string[] widthParameterNames = new string[] { "b", "Width", "Depth 1", "bf" };
 string[] depthParameterNames = new string[] { "h", "Depth", "Height", "d" };
 string[] diameterParameterNames = new string[] { "Diameter", "D", "d" };
 
+// <<< SHARED SETTINGS END
+// >>> SHARED ANALYSIS START - the table script is built from this too, so that
+// it groups the columns by exactly what the sections were made from
 // ===========================================================================
 
 var inv = System.Globalization.CultureInfo.InvariantCulture;
@@ -218,17 +233,20 @@ var wantedCategories = new Autodesk.Revit.DB.BuiltInCategory[]
 };
 
 var columns = new System.Collections.Generic.List<Autodesk.Revit.DB.FamilyInstance>();
-foreach (Autodesk.Revit.DB.ElementId selectedId in theUiDoc.Selection.GetElementIds())
+if (useSelectionWhenAny)
 {
-    var picked = theDoc.GetElement(selectedId) as Autodesk.Revit.DB.FamilyInstance;
-    if (picked == null || picked.Category == null) continue;
-    foreach (Autodesk.Revit.DB.BuiltInCategory bic in wantedCategories)
+    foreach (Autodesk.Revit.DB.ElementId selectedId in theUiDoc.Selection.GetElementIds())
     {
-        Autodesk.Revit.DB.Category category = Autodesk.Revit.DB.Category.GetCategory(theDoc, bic);
-        if (category != null && category.Id == picked.Category.Id)
+        var picked = theDoc.GetElement(selectedId) as Autodesk.Revit.DB.FamilyInstance;
+        if (picked == null || picked.Category == null) continue;
+        foreach (Autodesk.Revit.DB.BuiltInCategory bic in wantedCategories)
         {
-            columns.Add(picked);
-            break;
+            Autodesk.Revit.DB.Category category = Autodesk.Revit.DB.Category.GetCategory(theDoc, bic);
+            if (category != null && category.Id == picked.Category.Id)
+            {
+                columns.Add(picked);
+                break;
+            }
         }
     }
 }
@@ -917,6 +935,24 @@ else
                 System.StringComparison.OrdinalIgnoreCase);
         });
     }
+
+    // Which type each column belongs to, whichever lift of its stack it is:
+    // the table script looks a column up this way.
+    var subjectOf = new System.Collections.Generic.Dictionary<
+        Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
+    var keyOfSubject = new System.Collections.Generic.Dictionary<
+        Autodesk.Revit.DB.ElementId, string>();
+    foreach (string key in keys)
+    {
+        foreach (Autodesk.Revit.DB.ElementId subject in membersOf[key])
+        {
+            keyOfSubject[subject] = key;
+            foreach (Autodesk.Revit.DB.ElementId member in chainOf[subject])
+                subjectOf[member] = subject;
+        }
+    }
+
+    // <<< SHARED ANALYSIS END
 
     // --------------------------------------- the view type and text type --
 
