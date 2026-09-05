@@ -92,8 +92,10 @@ stacks says 3, not the 25 columns that happen to wear the same tag: the tag is
 one criterion of eight, not the grouping. Change a tolerance in
 `ColumnSectionsDevKit.cs`, run the build script, and this one changes with it.
 
-It finds which type each section belongs to by looking inside its crop for the
-column the section was cut on. Run it as often as you like: it clears what it
+It finds which type each section belongs to by the column nearest the section's
+own origin in plan — the section was cut on that column, so it is the one within
+`matchToleranceMm` (2 m). Where no column is that close, it reads the type code
+out of the view's name instead, and only gives up if neither works. Run it as often as you like: it clears what it
 drew before rather than stacking a second table on the first.
 
 In the sections script, `drawTable` is off for that reason; set it true and the

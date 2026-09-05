@@ -138,6 +138,10 @@ string viewNameContains = "COL SECTION";
 bool clearExistingAnnotation = true;
 double tableGapAboveViewMm = 4.0;
 
+// How far from a section's own origin the column it was cut on may be before
+// the table script gives up on it and reads the view's name instead.
+double matchToleranceMm = 2000.0;
+
 // The left location cell names the grid running parallel to Y, the right one
 // the grid running parallel to X. True swaps the two columns over.
 bool swapAxisColumns = false;
@@ -1045,35 +1049,59 @@ else
                         continue;
                     }
                     Autodesk.Revit.DB.Transform frame = crop.Transform;
-                    Autodesk.Revit.DB.Transform intoCrop = frame.Inverse;
 
-                    // Which column is this section of? The one standing inside
-                    // its crop - the lowest, where a stack of them is - and from
-                    // that, which type it belongs to.
+                    // Which column is this section of? The section was cut on the
+                    // column, so the one nearest its origin IN PLAN is the one -
+                    // no depth to get the sign of, and no crop to fall outside.
+                    Autodesk.Revit.DB.XYZ eye = view.Origin;
+                    double reach = toFeet(matchToleranceMm);
                     Autodesk.Revit.DB.ElementId found = null;
-                    double lowest = double.MaxValue;
+                    double nearest = double.MaxValue;
                     foreach (Autodesk.Revit.DB.ElementId id in ids)
                     {
-                        Autodesk.Revit.DB.XYZ local = intoCrop.OfPoint(basePointOf[id]);
-                        if (local.X < crop.Min.X || local.X > crop.Max.X) continue;
-                        if (local.Y < crop.Min.Y || local.Y > crop.Max.Y) continue;
-                        if (local.Z < crop.Min.Z || local.Z > crop.Max.Z) continue;
-                        if (basePointOf[id].Z < lowest)
+                        Autodesk.Revit.DB.XYZ at = basePointOf[id];
+                        double dx = at.X - eye.X, dy = at.Y - eye.Y;
+                        double distance = System.Math.Sqrt(dx * dx + dy * dy);
+                        if (distance > reach) continue;
+                        // Nearest wins; the lowest lift of it breaks a tie.
+                        if (distance < nearest - 1e-6
+                            || (System.Math.Abs(distance - nearest) < 1e-6
+                                && found != null && at.Z < basePointOf[found].Z))
                         {
-                            lowest = basePointOf[id].Z;
+                            nearest = distance;
                             found = id;
                         }
                     }
 
-                    if (found == null || !subjectOf.ContainsKey(found))
+                    // Failing that, the type code written in the view's own name.
+                    string key = null;
+                    if (found != null && subjectOf.ContainsKey(found))
                     {
-                        skipped.Add(view.Name + ": no column stands inside its crop");
+                        key = keyOfSubject[subjectOf[found]];
+                    }
+                    else
+                    {
+                        for (int k = 0; k < keys.Count; k++)
+                        {
+                            string wanted = string.Format(inv, "{0}-{1:00}", typeCodePrefix, k + 1);
+                            if (view.Name.IndexOf(wanted, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                key = keys[k];
+                                break;
+                            }
+                        }
+                    }
+
+                    if (key == null)
+                    {
+                        skipped.Add(view.Name + ": no column of this model stands within "
+                            + string.Format(inv, "{0:0}", matchToleranceMm)
+                            + "mm of it, and its name carries no type code");
                         continue;
                     }
 
-                    Autodesk.Revit.DB.ElementId subject = subjectOf[found];
-                    string key = keyOfSubject[subject];
                     System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[key];
+                    Autodesk.Revit.DB.ElementId subject = members[0];
                     int index = keys.IndexOf(key);
 
                     // The detail number is the number in the view's name -
