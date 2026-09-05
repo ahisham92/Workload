@@ -54,15 +54,27 @@ string groundLevelName = "";
 // want more of the frame around it in the view.
 int viewScale = 50;
 double sideClearanceMm = 300.0;
-double topClearanceMm = 450.0;
+double topClearanceMm = 600.0;
 double bottomClearanceMm = 300.0;
 double viewDepthClearanceMm = 150.0;  // how far past the column the view sees
 double showAboveMm = 600.0;   // how much of the next lift up the section takes in
 double showBelowMm = 300.0;
 
 // Hide everything in the section except this column, its foundation, the beams
-// framing into it, the lift above and below, and the levels and grids.
+// framing into it, the lift above and below, the levels and grids, and the
+// categories listed below.
 bool showOnlyThisColumn = true;
+
+// Kept visible even so - the floors the column carries, first of all. The view
+// only sees 150mm past the column, so what shows of them is the slice at the
+// column and nothing else. Add a line for anything else you want left in:
+// OST_Walls, OST_Roofs, OST_StructuralFraming, OST_Stairs...
+Autodesk.Revit.DB.BuiltInCategory[] alwaysVisibleCategories =
+    new Autodesk.Revit.DB.BuiltInCategory[]
+{
+    Autodesk.Revit.DB.BuiltInCategory.OST_Floors,
+    Autodesk.Revit.DB.BuiltInCategory.OST_StructuralFoundation
+};
 
 // The note sits above the crop, so it does not force the view wide. True puts
 // it inside the crop instead, which makes the view as wide as the longest line.
@@ -715,16 +727,26 @@ else
             if (view != null) usedNames.Add(view.Name);
         }
 
-        var datumIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+        // What every section keeps, whatever column it is of: the datums, and the
+        // categories named in the settings - the floors above, above all.
+        var alwaysVisibleIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
         foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
             .OfClass(typeof(Autodesk.Revit.DB.Level)))
         {
-            datumIds.Add(e.Id);
+            alwaysVisibleIds.Add(e.Id);
         }
         foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
             .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
         {
-            datumIds.Add(e.Id);
+            alwaysVisibleIds.Add(e.Id);
+        }
+        foreach (Autodesk.Revit.DB.BuiltInCategory bic in alwaysVisibleCategories)
+        {
+            foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+                .OfCategory(bic).WhereElementIsNotElementType())
+            {
+                alwaysVisibleIds.Add(e.Id);
+            }
         }
 
         // The lines of the note, and the summary line, for one type.
@@ -966,7 +988,7 @@ else
                                 if (beamIdsOf.ContainsKey(id)) keep.AddRange(beamIdsOf[id]);
                                 if (aboveOf.ContainsKey(id)) keep.Add(aboveOf[id]);
                                 if (belowOf.ContainsKey(id)) keep.Add(belowOf[id]);
-                                keep.AddRange(datumIds);
+                                keep.AddRange(alwaysVisibleIds);
                                 view.IsolateElementsTemporary(keep);
                                 view.ConvertTemporaryHideIsolateToPermanent();
                                 theDoc.Regenerate();

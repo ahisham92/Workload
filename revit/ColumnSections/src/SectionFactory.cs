@@ -18,7 +18,7 @@ namespace ColumnSections
 
         private ElementId _sectionTypeId = ElementId.InvalidElementId;
         private ElementId _textTypeId = ElementId.InvalidElementId;
-        private readonly List<ElementId> _datumIds = new List<ElementId>();
+        private readonly List<ElementId> _alwaysVisibleIds = new List<ElementId>();
         private double _textSizeFeet = 0.0082;   // 2.5 mm on paper
         private double _textWidthFactor = 1.0;
 
@@ -81,15 +81,24 @@ namespace ColumnSections
                 if (view != null) _usedNames.Add(view.Name);
             }
 
-            // Levels and grids stay visible when the rest of the model is hidden.
+            // What every section keeps, whatever column it is of: the datums, and
+            // the categories the settings name - the floors above, above all.
             foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(Level)))
             {
-                _datumIds.Add(e.Id);
+                _alwaysVisibleIds.Add(e.Id);
             }
             foreach (Element e in new FilteredElementCollector(_doc)
                 .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
             {
-                _datumIds.Add(e.Id);
+                _alwaysVisibleIds.Add(e.Id);
+            }
+            foreach (BuiltInCategory bic in _s.AlwaysVisibleCategories)
+            {
+                foreach (Element e in new FilteredElementCollector(_doc)
+                    .OfCategory(bic).WhereElementIsNotElementType())
+                {
+                    _alwaysVisibleIds.Add(e.Id);
+                }
             }
             return true;
         }
@@ -220,7 +229,7 @@ namespace ColumnSections
                 keep.AddRange(column.BeamIds);
                 if (column.Above != null) keep.Add(column.Above.Instance.Id);
                 if (column.Below != null) keep.Add(column.Below.Instance.Id);
-                keep.AddRange(_datumIds);
+                keep.AddRange(_alwaysVisibleIds);
 
                 view.IsolateElementsTemporary(keep);
                 view.ConvertTemporaryHideIsolateToPermanent();

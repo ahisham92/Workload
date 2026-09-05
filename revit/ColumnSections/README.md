@@ -45,7 +45,11 @@ is drawn where it happens rather than only written down.
 The view is cropped to the column itself — 300 mm around it, 150 mm past its
 face — and everything else in the model is hidden in that view: what stays is
 the column, the foundation under it, the beams framing into it, the lift above
-and below, and the levels and grids. The note goes above the crop rather than in
+and below, the levels and grids, and the floors. Floors are kept because the
+slab the column carries is half of what a column section is for; since the view
+sees only 150 mm past the column, what shows of them is the slice at the column.
+`alwaysVisibleCategories` in the settings is that list — add `OST_Walls`,
+`OST_Roofs`, `OST_StructuralFraming` or anything else you want left in. The note goes above the crop rather than in
 it, so a long line cannot drag the drawing out wide. `showOnlyThisColumn` and
 `expandCropForNote` (`ShowOnlyThisColumn`, `ExpandCropForNote` in the add-in)
 turn each of those off.
