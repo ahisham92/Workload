@@ -140,6 +140,16 @@ double tableGapAboveViewMm = 4.0;
 // the table script gives up on it and reads the view's name instead.
 double matchToleranceMm = 2000.0;
 
+// The crop region cuts detail lines - text it leaves alone - so a table drawn
+// above the crop comes out as words with no box around them. This grows the
+// crop to take the table in. The table is hung off the top of the column, not
+// off the crop, so running the script again puts it in the same place.
+bool expandCropToFitTable = true;
+
+// Sections made by an older run of the sections script carry the count of that
+// run in their names. True renames them to what the criteria give now.
+bool renameSectionsToMatch = false;
+
 // The left location cell names the grid running parallel to Y, the right one
 // the grid running parallel to X. True swaps the two columns over.
 bool swapAxisColumns = false;
