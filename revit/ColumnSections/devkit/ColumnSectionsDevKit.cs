@@ -109,6 +109,23 @@ Autodesk.Revit.DB.BuiltInCategory[] alwaysVisibleCategories =
 // The note sits above the crop, so it does not force the view wide. True puts
 // it inside the crop instead, which makes the view as wide as the longest line.
 bool expandCropForNote = false;
+
+// The table drawn on each section: column type, how many there are, where each
+// one stands against the grid, and the detail number taken from the type code.
+// Drawn as detail lines and text, at these sizes ON PAPER.
+bool drawTable = true;
+bool keepTextNoteAsWell = false;   // true: the written note is placed too
+double tableLabelWidthMm = 32.0;
+double tableValueWidthMm = 64.0;
+double tableRowHeightMm = 7.0;
+int maxLocationRows = 12;
+
+// A column is ON the axis within this of the grid line, and NEAR it beyond.
+double onAxisToleranceMm = 100.0;
+
+// The left location cell names the grid running parallel to Y, the right one
+// the grid running parallel to X. True swaps the two columns over.
+bool swapAxisColumns = false;
 string viewNamePrefix = "COL SECTION";
 string typeCodePrefix = "CT";
 int maxMarksInNote = 12;
@@ -168,7 +185,9 @@ const int T_SIZE_ABOVE = 5;
 const int T_SIZE_BELOW = 6;
 const int T_TAG = 7;
 const int T_TOP_LEVEL = 8;
-const int TEXT_SLOTS = 9;
+const int T_LOCATION_Y = 9;
+const int T_LOCATION_X = 10;
+const int TEXT_SLOTS = 11;
 
 var ids = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
 var instanceOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.FamilyInstance>();
@@ -286,6 +305,24 @@ else
         beamZMin.Add(zLow);
         beamZMax.Add(zHigh);
         beamIds.Add(e.Id);
+    }
+
+    // The grids, so each column can be placed against them.
+    var gridNames = new System.Collections.Generic.List<string>();
+    var gridStarts = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
+    var gridDirections = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
+    foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+        .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+    {
+        var grid = e as Autodesk.Revit.DB.Grid;
+        if (grid == null || grid.Curve == null) continue;
+        Autodesk.Revit.DB.XYZ a = grid.Curve.GetEndPoint(0);
+        Autodesk.Revit.DB.XYZ b = grid.Curve.GetEndPoint(1);
+        var run = new Autodesk.Revit.DB.XYZ(b.X - a.X, b.Y - a.Y, 0);
+        if (run.GetLength() < 1e-6) continue;
+        gridNames.Add(grid.Name);
+        gridStarts.Add(new Autodesk.Revit.DB.XYZ(a.X, a.Y, 0));
+        gridDirections.Add(run.Normalize());
     }
 
     // Ground: the level named above, or the one nearest project zero.
@@ -641,6 +678,39 @@ else
                 floorThickness = toMm(bb.Max.Z - bb.Min.Z);
             }
         }
+        // Where it stands against the grid: the nearest grid running parallel to
+        // Y, and the nearest running parallel to X, and whether it is on the line
+        // or only near it.
+        double onAxis = toFeet(onAxisToleranceMm);
+        string nearestY = "", nearestX = "";
+        double bestY = double.MaxValue, bestX = double.MaxValue;
+        for (int i = 0; i < gridNames.Count; i++)
+        {
+            Autodesk.Revit.DB.XYZ a = gridStarts[i], dir = gridDirections[i];
+            // Perpendicular distance in plan from the column to the grid line.
+            double vx = basePoint.X - a.X, vy = basePoint.Y - a.Y;
+            double distance = System.Math.Abs(vx * dir.Y - vy * dir.X);
+            bool runsAlongY = System.Math.Abs(dir.Y) >= System.Math.Abs(dir.X);
+
+            if (runsAlongY)
+            {
+                if (distance < bestY)
+                {
+                    bestY = distance;
+                    nearestY = string.Format(inv, "{0}( {1} )",
+                        distance <= onAxis ? "ON.AXIS" : "NEAR.AXIS.", gridNames[i]);
+                }
+            }
+            else if (distance < bestX)
+            {
+                bestX = distance;
+                nearestX = string.Format(inv, "{0}( {1} )",
+                    distance <= onAxis ? "ON.AXIS" : "NEAR.AXIS.", gridNames[i]);
+            }
+        }
+        s[T_LOCATION_Y] = swapAxisColumns ? nearestX : nearestY;
+        s[T_LOCATION_X] = swapAxisColumns ? nearestY : nearestX;
+
         n[N_FLOORS] = floors;
         n[N_FLOOR_AT_TOP] = floorAtTop ? 1 : 0;
         n[N_FLOOR_THICKNESS] = snap(floorThickness, levelToleranceMm);
@@ -922,6 +992,26 @@ else
                 alwaysVisibleIds.Add(e.Id);
             }
         }
+
+        // Detail lines and text, for the table drawn on each section.
+        System.Action<Autodesk.Revit.DB.View, Autodesk.Revit.DB.XYZ, Autodesk.Revit.DB.XYZ> drawLine =
+            (v, a, b) =>
+        {
+            if (a.DistanceTo(b) < 1e-7) return;
+            theDoc.Create.NewDetailCurve(v, Autodesk.Revit.DB.Line.CreateBound(a, b));
+        };
+
+        System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ, bool> cellText =
+            (v, text, origin, centred) =>
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            var options = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
+            options.HorizontalAlignment = centred
+                ? Autodesk.Revit.DB.HorizontalTextAlignment.Center
+                : Autodesk.Revit.DB.HorizontalTextAlignment.Left;
+            options.Rotation = 0.0;
+            Autodesk.Revit.DB.TextNote.Create(theDoc, v.Id, origin, text, options);
+        };
 
         // The lines of the note, and the summary line, for one type.
         System.Func<Autodesk.Revit.DB.ElementId, string, int, string[]> noteLinesOf =
@@ -1257,16 +1347,118 @@ else
                             catch { /* a view template may own the visibility */ }
                         }
 
-                        // Above the crop unless the crop was widened for it, so
-                        // the drawing stays the size of the column.
-                        Autodesk.Revit.DB.XYZ notePoint = expandCropForNote
-                            ? centreOfBox + right * (-halfWidth + inset) + up * (halfHeight - inset)
-                            : centreOfBox + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
-                        var noteOptions = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
-                        noteOptions.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Left;
-                        noteOptions.Rotation = 0.0;
-                        Autodesk.Revit.DB.TextNote.Create(theDoc, view.Id, notePoint,
-                            noteText.ToString(), noteOptions);
+                        // The table, sized on paper and turned into model size
+                        // by the view scale. Worked out first, because the note
+                        // goes above it.
+                        double labelW = toFeet(tableLabelWidthMm * viewScale);
+                        double valueW = toFeet(tableValueWidthMm * viewScale);
+                        double rowH = toFeet(tableRowHeightMm * viewScale);
+                        double textH = textSizeFeet * viewScale;
+                        double pad = (rowH - textH) / 2.0;
+
+                        // One location row per column of this type.
+                        var locY = new System.Collections.Generic.List<string>();
+                        var locX = new System.Collections.Generic.List<string>();
+                        foreach (Autodesk.Revit.DB.ElementId member in members)
+                        {
+                            if (locY.Count >= maxLocationRows)
+                            {
+                                locY.Add(string.Format(inv, "(+{0} MORE)", members.Count - locY.Count));
+                                locX.Add("");
+                                break;
+                            }
+                            locY.Add(textOf[member][T_LOCATION_Y]);
+                            locX.Add(textOf[member][T_LOCATION_X]);
+                        }
+                        if (locY.Count == 0)
+                        {
+                            locY.Add("");
+                            locX.Add("");
+                        }
+
+                        int rowCount = 3 + locY.Count + 1;  // type, number, heading, rows, detail
+                        double tableW = labelW + valueW;
+                        double tableH = drawTable ? rowCount * rowH : 0.0;
+
+                        if (keepTextNoteAsWell || !drawTable)
+                        {
+                            // Above the crop unless the crop was widened for it,
+                            // and above the table where there is one.
+                            Autodesk.Revit.DB.XYZ notePoint = expandCropForNote
+                                ? centreOfBox + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                                : centreOfBox + right * (-halfWidth)
+                                    + up * (halfHeight + inset + tableH + noteHeight
+                                            + (tableH > 0 ? inset : 0.0));
+                            var noteOptions = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
+                            noteOptions.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Left;
+                            noteOptions.Rotation = 0.0;
+                            Autodesk.Revit.DB.TextNote.Create(theDoc, view.Id, notePoint,
+                                noteText.ToString(), noteOptions);
+                        }
+
+                        if (drawTable)
+                        {
+                            string sizeCompact = sizeTextOf(numberOf[id]).Replace(" ", "");
+                            string typeCell = (textOf[id][T_TAG].Length > 0 ? textOf[id][T_TAG] : code)
+                                + "(" + sizeCompact + ")";
+                            // The detail number is the number in the type code:
+                            // CT-01 gives 01.
+                            int dash = code.LastIndexOf('-');
+                            string detailNumber = dash >= 0 && dash + 1 < code.Length
+                                ? code.Substring(dash + 1) : code;
+
+                            Autodesk.Revit.DB.XYZ topLeft = centreOfBox
+                                + right * (-halfWidth)
+                                + up * (halfHeight + inset + tableH);
+
+                            // x runs across the table, y runs down it.
+                            System.Func<double, double, Autodesk.Revit.DB.XYZ> at =
+                                (x, y) => topLeft + right * x + up * (-y);
+
+                            // The frame, the label column, and the row lines. A row
+                            // line inside the location block starts at the label
+                            // column, because LOCATION runs on down beside them.
+                            drawLine(view, at(0, 0), at(tableW, 0));
+                            drawLine(view, at(0, tableH), at(tableW, tableH));
+                            drawLine(view, at(0, 0), at(0, tableH));
+                            drawLine(view, at(tableW, 0), at(tableW, tableH));
+                            drawLine(view, at(labelW, 0), at(labelW, tableH));
+                            for (int r = 1; r < rowCount; r++)
+                            {
+                                bool insideLocation = r >= 3 && r <= 2 + locY.Count;
+                                drawLine(view, at(insideLocation ? labelW : 0, r * rowH),
+                                               at(tableW, r * rowH));
+                            }
+
+                            // The location block is split into its two axes.
+                            double split = labelW + valueW / 2.0;
+                            drawLine(view, at(split, 2 * rowH), at(split, (3 + locY.Count) * rowH));
+
+                            double labelMid = labelW / 2.0;
+                            double valueMid = labelW + valueW / 2.0;
+                            double yMid = labelW + valueW / 4.0;
+                            double xMid = labelW + 3.0 * valueW / 4.0;
+
+                            cellText(view, "COLUMN TYPE", at(labelMid, pad), true);
+                            cellText(view, typeCell, at(valueMid, pad), true);
+                            cellText(view, "NUMBER", at(labelMid, rowH + pad), true);
+                            cellText(view, members.Count.ToString(inv), at(valueMid, rowH + pad), true);
+
+                            // LOCATION sits against the middle of its own block.
+                            double locationTop = ((5 + locY.Count) / 2.0) * rowH - textH / 2.0;
+                            cellText(view, "LOCATION", at(labelMid, locationTop), true);
+                            cellText(view, "Y-AXIS", at(yMid, 2 * rowH + pad), true);
+                            cellText(view, "X-AXIS", at(xMid, 2 * rowH + pad), true);
+                            for (int r = 0; r < locY.Count; r++)
+                            {
+                                cellText(view, locY[r], at(yMid, (3 + r) * rowH + pad), true);
+                                cellText(view, locX[r], at(xMid, (3 + r) * rowH + pad), true);
+                            }
+
+                            double detailRow = (3 + locY.Count) * rowH + pad;
+                            cellText(view, "DETAIL NUMBER", at(labelMid, detailRow), true);
+                            cellText(view, detailNumber, at(valueMid, detailRow), true);
+                        }
 
                         if (stampTypeCodeInComments)
                         {

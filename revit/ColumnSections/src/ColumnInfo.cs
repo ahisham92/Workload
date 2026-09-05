@@ -27,6 +27,11 @@ namespace ColumnSections
         /// <summary>On the column a section is taken of: every lift of its stack,
         /// bottom first, itself included. Empty on the lifts above.</summary>
         public readonly List<ColumnInfo> Lifts = new List<ColumnInfo>();
+        /// <summary>Where it stands against the grid, one cell each way:
+        /// "ON.AXIS( A07.1 )", "NEAR.AXIS.( B05.I )".</summary>
+        public string LocationY = "";
+        public string LocationX = "";
+
         public ColumnSignature Signature;
 
         /// <summary>The least of the two plan dimensions, in feet. Used to decide how

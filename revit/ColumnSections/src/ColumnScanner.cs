@@ -15,6 +15,7 @@ namespace ColumnSections
         private readonly List<FoundationRef> _foundations = new List<FoundationRef>();
         private readonly List<BeamRef> _beams = new List<BeamRef>();
         private readonly List<BoundingBoxXYZ> _floors = new List<BoundingBoxXYZ>();
+        private readonly List<GridRef> _grids = new List<GridRef>();
         private double _groundElevation;
 
         public string GroundLevelName { get; private set; }
@@ -146,6 +147,23 @@ namespace ColumnSections
                 _beams.Add(new BeamRef { Element = e, Points = pts, ZMin = zMin, ZMax = zMax });
             }
 
+            // The grids, so each column can be placed against them.
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+            {
+                var grid = e as Grid;
+                if (grid == null || grid.Curve == null) continue;
+                XYZ a = grid.Curve.GetEndPoint(0), b = grid.Curve.GetEndPoint(1);
+                var run = new XYZ(b.X - a.X, b.Y - a.Y, 0);
+                if (run.GetLength() < 1e-6) continue;
+                _grids.Add(new GridRef
+                {
+                    Name = grid.Name,
+                    Start = new XYZ(a.X, a.Y, 0),
+                    Direction = run.Normalize()
+                });
+            }
+
             Level ground = FindGroundLevel();
             _groundElevation = ground != null ? ground.Elevation : 0.0;
             GroundLevelName = ground != null ? ground.Name : "elevation 0";
@@ -233,6 +251,7 @@ namespace ColumnSections
             FindFoundation(info, sig);
             CountBeams(info, sig);
             CountFloors(info, sig);
+            FindOnGrid(info);
             // Rounded here as well as in Build: the lifts of a stack are read
             // into its key before their own signatures are closed.
             sig.FloorThicknessMm = Units.Snap(sig.FloorThicknessMm, _s.LevelToleranceMm);
@@ -615,6 +634,38 @@ namespace ColumnSections
             return string.IsNullOrEmpty(value) ? "" : value.Trim();
         }
 
+        /// <summary>Where the column stands against the grid: the nearest grid
+        /// running parallel to Y, the nearest running parallel to X, and whether it
+        /// is on the line or only near it.</summary>
+        private void FindOnGrid(ColumnInfo info)
+        {
+            double onAxis = Units.ToFeet(_s.OnAxisToleranceMm);
+            string nearestY = "", nearestX = "";
+            double bestY = double.MaxValue, bestX = double.MaxValue;
+
+            foreach (GridRef grid in _grids)
+            {
+                double vx = info.BasePoint.X - grid.Start.X;
+                double vy = info.BasePoint.Y - grid.Start.Y;
+                double distance = Math.Abs(vx * grid.Direction.Y - vy * grid.Direction.X);
+                string cell = string.Format("{0}( {1} )",
+                    distance <= onAxis ? "ON.AXIS" : "NEAR.AXIS.", grid.Name);
+
+                if (Math.Abs(grid.Direction.Y) >= Math.Abs(grid.Direction.X))
+                {
+                    if (distance < bestY) { bestY = distance; nearestY = cell; }
+                }
+                else if (distance < bestX)
+                {
+                    bestX = distance;
+                    nearestX = cell;
+                }
+            }
+
+            info.LocationY = _s.SwapAxisColumns ? nearestX : nearestY;
+            info.LocationX = _s.SwapAxisColumns ? nearestY : nearestX;
+        }
+
         /// <summary>The slabs the column meets: any floor whose footprint covers it
         /// and whose thickness falls within its height, and whether one lands on
         /// top of it.</summary>
@@ -684,6 +735,13 @@ namespace ColumnSections
             public Element Element;
             public BoundingBoxXYZ Box;
             public string TypeName;
+        }
+
+        private class GridRef
+        {
+            public string Name;
+            public XYZ Start;
+            public XYZ Direction;
         }
 
         private class BeamRef

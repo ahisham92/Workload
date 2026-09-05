@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using Autodesk.Revit.DB;
 
@@ -220,21 +221,152 @@ namespace ColumnSections
             // hidden along with everything else.
             if (_s.ShowOnlyThisColumn) ShowOnly(view, column);
 
-            // Above the crop, unless the crop was widened to hold it, so the
-            // drawing stays the size of the column.
-            XYZ notePoint = _s.ExpandCropForNote
-                ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
-                : centre + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
-            var options = new TextNoteOptions(_textTypeId)
+            // The table is worked out first, because the note goes above it.
+            List<string> locationY, locationX;
+            LocationRows(group, out locationY, out locationX);
+            double rowHeight = Units.ToFeet(_s.TableRowHeightMm * _s.ViewScale);
+            double tableHeight = _s.DrawTable ? (3 + locationY.Count + 1) * rowHeight : 0.0;
+
+            if (_s.KeepTextNoteAsWell || !_s.DrawTable)
             {
-                HorizontalAlignment = HorizontalTextAlignment.Left,
-                Rotation = 0.0
-            };
-            TextNote.Create(_doc, view.Id, notePoint, string.Join("\n", lines), options);
+                // Above the crop, unless the crop was widened to hold it, so the
+                // drawing stays the size of the column.
+                XYZ notePoint = _s.ExpandCropForNote
+                    ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                    : centre + right * (-halfWidth)
+                        + up * (halfHeight + inset + tableHeight + noteHeight
+                                + (tableHeight > 0 ? inset : 0.0));
+                var options = new TextNoteOptions(_textTypeId)
+                {
+                    HorizontalAlignment = HorizontalTextAlignment.Left,
+                    Rotation = 0.0
+                };
+                TextNote.Create(_doc, view.Id, notePoint, string.Join("\n", lines), options);
+            }
+
+            if (_s.DrawTable)
+            {
+                XYZ topLeft = centre + right * (-halfWidth) + up * (halfHeight + inset + tableHeight);
+                DrawTable(view, group, locationY, locationX, topLeft, right, up);
+            }
 
             group.ViewId = view.Id;
             group.ViewName = view.Name;
             return view;
+        }
+
+        /// <summary>Where each column of the type stands against the grid, one row
+        /// per column, stopping at the settings' limit.</summary>
+        private void LocationRows(ColumnTypeGroup group, out List<string> down, out List<string> across)
+        {
+            down = new List<string>();
+            across = new List<string>();
+            foreach (ColumnInfo member in group.Members)
+            {
+                if (down.Count >= _s.MaxLocationRows)
+                {
+                    down.Add(string.Format("(+{0} MORE)", group.Count - down.Count));
+                    across.Add("");
+                    break;
+                }
+                down.Add(member.LocationY);
+                across.Add(member.LocationX);
+            }
+            if (down.Count == 0)
+            {
+                down.Add("");
+                across.Add("");
+            }
+        }
+
+        /// <summary>The table on the section: what the column is, how many there
+        /// are, where each one stands, and the detail number. Drawn as detail lines
+        /// and text, sized on paper and scaled up by the view.</summary>
+        private void DrawTable(ViewSection view, ColumnTypeGroup group,
+            List<string> locationY, List<string> locationX, XYZ topLeft, XYZ right, XYZ up)
+        {
+            double labelWidth = Units.ToFeet(_s.TableLabelWidthMm * _s.ViewScale);
+            double valueWidth = Units.ToFeet(_s.TableValueWidthMm * _s.ViewScale);
+            double rowHeight = Units.ToFeet(_s.TableRowHeightMm * _s.ViewScale);
+            double textHeight = _textSizeFeet * _s.ViewScale;
+            double pad = (rowHeight - textHeight) / 2.0;
+
+            int rowCount = 3 + locationY.Count + 1;   // type, number, heading, rows, detail
+            double tableWidth = labelWidth + valueWidth;
+            double tableHeight = rowCount * rowHeight;
+
+            // x runs across the table, y runs down it.
+            Func<double, double, XYZ> at = (x, y) => topLeft + right * x + up * (-y);
+
+            // The frame, the label column, and the row lines. A row line inside the
+            // location block starts at the label column, because LOCATION runs on
+            // down beside them.
+            Draw(view, at(0, 0), at(tableWidth, 0));
+            Draw(view, at(0, tableHeight), at(tableWidth, tableHeight));
+            Draw(view, at(0, 0), at(0, tableHeight));
+            Draw(view, at(tableWidth, 0), at(tableWidth, tableHeight));
+            Draw(view, at(labelWidth, 0), at(labelWidth, tableHeight));
+            for (int r = 1; r < rowCount; r++)
+            {
+                bool insideLocation = r >= 3 && r <= 2 + locationY.Count;
+                Draw(view, at(insideLocation ? labelWidth : 0, r * rowHeight),
+                           at(tableWidth, r * rowHeight));
+            }
+
+            double split = labelWidth + valueWidth / 2.0;
+            Draw(view, at(split, 2 * rowHeight), at(split, (3 + locationY.Count) * rowHeight));
+
+            double labelMid = labelWidth / 2.0;
+            double valueMid = labelWidth + valueWidth / 2.0;
+            double downMid = labelWidth + valueWidth / 4.0;
+            double acrossMid = labelWidth + 3.0 * valueWidth / 4.0;
+
+            ColumnSignature s = group.Signature;
+            string name = s.Tag.Length > 0 ? s.Tag : group.Code;
+            string typeCell = name + "(" + s.SizeText.Replace(" ", "") + ")";
+
+            // The detail number is the number in the type code: CT-01 gives 01.
+            int dash = group.Code.LastIndexOf('-');
+            string detailNumber = dash >= 0 && dash + 1 < group.Code.Length
+                ? group.Code.Substring(dash + 1)
+                : group.Code;
+
+            Write(view, "COLUMN TYPE", at(labelMid, pad));
+            Write(view, typeCell, at(valueMid, pad));
+            Write(view, "NUMBER", at(labelMid, rowHeight + pad));
+            Write(view, group.Count.ToString(CultureInfo.InvariantCulture), at(valueMid, rowHeight + pad));
+
+            // LOCATION sits against the middle of its own block.
+            double locationTop = ((5 + locationY.Count) / 2.0) * rowHeight - textHeight / 2.0;
+            Write(view, "LOCATION", at(labelMid, locationTop));
+            Write(view, "Y-AXIS", at(downMid, 2 * rowHeight + pad));
+            Write(view, "X-AXIS", at(acrossMid, 2 * rowHeight + pad));
+            for (int r = 0; r < locationY.Count; r++)
+            {
+                Write(view, locationY[r], at(downMid, (3 + r) * rowHeight + pad));
+                Write(view, locationX[r], at(acrossMid, (3 + r) * rowHeight + pad));
+            }
+
+            double detailRow = (3 + locationY.Count) * rowHeight + pad;
+            Write(view, "DETAIL NUMBER", at(labelMid, detailRow));
+            Write(view, detailNumber, at(valueMid, detailRow));
+        }
+
+        private void Draw(View view, XYZ a, XYZ b)
+        {
+            if (a.DistanceTo(b) < 1e-7) return;
+            _doc.Create.NewDetailCurve(view, Line.CreateBound(a, b));
+        }
+
+        private void Write(View view, string text, XYZ origin)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            var options = new TextNoteOptions(_textTypeId)
+            {
+                HorizontalAlignment = HorizontalTextAlignment.Center,
+                Rotation = 0.0
+            };
+            TextNote.Create(_doc, view.Id, origin, text, options);
         }
 
         /// <summary>The lifts of the stack, one line each, where there is more than
