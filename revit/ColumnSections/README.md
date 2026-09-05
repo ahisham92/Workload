@@ -82,18 +82,21 @@ a method. This one is statements only, with every type written out in full, so i
 does not care what the tool has already imported.
 
 Paste the whole file, then check the one line marked `>>>` near the top — how the
-code gets hold of the document. Four versions are given; keep the one that
-compiles in your tool and delete the rest:
-
-```csharp
-Autodesk.Revit.DB.Document theDoc = uidoc.Document;
-Autodesk.Revit.DB.Document theDoc = uiapp.ActiveUIDocument.Document;
-Autodesk.Revit.DB.Document theDoc = commandData.Application.ActiveUIDocument.Document;
-Autodesk.Revit.DB.Document theDoc = doc;
-```
+code gets hold of the document. These tools wrap your code in a method handed a
+`UIApplication`, so the line reads `<that parameter>.ActiveUIDocument.Document`.
+The file uses `uiapp`, which is what most of them call it; if the compiler says
+`uiapp` does not exist, the name is in the method signature its error quotes —
+`RunBody(UIApplication app)` means write `app`. Spare versions are commented
+under it.
 
 If it then says not all code paths return a value, add the return the tool wants
 as the last line — the commented lines at the bottom of the file.
+
+Both pasteable files are mirrored as `.txt` beside them —
+[`devkit/ColumnSectionsDevKit.txt`](devkit/ColumnSectionsDevKit.txt) and
+[`macro/ColumnSectionsMacro.txt`](macro/ColumnSectionsMacro.txt) — for machines
+that will not open or download a `.cs`. They are copies, written by the same
+script; the `.cs` is the one to edit.
 
 This is the same program, but a second copy of it rather than a generated one:
 without classes it has to be written differently, keeping each column's

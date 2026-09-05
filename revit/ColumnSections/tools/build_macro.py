@@ -119,6 +119,14 @@ def main():
     out.write_text("\n".join(parts), encoding="utf-8")
     print("wrote %s (%d lines)" % (out, len(out.read_text().splitlines())))
 
+    # A .txt of each pasteable file as well: some machines will not open, mail
+    # or download a .cs, and these are only ever copied out of, never compiled
+    # where they sit.
+    for source in [HERE / "devkit" / "ColumnSectionsDevKit.cs", out]:
+        mirror = source.with_suffix(".txt")
+        mirror.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        print("wrote %s" % mirror)
+
 
 if __name__ == "__main__":
     main()
