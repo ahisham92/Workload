@@ -85,6 +85,23 @@ turn each of those off.
 The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
 is one.
 
+## The tags on the plan
+
+[`devkit/ColumnPlanTagsDevKit.cs`](devkit/ColumnPlanTagsDevKit.cs) is run with a
+**plan open**. Beside every column that plan cuts it puts the tag and the size on
+the right, and on the left a bubble with a leader to the column: the tag above
+the line, and below it the number of the detail the column is drawn on.
+
+That number is read off the section views themselves where they exist, so a
+bubble on the plan and the section it points at carry the same number; where a
+section has not been made yet, the type's own number is used.
+
+It clears nothing. A column with something already written where the tag would
+go is left alone and counted in the report, so running it twice does not double
+up, and a tag placed by hand is never overwritten. `skipWhereAlreadyTagged` off
+turns that off. `onlyTheActiveView` is true here, since a plan is something you
+open; set it false to tag every plan in the model.
+
 ## The title under each section
 
 [`devkit/ColumnTitlesDevKit.cs`](devkit/ColumnTitlesDevKit.cs) draws the title
@@ -279,10 +296,11 @@ Revit and the buttons are under **Structure Tools ▸ Column Sections**.
 1. **`ColumnSectionsDevKit`** — cuts the sections and draws the table on each.
 2. **`ColumnBreakLinesDevKit`** — places the break line family on them.
 3. **`ColumnTitlesDevKit`** — draws the title under each one.
-4. **`ColumnTableDevKit`** — only for redrawing tables on sections that already
+4. **`ColumnPlanTagsDevKit`** — tags the columns on the plan you have open.
+5. **`ColumnTableDevKit`** — only for redrawing tables on sections that already
    exist; the sections script does the table itself.
 
-All four are built from the same settings and the same analysis, so they see the
+All five are built from the same settings and the same analysis, so they see the
 columns identically, and each can be re-run without doubling up on its own work.
 
 ## Using it

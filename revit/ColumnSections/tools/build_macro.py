@@ -115,7 +115,7 @@ def between(text, start, end):
     return "\n".join(lines[first + 1:last])
 
 
-def build_from_parts(head_name, tail_name, out_name, what):
+def build_from_parts(head_name, tail_name, out_name, what, extra=None):
     """A script made of the sections script's settings and analysis, with a tail
     of its own on the end. Sharing the analysis is the point: these scripts have
     to see the columns exactly as the sections did."""
@@ -129,6 +129,8 @@ def build_from_parts(head_name, tail_name, out_name, what):
     settings = settings.replace(
         "bool useSelectionWhenAny = true;",
         "bool useSelectionWhenAny = false;   // %s always reads the whole model" % what)
+    for before, after in (extra or []):
+        settings = settings.replace(before, after)
 
     out = HERE / "devkit" / out_name
     out.write_text("\n".join([
@@ -148,6 +150,13 @@ def build_table():
 def build_break_lines():
     build_from_parts("breaks-head.cs", "breaks-tail.cs",
                      "ColumnBreakLinesDevKit.cs", "the break lines")
+
+
+def build_plan_tags():
+    build_from_parts("plan-head.cs", "plan-tail.cs",
+                     "ColumnPlanTagsDevKit.cs", "the plan tags",
+                     extra=[("bool onlyTheActiveView = false;",
+                             "bool onlyTheActiveView = true;    // the plan you have open")])
 
 
 def build_titles():
@@ -173,12 +182,14 @@ def main():
     build_table()
     build_break_lines()
     build_titles()
+    build_plan_tags()
 
     pasteable = [
         HERE / "devkit" / "ColumnSectionsDevKit.cs",
         HERE / "devkit" / "ColumnTableDevKit.cs",
         HERE / "devkit" / "ColumnBreakLinesDevKit.cs",
         HERE / "devkit" / "ColumnTitlesDevKit.cs",
+        HERE / "devkit" / "ColumnPlanTagsDevKit.cs",
         out,
     ]
     for source in pasteable:

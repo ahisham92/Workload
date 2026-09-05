@@ -152,6 +152,18 @@ double onAxisToleranceMm = 100.0;
 // this false: it counts the whole model however you leave it here.
 bool useSelectionWhenAny = false;   // the titles always reads the whole model
 
+// Used by the plan script: the tag put beside each column on a plan - its name
+// and size on the right, and on the left the bubble with the detail number of
+// the section that column is drawn on. Sizes are ON PAPER.
+double planCutOffsetMm = 1200.0;      // how far above its level the plan cuts
+double planLabelOffsetMm = 12.0;      // right of the column
+double planBubbleOffsetMm = 30.0;     // left of the column
+double planBubbleRadiusXMm = 9.0;
+double planBubbleRadiusYMm = 5.5;
+double planArrowMm = 2.5;
+string planSizeFormat = "({0})";
+bool skipWhereAlreadyTagged = true;   // leave columns something is written by
+
 // Used by the title script: the box drawn under each section. {0} is the tag on
 // the first line, the detail number on the second and on the right of the third,
 // and the view's scale in the middle of it. Sizes are ON PAPER.
