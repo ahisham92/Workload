@@ -44,6 +44,49 @@ is drawn where it happens rather than only written down.
 
 The view is named `COL SECTION - CT-01 (7 NOS)`.
 
+## Getting it into Revit
+
+There are two ways in, and **only one file to handle** in either case. Do not
+paste the files in `src/` one at a time into a code-runner window: they are eight
+parts of one program, and a window that wraps what you paste inside a method
+cannot take a `using` line or a `namespace` at all.
+
+### 1. As a macro — nothing to install, nothing to build
+
+Use [`macro/ColumnSectionsMacro.cs`](macro/ColumnSectionsMacro.cs). It is the whole
+program in one file, generated from `src/`.
+
+1. Open your project. **Manage ▸ Macros ▸ Macro Manager**, and pick the tab
+   named after the project (not *Application*).
+2. **Module…**, name it exactly `ColumnSections`, language **C#**, OK. The name
+   matters: it becomes the namespace the file is written in.
+3. The macro editor opens on a generated file. Select all of it and paste the
+   whole of `ColumnSectionsMacro.cs` over it.
+4. Build — the hammer, or F8 — and close the editor.
+5. **Macro Manager** again. `CreateColumnSections` cuts the sections;
+   `ColumnTypeReport` only counts and writes the CSV. Select one and **Run**.
+
+If the compiler says `AddInId` or `Transaction` is given twice, delete those two
+attribute lines near the top of what you pasted — your Revit put them in the
+hidden half of the class.
+
+Macros live in the project file, so this travels with the model and has to be
+done again in the next one. The add-in does not.
+
+### 2. As an add-in — built once, on every project after that
+
+Needs Visual Studio or the .NET SDK on a machine with Revit installed; see
+**Building** below. It produces `ColumnSections.dll`, and the two files go here:
+
+```
+%AppData%\Autodesk\Revit\Addins\2025\ColumnSections.addin
+%AppData%\Autodesk\Revit\Addins\2025\ColumnSections\ColumnSections.dll
+```
+
+That is `C:\Users\<you>\AppData\Roaming\Autodesk\Revit\Addins\2025`. Start
+Revit and the buttons are under **Structure Tools ▸ Column Sections**.
+`-p:DeployAddin=true` on the build does that copying for you.
+
 ## Using it
 
 **Structure Tools ▸ Column Sections ▸ Column Sections.** With nothing selected it
@@ -58,7 +101,8 @@ the number of types you expect.
 
 ## Building
 
-Needs the Revit API from an installed Revit; nothing is downloaded.
+For the add-in only — the macro needs none of this. Needs the Revit API from an
+installed Revit; nothing is downloaded.
 
 ```
 dotnet build ColumnSections.csproj -c Release -p:RevitVersion=2024
@@ -77,6 +121,11 @@ To install by hand, put `ColumnSections.dll` in
 Revit 2021 is the oldest version the unit calls (`UnitTypeId`) work with.
 
 ## Tuning
+
+The macro is generated, so change `src/` and run `python3 tools/build_macro.py`
+to write `macro/ColumnSectionsMacro.cs` again — the sources are the only copy of
+the code. Editing the macro file directly works too, until the next generation
+overwrites it.
 
 Everything adjustable is in [`src/Settings.cs`](src/Settings.cs), commented, one
 property each: the rounding tolerances, how far out a foundation or a beam is

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using Autodesk.Revit.DB;
 
@@ -34,10 +33,16 @@ namespace ColumnSections
         {
             problem = null;
 
-            ViewFamilyType sectionType = new FilteredElementCollector(_doc)
-                .OfClass(typeof(ViewFamilyType))
-                .Cast<ViewFamilyType>()
-                .FirstOrDefault(v => v.ViewFamily == ViewFamily.Section);
+            ViewFamilyType sectionType = null;
+            foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(ViewFamilyType)))
+            {
+                var candidate = e as ViewFamilyType;
+                if (candidate != null && candidate.ViewFamily == ViewFamily.Section)
+                {
+                    sectionType = candidate;
+                    break;
+                }
+            }
             if (sectionType == null)
             {
                 problem = "This model has no section view type, so no section can be created.";
@@ -51,8 +56,11 @@ namespace ColumnSections
                 : null;
             if (textType == null)
             {
-                textType = new FilteredElementCollector(_doc)
-                    .OfClass(typeof(TextNoteType)).Cast<TextNoteType>().FirstOrDefault();
+                foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(TextNoteType)))
+                {
+                    textType = e as TextNoteType;
+                    if (textType != null) break;
+                }
             }
             if (textType == null)
             {
@@ -66,10 +74,10 @@ namespace ColumnSections
             Parameter factor = textType.get_Parameter(BuiltInParameter.TEXT_WIDTH_SCALE);
             if (factor != null && factor.AsDouble() > 1e-9) _textWidthFactor = factor.AsDouble();
 
-            foreach (View v in new FilteredElementCollector(_doc)
-                .OfClass(typeof(View)).Cast<View>())
+            foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(View)))
             {
-                _usedNames.Add(v.Name);
+                var view = e as View;
+                if (view != null) _usedNames.Add(view.Name);
             }
             return true;
         }
@@ -115,8 +123,12 @@ namespace ColumnSections
             string[] lines = NoteLines(group);
             double lineHeight = _textSizeFeet * _s.ViewScale * 1.4;
             double noteHeight = lineHeight * lines.Length;
-            double noteWidth = lines.Max(l => l.Length)
-                * _textSizeFeet * _textWidthFactor * 0.62 * _s.ViewScale;
+            int longestLine = 0;
+            foreach (string line in lines)
+            {
+                if (line.Length > longestLine) longestLine = line.Length;
+            }
+            double noteWidth = longestLine * _textSizeFeet * _textWidthFactor * 0.62 * _s.ViewScale;
             double inset = _textSizeFeet * _s.ViewScale;
 
             maxU += noteHeight + 2 * inset;
@@ -188,11 +200,13 @@ namespace ColumnSections
 
             if (_s.MaxMarksInNote > 0)
             {
-                List<string> marks = group.Members
-                    .Select(m => m.Mark)
-                    .Where(m => !string.IsNullOrEmpty(m))
-                    .Take(_s.MaxMarksInNote)
-                    .ToList();
+                var marks = new List<string>();
+                foreach (ColumnInfo member in group.Members)
+                {
+                    if (string.IsNullOrEmpty(member.Mark)) continue;
+                    if (marks.Count >= _s.MaxMarksInNote) break;
+                    marks.Add(member.Mark);
+                }
                 if (marks.Count > 0)
                 {
                     var text = new StringBuilder("MARKS: ");
