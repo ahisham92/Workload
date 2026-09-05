@@ -51,16 +51,21 @@ namespace ColumnSections
             var ask = new TaskDialog("Column sections")
             {
                 MainInstruction = string.Format("{0} column{1} in {2} type{3}.",
-                    columns.Count, columns.Count == 1 ? "" : "s",
+                    Subjects(groups), Subjects(groups) == 1 ? "" : "s",
                     groups.Count, groups.Count == 1 ? "" : "s"),
                 MainContent = string.Format(
-                    "Read from {0}. Ground is taken from level \"{1}\".\n\n" +
+                    "Read from {0}, {1} columns in all. Ground is taken from level \"{2}\".\n\n{3}" +
                     "A type is a size, a foundation below, a beam connection, a level " +
                     "against ground, and what the stack does above and below it. One " +
                     "cross section will be created for each, with a note in it saying " +
                     "how many columns share that type.",
                     fromSelection ? "your selection" : "the whole model",
-                    scanner.GroundLevelName),
+                    columns.Count, scanner.GroundLevelName,
+                    settings.OneSectionPerStack
+                        ? "A column standing on another is one column here, not two: the section "
+                          + "is taken on the one that starts at the foundation and covers every "
+                          + "lift above it.\n\n"
+                        : ""),
                 ExpandedContent = Summary(groups),
                 CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
                 DefaultButton = TaskDialogResult.Yes
@@ -179,15 +184,27 @@ namespace ColumnSections
             }
         }
 
+        /// <summary>How many columns the sections are of, once a stack counts once.</summary>
+        private static int Subjects(List<ColumnTypeGroup> groups)
+        {
+            int total = 0;
+            foreach (ColumnTypeGroup g in groups) total += g.Count;
+            return total;
+        }
+
         /// <summary>One line per type, for the dialogs.</summary>
         public static string Summary(List<ColumnTypeGroup> groups)
         {
             var text = new StringBuilder();
             foreach (ColumnTypeGroup g in groups)
             {
-                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  STACK {6}\n",
+                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
                     g.Code, g.Count, g.Signature.SizeText, g.Signature.FoundationText,
-                    g.Signature.BeamText, g.Signature.GroundText, g.Signature.StackText);
+                    g.Signature.BeamText, g.Signature.GroundText,
+                    g.Representative.Lifts.Count,
+                    string.Join(" / ", g.Signature.LiftSizes.Length > 0
+                        ? g.Signature.LiftSizes
+                        : new[] { g.Signature.SizeText }));
             }
             return text.ToString();
         }
@@ -202,7 +219,7 @@ namespace ColumnSections
             var text = new StringBuilder();
             text.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
                             "Foundation thickness mm,Beams,Beam at top,Base level,Base mm,Top mm," +
-                            "Base below ground mm,Size below,Size above,Size changes,Stack position,Marks");
+                            "Base below ground mm,Lifts,Lift sizes,Size changes,Stack position,Marks");
             foreach (ColumnTypeGroup g in groups)
             {
                 ColumnSignature s = g.Signature;
@@ -215,8 +232,8 @@ namespace ColumnSections
                     s.HeightMm, s.HasFoundation ? Csv(s.FoundationTypeName) : "none",
                     s.FoundationTopMm, s.FoundationThicknessMm, s.BeamCount, s.BeamAtTop ? "yes" : "no",
                     Csv(s.BaseLevelName), s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
-                    s.HasColumnBelow ? Csv(s.SizeBelowText) : "none",
-                    s.HasColumnAbove ? Csv(s.SizeAboveText) : "none",
+                    g.Representative.Lifts.Count,
+                    Csv(string.Join(" / ", s.LiftSizes.Length > 0 ? s.LiftSizes : new[] { s.SizeText })),
                     s.SizeChangesBelow || s.SizeChangesAbove ? "yes" : "no",
                     Csv(s.StackPosition),
                     Csv(string.Join(" ", marks.ToArray())));

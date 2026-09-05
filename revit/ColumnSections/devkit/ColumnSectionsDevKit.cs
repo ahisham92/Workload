@@ -55,7 +55,11 @@ string groundLevelName = "";
 int viewScale = 50;
 double sideClearanceMm = 1000.0;      // crop, left and right of the column
 double topClearanceMm = 600.0;
-double bottomClearanceMm = 300.0;
+double bottomClearanceMm = 600.0;
+
+// Seen below the base of the column even where no foundation was found, so the
+// footing is in the view whatever it was modelled as.
+double alwaysShowBelowBaseMm = 1000.0;
 
 // How far past the column's own faces the view looks. This alone sets the far
 // clip: nothing else is allowed to push it out, so a raft under the column
@@ -63,10 +67,17 @@ double bottomClearanceMm = 300.0;
 double viewDepthClearanceMm = 500.0;
 
 // How far past the column's faces a footing may widen the view, before the side
-// clearance is added on top. Zero keeps the crop at exactly the column plus the
-// clearance either side - a footing wider than the column still shows, as far
-// out as that band reaches. Raise it only for a footing too wide to fit.
-double maxExtraWidthMm = 0.0;
+// clearance is added on top. A pad footing shows; a raft is cut off here, so it
+// cannot make the view the size of the building.
+double maxExtraWidthMm = 1000.0;
+
+// One section per column STACK, not per column: the section is taken on the
+// column that starts at the foundation and covers everything standing on it, so
+// a 600x900 with a 400x900 over it is one section counted once, not two. The
+// count in the note is then a count of columns on the ground, which is what a
+// schedule of column sections is counting.
+bool oneSectionPerStack = true;
+int maxLiftsInNote = 12;
 double showAboveMm = 600.0;   // how much of the next lift up the section takes in
 double showBelowMm = 300.0;
 
@@ -628,13 +639,56 @@ else
         }
     }
 
+    // ------------------------------------ the stack each column belongs to --
+
+    // Walking aboveOf from a column with nothing under it gives one column line,
+    // bottom lift first. That line is what gets a section: the 600x900 and the
+    // 400x900 standing on it are one column, counted once.
+    var chainOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
+    var subjects = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+    var claimed = new System.Collections.Generic.HashSet<Autodesk.Revit.DB.ElementId>();
+
+    if (oneSectionPerStack)
+    {
+        // Bottoms first, so every stack is walked from the ground up.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            foreach (Autodesk.Revit.DB.ElementId id in ids)
+            {
+                if (claimed.Contains(id)) continue;
+                // The second pass picks up anything the first could not reach.
+                if (pass == 0 && belowOf.ContainsKey(id)) continue;
+
+                var chain = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+                Autodesk.Revit.DB.ElementId walk = id;
+                while (walk != null && !claimed.Contains(walk) && chain.Count < 200)
+                {
+                    chain.Add(walk);
+                    claimed.Add(walk);
+                    walk = aboveOf.ContainsKey(walk) ? aboveOf[walk] : null;
+                }
+                chainOf[id] = chain;
+                subjects.Add(id);
+            }
+        }
+    }
+    else
+    {
+        foreach (Autodesk.Revit.DB.ElementId id in ids)
+        {
+            var chain = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+            chain.Add(id);
+            chainOf[id] = chain;
+            subjects.Add(id);
+        }
+    }
+
     // ----------------------------------------------- sort them into types --
 
-    var membersOf = new System.Collections.Generic.Dictionary<string,
-        System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
+    var membersOf = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
     var keys = new System.Collections.Generic.List<string>();
 
-    foreach (Autodesk.Revit.DB.ElementId id in ids)
+    foreach (Autodesk.Revit.DB.ElementId id in subjects)
     {
         double[] n = numberOf[id];
         string[] s = textOf[id];
@@ -652,8 +706,23 @@ else
         key.AppendFormat(inv, "G:{0:0}", n[N_BELOW_GROUND]);
         if (stackChangeIsPartOfType)
         {
-            key.Append("|A:").Append(s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "none");
-            key.Append("|U:").Append(s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "none");
+            if (oneSectionPerStack)
+            {
+                // Every lift of the stack, in order: two stacks are the same only
+                // if they change size at the same places.
+                key.Append("|L:");
+                foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+                {
+                    key.Append(sizeTextOf(numberOf[member]));
+                    if (heightIsPartOfType) key.AppendFormat(inv, "@{0:0}", numberOf[member][N_HEIGHT]);
+                    key.Append(';');
+                }
+            }
+            else
+            {
+                key.Append("|A:").Append(s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "none");
+                key.Append("|U:").Append(s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "none");
+            }
         }
 
         string signature = key.ToString();
@@ -768,7 +837,29 @@ else
             var lines = new System.Collections.Generic.List<string>();
             lines.Add(string.Format(inv, "{0} - {1} COLUMN{2} OF THIS TYPE",
                 code, count, count == 1 ? "" : "S"));
-            lines.Add("SIZE: " + sizeTextOf(n) + "  (" + s[T_TYPE] + ")");
+
+            var chain = chainOf.ContainsKey(id) ? chainOf[id] : null;
+            if (chain != null && chain.Count > 1)
+            {
+                lines.Add(string.Format(inv, "{0} LIFTS, FOUNDATION UP", chain.Count));
+                int shownLifts = 0;
+                foreach (Autodesk.Revit.DB.ElementId member in chain)
+                {
+                    if (shownLifts >= maxLiftsInNote)
+                    {
+                        lines.Add(string.Format(inv, "(+{0} MORE LIFTS)", chain.Count - shownLifts));
+                        break;
+                    }
+                    double[] mn = numberOf[member];
+                    lines.Add(string.Format(inv, "LIFT {0}: {1}  ({2:0} TO {3:0})",
+                        shownLifts + 1, sizeTextOf(mn), mn[N_BASE], mn[N_TOP]));
+                    shownLifts++;
+                }
+            }
+            else
+            {
+                lines.Add("SIZE: " + sizeTextOf(n) + "  (" + s[T_TYPE] + ")");
+            }
             lines.Add(n[N_HAS_FOUNDATION] > 0.5
                 ? string.Format(inv, "FDN TOP {0:+0;-0;0} ({1:0} THK)", n[N_FOUNDATION_TOP], n[N_FOUNDATION_THICKNESS])
                 : "NO FOUNDATION FOUND");
@@ -781,16 +872,19 @@ else
                 : (n[N_BELOW_GROUND] > 0
                     ? string.Format(inv, "BASE {0:0} BELOW GROUND", n[N_BELOW_GROUND])
                     : string.Format(inv, "BASE {0:0} ABOVE GROUND", -n[N_BELOW_GROUND])));
-            lines.Add(s[T_SIZE_BELOW].Length == 0
-                ? "NOTHING BELOW (COLUMN STARTS HERE)"
-                : "BELOW: " + s[T_SIZE_BELOW] + (s[T_SIZE_BELOW] == sizeTextOf(n)
-                    ? " - SAME SIZE" : " - SIZE CHANGES"));
-            lines.Add(s[T_SIZE_ABOVE].Length == 0
-                ? "NOTHING ABOVE (TOP OF STACK)"
-                : "ABOVE: " + s[T_SIZE_ABOVE] + (s[T_SIZE_ABOVE] == sizeTextOf(n)
-                    ? " - SAME SIZE" : " - SIZE CHANGES"));
-            lines.Add(string.Format(inv, "BASE {0:0} / TOP {1:0} / HT {2:0}",
-                n[N_BASE], n[N_TOP], n[N_HEIGHT]));
+            if (chain == null || chain.Count < 2)
+            {
+                lines.Add(s[T_SIZE_BELOW].Length == 0
+                    ? "NOTHING BELOW (COLUMN STARTS HERE)"
+                    : "BELOW: " + s[T_SIZE_BELOW] + (s[T_SIZE_BELOW] == sizeTextOf(n)
+                        ? " - SAME SIZE" : " - SIZE CHANGES"));
+                lines.Add(s[T_SIZE_ABOVE].Length == 0
+                    ? "NOTHING ABOVE (TOP OF STACK)"
+                    : "ABOVE: " + s[T_SIZE_ABOVE] + (s[T_SIZE_ABOVE] == sizeTextOf(n)
+                        ? " - SAME SIZE" : " - SIZE CHANGES"));
+                lines.Add(string.Format(inv, "BASE {0:0} / TOP {1:0} / HT {2:0}",
+                    n[N_BASE], n[N_TOP], n[N_HEIGHT]));
+            }
 
             // The marks themselves are added by the caller, which knows the
             // whole group.
@@ -804,22 +898,29 @@ else
             System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
             double[] n = numberOf[members[0]];
             string[] s = textOf[members[0]];
-            summary.AppendFormat(inv, "{0}-{1:00}  x{2}  {3}  |  {4}  |  {5} beam(s)  |  {6:0} below ground  |  {7} > {8} > {9}\n",
+            summary.AppendFormat(inv, "{0}-{1:00}  x{2}  {3}  |  {4}  |  {5} beam(s)  |  {6:0} below ground  |  {7} > {8} > {9}  |  {10} lift(s)\n",
                 typeCodePrefix, i + 1, members.Count, sizeTextOf(n),
                 n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "no foundation",
                 n[N_BEAMS], n[N_BELOW_GROUND],
                 s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "-",
                 sizeTextOf(n),
-                s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "-");
+                s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "-",
+                chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1);
         }
 
         var ask = new Autodesk.Revit.UI.TaskDialog("Column sections");
         ask.MainInstruction = string.Format(inv, "{0} column{1} in {2} type{3}.",
-            ids.Count, ids.Count == 1 ? "" : "s", keys.Count, keys.Count == 1 ? "" : "s");
+            subjects.Count, subjects.Count == 1 ? "" : "s", keys.Count, keys.Count == 1 ? "" : "s");
         ask.MainContent = string.Format(inv,
-            "Read from {0}. Ground is taken from level \"{1}\".\n\nOne cross section will be "
-            + "created for each type, with a note in it saying how many columns share that type.",
-            fromSelection ? "your selection" : "the whole model", groundFrom);
+            "Read from {0}, {1} columns in all. Ground is taken from level \"{2}\".\n\n{3}"
+            + "One cross section will be created for each type, with a note in it saying how "
+            + "many columns share that type.",
+            fromSelection ? "your selection" : "the whole model", ids.Count, groundFrom,
+            oneSectionPerStack
+                ? "A column standing on another is one column here, not two: the section is "
+                  + "taken on the one that starts at the foundation and covers every lift above "
+                  + "it, so the counts are counts of columns on the ground.\n\n"
+                : "");
         ask.ExpandedContent = summary.ToString();
         ask.CommonButtons = Autodesk.Revit.UI.TaskDialogCommonButtons.Yes
                           | Autodesk.Revit.UI.TaskDialogCommonButtons.No;
@@ -850,11 +951,16 @@ else
                         Autodesk.Revit.DB.XYZ up = Autodesk.Revit.DB.XYZ.BasisZ;
                         Autodesk.Revit.DB.XYZ towardsViewer = right.CrossProduct(up).Normalize();
 
-                        // The column itself, and nothing else, decides how wide
-                        // and how deep the view is.
-                        var columnPoints = cornersOf(boxOf[id]);
-                        columnPoints.Add(origin);
-                        columnPoints.Add(topPointOf[id]);
+                        // The stack itself, and nothing else, decides how wide
+                        // and how deep the view is - and how tall: every lift of
+                        // it is in the section, foundation to roof.
+                        var columnPoints = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
+                        foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+                        {
+                            columnPoints.AddRange(cornersOf(boxOf[member]));
+                            columnPoints.Add(basePointOf[member]);
+                            columnPoints.Add(topPointOf[member]);
+                        }
 
                         double minR = 0, maxR = 0, minU = 0, maxU = 0, minD = 0, maxD = 0;
                         bool first = true;
@@ -880,17 +986,28 @@ else
                         var extraPoints = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
                         if (foundationBoxOf.ContainsKey(id))
                             extraPoints.AddRange(cornersOf(foundationBoxOf[id]));
-                        if (aboveOf.ContainsKey(id) && boxOf.ContainsKey(aboveOf[id]))
+
+                        // Below the base whatever happens, so the footing is in
+                        // the view even where none was found to measure.
+                        extraPoints.Add(new Autodesk.Revit.DB.XYZ(
+                            origin.X, origin.Y, origin.Z - toFeet(alwaysShowBelowBaseMm)));
+
+                        if (!oneSectionPerStack)
                         {
-                            double ceiling = topPointOf[id].Z + toFeet(showAboveMm);
-                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[aboveOf[id]]))
-                                extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Min(p.Z, ceiling)));
-                        }
-                        if (belowOf.ContainsKey(id) && boxOf.ContainsKey(belowOf[id]))
-                        {
-                            double floor = origin.Z - toFeet(showBelowMm);
-                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[belowOf[id]]))
-                                extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Max(p.Z, floor)));
+                            // Without stacks, the lifts either side are only
+                            // glimpsed rather than drawn whole.
+                            if (aboveOf.ContainsKey(id) && boxOf.ContainsKey(aboveOf[id]))
+                            {
+                                double ceiling = topPointOf[id].Z + toFeet(showAboveMm);
+                                foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[aboveOf[id]]))
+                                    extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Min(p.Z, ceiling)));
+                            }
+                            if (belowOf.ContainsKey(id) && boxOf.ContainsKey(belowOf[id]))
+                            {
+                                double floor = origin.Z - toFeet(showBelowMm);
+                                foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[belowOf[id]]))
+                                    extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Max(p.Z, floor)));
+                            }
                         }
 
                         double reachLeft = minR - toFeet(maxExtraWidthMm);
@@ -1010,9 +1127,12 @@ else
                             try
                             {
                                 var keep = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
-                                keep.Add(id);
-                                if (foundationIdOf.ContainsKey(id)) keep.Add(foundationIdOf[id]);
-                                if (beamIdsOf.ContainsKey(id)) keep.AddRange(beamIdsOf[id]);
+                                foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+                                {
+                                    keep.Add(member);
+                                    if (foundationIdOf.ContainsKey(member)) keep.Add(foundationIdOf[member]);
+                                    if (beamIdsOf.ContainsKey(member)) keep.AddRange(beamIdsOf[member]);
+                                }
                                 if (aboveOf.ContainsKey(id)) keep.Add(aboveOf[id]);
                                 if (belowOf.ContainsKey(id)) keep.Add(belowOf[id]);
                                 keep.AddRange(alwaysVisibleIds);
@@ -1063,8 +1183,8 @@ else
                     csvPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                         string.Format(inv, "{0}-column-types-{1:yyyyMMdd-HHmmss}.csv", title, System.DateTime.Now));
                     var csv = new System.Text.StringBuilder();
-                    csv.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm,"
-                        + "Beams,Beam at top,Base mm,Top mm,Base below ground mm,Size below,Size above,Marks");
+                    csv.AppendLine("Type,Count,Lifts,Family,Type name,Size,Height mm,Foundation,Foundation top mm,"
+                        + "Beams,Beam at top,Base mm,Top mm,Base below ground mm,Size below,Size above,Lift sizes,Marks");
                     for (int i = 0; i < keys.Count; i++)
                     {
                         System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
@@ -1076,15 +1196,26 @@ else
                             if (marks.Length > 0) marks.Append(" ");
                             marks.Append(textOf[member][T_MARK]);
                         }
+                        var lifts = new System.Text.StringBuilder();
+                        if (chainOf.ContainsKey(members[0]))
+                        {
+                            foreach (Autodesk.Revit.DB.ElementId member in chainOf[members[0]])
+                            {
+                                if (lifts.Length > 0) lifts.Append(" / ");
+                                lifts.Append(sizeTextOf(numberOf[member]));
+                            }
+                        }
                         csv.AppendFormat(inv,
-                            "{0}-{1:00},{2},\"{3}\",\"{4}\",\"{5}\",{6:0},\"{7}\",{8:0},{9:0},{10},{11:0},{12:0},{13:0},\"{14}\",\"{15}\",\"{16}\"\n",
-                            typeCodePrefix, i + 1, members.Count, s[T_FAMILY], s[T_TYPE], sizeTextOf(n),
+                            "{0}-{1:00},{2},{3},\"{4}\",\"{5}\",\"{6}\",{7:0},\"{8}\",{9:0},{10:0},{11},{12:0},{13:0},{14:0},\"{15}\",\"{16}\",\"{17}\",\"{18}\"\n",
+                            typeCodePrefix, i + 1, members.Count,
+                            chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1,
+                            s[T_FAMILY], s[T_TYPE], sizeTextOf(n),
                             n[N_HEIGHT], n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "none",
                             n[N_FOUNDATION_TOP], n[N_BEAMS], n[N_BEAM_AT_TOP] > 0.5 ? "yes" : "no",
                             n[N_BASE], n[N_TOP], n[N_BELOW_GROUND],
                             s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "none",
                             s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "none",
-                            marks.ToString());
+                            lifts.ToString(), marks.ToString());
                     }
                     System.IO.File.WriteAllText(csvPath, csv.ToString(), System.Text.Encoding.UTF8);
                 }

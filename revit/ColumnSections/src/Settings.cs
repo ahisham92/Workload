@@ -88,10 +88,23 @@ namespace ColumnSections
 
         public int ViewScale = 50;
 
+        /// <summary>One section per column STACK, not per column: it is taken on the
+        /// column that starts at the foundation and covers every lift standing on
+        /// it, so a 600x900 carrying a 400x900 is one column, counted once. The
+        /// counts in the notes are then counts of columns on the ground.</summary>
+        public bool OneSectionPerStack = true;
+
+        /// <summary>How many of a stack's lifts the note lists before it stops.</summary>
+        public int MaxLiftsInNote = 12;
+
         /// <summary>Crop left and right of the column, and above and below it.</summary>
         public double SideClearanceMm = 1000.0;
         public double TopClearanceMm = 600.0;
-        public double BottomClearanceMm = 300.0;
+        public double BottomClearanceMm = 600.0;
+
+        /// <summary>Seen below the base of the column whatever happens, so the
+        /// footing is in the view even where none was found to measure.</summary>
+        public double AlwaysShowBelowBaseMm = 1000.0;
 
         /// <summary>How far past the column's own faces the view looks. This alone
         /// sets the far clip - nothing else may push it out, so a raft under the
@@ -102,7 +115,7 @@ namespace ColumnSections
         /// before the side clearance is added on top. Zero keeps the crop at the
         /// column plus the clearance either side; a footing wider than the column
         /// still shows, as far out as that band reaches.</summary>
-        public double MaxExtraWidthMm = 0.0;
+        public double MaxExtraWidthMm = 1000.0;
 
         /// <summary>Hide everything in the section but this column, its foundation,
         /// the beams framing into it, the lift above and below, the datums, and the

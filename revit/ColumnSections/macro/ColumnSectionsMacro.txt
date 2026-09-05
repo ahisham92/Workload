@@ -160,10 +160,23 @@ namespace ColumnSections
 
         public int ViewScale = 50;
 
+        /// <summary>One section per column STACK, not per column: it is taken on the
+        /// column that starts at the foundation and covers every lift standing on
+        /// it, so a 600x900 carrying a 400x900 is one column, counted once. The
+        /// counts in the notes are then counts of columns on the ground.</summary>
+        public bool OneSectionPerStack = true;
+
+        /// <summary>How many of a stack's lifts the note lists before it stops.</summary>
+        public int MaxLiftsInNote = 12;
+
         /// <summary>Crop left and right of the column, and above and below it.</summary>
         public double SideClearanceMm = 1000.0;
         public double TopClearanceMm = 600.0;
-        public double BottomClearanceMm = 300.0;
+        public double BottomClearanceMm = 600.0;
+
+        /// <summary>Seen below the base of the column whatever happens, so the
+        /// footing is in the view even where none was found to measure.</summary>
+        public double AlwaysShowBelowBaseMm = 1000.0;
 
         /// <summary>How far past the column's own faces the view looks. This alone
         /// sets the far clip - nothing else may push it out, so a raft under the
@@ -174,7 +187,7 @@ namespace ColumnSections
         /// before the side clearance is added on top. Zero keeps the crop at the
         /// column plus the clearance either side; a footing wider than the column
         /// still shows, as far out as that band reaches.</summary>
-        public double MaxExtraWidthMm = 0.0;
+        public double MaxExtraWidthMm = 1000.0;
 
         /// <summary>Hide everything in the section but this column, its foundation,
         /// the beams framing into it, the lift above and below, the datums, and the
@@ -284,9 +297,14 @@ namespace ColumnSections
 
         public string Key { get; private set; }
 
+        /// <summary>The sizes of the stack this column starts, bottom first, once
+        /// the key is built. Empty when it is not the bottom of one.</summary>
+        public string[] LiftSizes = new string[0];
+
         /// <summary>Freezes the signature: rounds every measurement to the
-        /// tolerances in <paramref name="s"/> and builds the comparison key.</summary>
-        public void Build(Settings s)
+        /// tolerances in <paramref name="s"/> and builds the comparison key.
+        /// <paramref name="lifts"/> is the stack standing on this column.</summary>
+        public void Build(Settings s, System.Collections.Generic.List<ColumnInfo> lifts)
         {
             WidthMm = Units.Snap(WidthMm, s.SizeToleranceMm);
             DepthMm = Units.Snap(DepthMm, s.SizeToleranceMm);
@@ -323,8 +341,27 @@ namespace ColumnSections
             if (s.StackChangeIsPartOfType)
             {
                 k.Append('|');
-                k.Append("A:").Append(HasColumnAbove ? SizeAboveText : "none").Append('|');
-                k.Append("U:").Append(HasColumnBelow ? SizeBelowText : "none");
+                if (s.OneSectionPerStack && lifts != null && lifts.Count > 0)
+                {
+                    // Every lift of the stack, in order: two stacks are the same
+                    // only if they change size at the same places.
+                    var sizes = new string[lifts.Count];
+                    k.Append("L:");
+                    for (int i = 0; i < lifts.Count; i++)
+                    {
+                        sizes[i] = lifts[i].Signature.SizeText;
+                        k.Append(sizes[i]);
+                        if (s.HeightIsPartOfType)
+                            k.AppendFormat(c, "@{0:0}", lifts[i].Signature.HeightMm);
+                        k.Append(';');
+                    }
+                    LiftSizes = sizes;
+                }
+                else
+                {
+                    k.Append("A:").Append(HasColumnAbove ? SizeAboveText : "none").Append('|');
+                    k.Append("U:").Append(HasColumnBelow ? SizeBelowText : "none");
+                }
             }
 
             Key = k.ToString();
@@ -421,21 +458,25 @@ namespace ColumnSections
             }
         }
 
-        /// <summary>The five criteria, one per line, for the note in the section.</summary>
-        public string[] DescriptionLines()
+        /// <summary>The criteria, one per line, for the note in the section. Where
+        /// the lifts are listed above it, what is above and below is already said
+        /// and is left out.</summary>
+        public string[] DescriptionLines(bool liftsAreListed)
         {
             var c = CultureInfo.InvariantCulture;
-            return new[]
+            var lines = new System.Collections.Generic.List<string>();
+            if (!liftsAreListed) lines.Add("SIZE: " + SizeText + "  (" + TypeName + ")");
+            lines.Add(FoundationText);
+            lines.Add(BeamText);
+            lines.Add(GroundText);
+            if (!liftsAreListed)
             {
-                "SIZE: " + SizeText + "  (" + TypeName + ")",
-                FoundationText,
-                BeamText,
-                GroundText,
-                BelowText,
-                AboveText,
-                string.Format(c, "BASE {0:0} / TOP {1:0} / HT {2:0}",
-                    BaseElevationMm, TopElevationMm, HeightMm)
-            };
+                lines.Add(BelowText);
+                lines.Add(AboveText);
+                lines.Add(string.Format(c, "BASE {0:0} / TOP {1:0} / HT {2:0}",
+                    BaseElevationMm, TopElevationMm, HeightMm));
+            }
+            return lines.ToArray();
         }
     }
 
@@ -463,6 +504,10 @@ namespace ColumnSections
         /// <summary>The columns sharing this plan location, one storey up and one down.</summary>
         public ColumnInfo Above;
         public ColumnInfo Below;
+
+        /// <summary>On the column a section is taken of: every lift of its stack,
+        /// bottom first, itself included. Empty on the lifts above.</summary>
+        public readonly List<ColumnInfo> Lifts = new List<ColumnInfo>();
         public ColumnSignature Signature;
 
         /// <summary>The least of the two plan dimensions, in feet. Used to decide how
@@ -535,11 +580,12 @@ namespace ColumnSections
                 if (info != null) measured.Add(info);
             }
             LinkStacks(measured);
+            List<ColumnInfo> subjects = BuildStacks(measured);
 
             var byKey = new Dictionary<string, ColumnTypeGroup>();
-            foreach (ColumnInfo info in measured)
+            foreach (ColumnInfo info in subjects)
             {
-                info.Signature.Build(_s);
+                info.Signature.Build(_s, info.Lifts);
 
                 ColumnTypeGroup group;
                 if (!byKey.TryGetValue(info.Signature.Key, out group))
@@ -708,6 +754,7 @@ namespace ColumnSections
             // before the signature is closed.
             sig.WidthMm = Units.Snap(sig.WidthMm, _s.SizeToleranceMm);
             sig.DepthMm = Units.Snap(sig.DepthMm, _s.SizeToleranceMm);
+            sig.HeightMm = Units.Snap(sig.HeightMm, _s.LevelToleranceMm);
 
             FindFoundation(info, sig);
             CountBeams(info, sig);
@@ -976,6 +1023,47 @@ namespace ColumnSections
                         StringComparison.OrdinalIgnoreCase);
                 }
             }
+        }
+
+        /// <summary>Turns the linked columns into stacks: walking Above from a
+        /// column with nothing under it gives one column line, bottom lift first.
+        /// Returns the columns a section is taken of - the bottom of each stack,
+        /// or every column when stacks are switched off.</summary>
+        private List<ColumnInfo> BuildStacks(List<ColumnInfo> columns)
+        {
+            var subjects = new List<ColumnInfo>();
+            if (!_s.OneSectionPerStack)
+            {
+                foreach (ColumnInfo column in columns)
+                {
+                    column.Lifts.Add(column);
+                    subjects.Add(column);
+                }
+                return subjects;
+            }
+
+            var claimed = new HashSet<ElementId>();
+            // Bottoms first, so every stack is walked from the ground up; the
+            // second pass picks up anything the first could not reach.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                foreach (ColumnInfo column in columns)
+                {
+                    if (claimed.Contains(column.Instance.Id)) continue;
+                    if (pass == 0 && column.Below != null) continue;
+
+                    ColumnInfo walk = column;
+                    while (walk != null && !claimed.Contains(walk.Instance.Id)
+                           && column.Lifts.Count < 200)
+                    {
+                        column.Lifts.Add(walk);
+                        claimed.Add(walk.Instance.Id);
+                        walk = walk.Above;
+                    }
+                    subjects.Add(column);
+                }
+            }
+            return subjects;
         }
 
         private static long CellKey(int x, int y)
@@ -1326,16 +1414,43 @@ namespace ColumnSections
             return view;
         }
 
+        /// <summary>The lifts of the stack, one line each, where there is more than
+        /// one of them.</summary>
+        private IEnumerable<string> LiftLines(ColumnInfo column)
+        {
+            if (column.Lifts.Count < 2) yield break;
+
+            yield return string.Format("{0} LIFTS, FOUNDATION UP", column.Lifts.Count);
+            for (int i = 0; i < column.Lifts.Count; i++)
+            {
+                if (i >= _s.MaxLiftsInNote)
+                {
+                    yield return string.Format("(+{0} MORE LIFTS)", column.Lifts.Count - i);
+                    yield break;
+                }
+                ColumnSignature lift = column.Lifts[i].Signature;
+                yield return string.Format("LIFT {0}: {1}  ({2:0} TO {3:0})",
+                    i + 1, lift.SizeText, lift.BaseElevationMm, lift.TopElevationMm);
+            }
+        }
+
         /// <summary>Hides everything in the view but this column and what belongs to
         /// it, so the section is of the column rather than of the building.</summary>
         private void ShowOnly(View view, ColumnInfo column)
         {
             try
             {
-                var keep = new List<ElementId> { column.Instance.Id };
-                if (column.FoundationId != null && column.FoundationId != ElementId.InvalidElementId)
-                    keep.Add(column.FoundationId);
-                keep.AddRange(column.BeamIds);
+                var keep = new List<ElementId>();
+                List<ColumnInfo> lifts = column.Lifts.Count > 0
+                    ? column.Lifts
+                    : new List<ColumnInfo> { column };
+                foreach (ColumnInfo lift in lifts)
+                {
+                    keep.Add(lift.Instance.Id);
+                    if (lift.FoundationId != null && lift.FoundationId != ElementId.InvalidElementId)
+                        keep.Add(lift.FoundationId);
+                    keep.AddRange(lift.BeamIds);
+                }
                 if (column.Above != null) keep.Add(column.Above.Instance.Id);
                 if (column.Below != null) keep.Add(column.Below.Instance.Id);
                 keep.AddRange(_alwaysVisibleIds);
@@ -1360,7 +1475,8 @@ namespace ColumnSections
                 string.Format("{0} - {1} COLUMN{2} OF THIS TYPE",
                     group.Code, group.Count, group.Count == 1 ? "" : "S")
             };
-            lines.AddRange(group.Signature.DescriptionLines());
+            lines.AddRange(LiftLines(group.Representative));
+            lines.AddRange(group.Signature.DescriptionLines(group.Representative.Lifts.Count > 1));
 
             if (_s.MaxMarksInNote > 0)
             {
@@ -1383,12 +1499,19 @@ namespace ColumnSections
             return lines.ToArray();
         }
 
-        /// <summary>The column and nothing else: what the view is sized from.</summary>
+        /// <summary>The stack and nothing else: what the view is sized from. Every
+        /// lift of it is in the section, foundation to roof.</summary>
         private static IEnumerable<XYZ> ColumnPoints(ColumnInfo column)
         {
-            foreach (XYZ p in Corners(column.Box)) yield return p;
-            yield return column.BasePoint;
-            yield return column.TopPoint;
+            List<ColumnInfo> lifts = column.Lifts.Count > 0
+                ? column.Lifts
+                : new List<ColumnInfo> { column };
+            foreach (ColumnInfo lift in lifts)
+            {
+                foreach (XYZ p in Corners(lift.Box)) yield return p;
+                yield return lift.BasePoint;
+                yield return lift.TopPoint;
+            }
         }
 
         /// <summary>The foundation under it and the first stretch of the lifts above
@@ -1399,6 +1522,14 @@ namespace ColumnSections
             if (column.FoundationBox != null)
                 foreach (XYZ p in Corners(column.FoundationBox)) yield return p;
 
+            // Below the base whatever happens, so the footing is in the view even
+            // where none was found to measure.
+            yield return new XYZ(column.BasePoint.X, column.BasePoint.Y,
+                column.BasePoint.Z - Units.ToFeet(s.AlwaysShowBelowBaseMm));
+
+            if (s.OneSectionPerStack) yield break;
+
+            // Without stacks, the lifts either side are glimpsed, not drawn whole.
             if (column.Above != null && column.Above.Box != null)
             {
                 double ceiling = column.TopPoint.Z + Units.ToFeet(s.StackShowAboveMm);
@@ -1496,16 +1627,21 @@ namespace ColumnSections
             var ask = new TaskDialog("Column sections")
             {
                 MainInstruction = string.Format("{0} column{1} in {2} type{3}.",
-                    columns.Count, columns.Count == 1 ? "" : "s",
+                    Subjects(groups), Subjects(groups) == 1 ? "" : "s",
                     groups.Count, groups.Count == 1 ? "" : "s"),
                 MainContent = string.Format(
-                    "Read from {0}. Ground is taken from level \"{1}\".\n\n" +
+                    "Read from {0}, {1} columns in all. Ground is taken from level \"{2}\".\n\n{3}" +
                     "A type is a size, a foundation below, a beam connection, a level " +
                     "against ground, and what the stack does above and below it. One " +
                     "cross section will be created for each, with a note in it saying " +
                     "how many columns share that type.",
                     fromSelection ? "your selection" : "the whole model",
-                    scanner.GroundLevelName),
+                    columns.Count, scanner.GroundLevelName,
+                    settings.OneSectionPerStack
+                        ? "A column standing on another is one column here, not two: the section "
+                          + "is taken on the one that starts at the foundation and covers every "
+                          + "lift above it.\n\n"
+                        : ""),
                 ExpandedContent = Summary(groups),
                 CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No,
                 DefaultButton = TaskDialogResult.Yes
@@ -1624,15 +1760,27 @@ namespace ColumnSections
             }
         }
 
+        /// <summary>How many columns the sections are of, once a stack counts once.</summary>
+        private static int Subjects(List<ColumnTypeGroup> groups)
+        {
+            int total = 0;
+            foreach (ColumnTypeGroup g in groups) total += g.Count;
+            return total;
+        }
+
         /// <summary>One line per type, for the dialogs.</summary>
         public static string Summary(List<ColumnTypeGroup> groups)
         {
             var text = new StringBuilder();
             foreach (ColumnTypeGroup g in groups)
             {
-                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  STACK {6}\n",
+                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
                     g.Code, g.Count, g.Signature.SizeText, g.Signature.FoundationText,
-                    g.Signature.BeamText, g.Signature.GroundText, g.Signature.StackText);
+                    g.Signature.BeamText, g.Signature.GroundText,
+                    g.Representative.Lifts.Count,
+                    string.Join(" / ", g.Signature.LiftSizes.Length > 0
+                        ? g.Signature.LiftSizes
+                        : new[] { g.Signature.SizeText }));
             }
             return text.ToString();
         }
@@ -1647,7 +1795,7 @@ namespace ColumnSections
             var text = new StringBuilder();
             text.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
                             "Foundation thickness mm,Beams,Beam at top,Base level,Base mm,Top mm," +
-                            "Base below ground mm,Size below,Size above,Size changes,Stack position,Marks");
+                            "Base below ground mm,Lifts,Lift sizes,Size changes,Stack position,Marks");
             foreach (ColumnTypeGroup g in groups)
             {
                 ColumnSignature s = g.Signature;
@@ -1660,8 +1808,8 @@ namespace ColumnSections
                     s.HeightMm, s.HasFoundation ? Csv(s.FoundationTypeName) : "none",
                     s.FoundationTopMm, s.FoundationThicknessMm, s.BeamCount, s.BeamAtTop ? "yes" : "no",
                     Csv(s.BaseLevelName), s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
-                    s.HasColumnBelow ? Csv(s.SizeBelowText) : "none",
-                    s.HasColumnAbove ? Csv(s.SizeAboveText) : "none",
+                    g.Representative.Lifts.Count,
+                    Csv(string.Join(" / ", s.LiftSizes.Length > 0 ? s.LiftSizes : new[] { s.SizeText })),
                     s.SizeChangesBelow || s.SizeChangesAbove ? "yes" : "no",
                     Csv(s.StackPosition),
                     Csv(string.Join(" ", marks.ToArray())));
