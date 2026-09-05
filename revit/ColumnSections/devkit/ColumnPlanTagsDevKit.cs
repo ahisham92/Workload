@@ -1,35 +1,31 @@
 // ===========================================================================
-//  COLUMN SECTIONS - for a paste-in code runner (DevKit and the like)
-//  Revit 2021 and later. Tested shape: the tool wraps this inside a method.
+//  COLUMN PLAN TAGS - a script of its own, for DevKit
+//  Revit 2021 and later.  GENERATED - do not edit; see tools/build_macro.py.
 // ---------------------------------------------------------------------------
-//  One cross section per column TYPE, with a note in it saying how many
-//  columns share that type. Two columns are the same type when all of these
-//  agree: their size, the foundation under them, whether a beam frames in,
-//  how far the base sits below ground, and what sits on the same location
-//  above and below (600x900 carrying a 400x900 is not 600x900 carrying
-//  600x900, nor one with nothing above).
+//  Run it with a PLAN OPEN. Beside every column the plan cuts it puts:
+//
+//      ( 01-C02 )        [column]     01-C 02
+//      (   01   )                     (600x800)
+//
+//  On the right, the column's tag and its size. On the left, a bubble with a
+//  leader to the column: the tag above the line, and below it the number of the
+//  detail the column is drawn on - read off the section views themselves where
+//  they exist, so the two agree, and off the type's own number where they do
+//  not.
+//
+//  It knows the tags, the sizes and the types because the middle of this file
+//  is the sections script's own code. It does not clear anything: a column
+//  something is already written beside is left alone.
 // ---------------------------------------------------------------------------
 //  THIS FILE IS STATEMENTS ONLY - no using lines, no namespace, no class - so
 //  it can be pasted into a box that wraps your code in a method. Every type is
-//  written out in full for the same reason: it does not care what the tool has
-//  already imported.
-//
-//  Written for DevKit, which hands the code a Document called doc. In another
-//  tool change the one line under "How this gets hold of the model".
+//  written out in full for the same reason.
 // ===========================================================================
 
-// How this gets hold of the model. DevKit hands the code a Document called doc,
-// which is all it needs:
+// How this gets hold of the model. DevKit hands the code a Document called doc.
 Autodesk.Revit.DB.Document theDoc = doc;
-//
-// In another tool the name will be its own. If the compiler says doc does not
-// exist, use whatever that tool calls the model - one of these usually:
 // Autodesk.Revit.DB.Document theDoc = uidoc.Document;
 // Autodesk.Revit.DB.Document theDoc = uiapp.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = app.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = commandData.Application.ActiveUIDocument.Document;
-
-// >>> SHARED SETTINGS START - the table script is built from this block too
 // --------------------------------------------------------------- settings --
 // Rounded before anything is compared, so a millimetre out is not a new type.
 double sizeToleranceMm = 5.0;
@@ -150,7 +146,7 @@ double onAxisToleranceMm = 100.0;
 
 // Work on the columns you have selected, where any are. The table script sets
 // this false: it counts the whole model however you leave it here.
-bool useSelectionWhenAny = true;
+bool useSelectionWhenAny = false;   // the plan tags always reads the whole model
 
 // Used by the plan script: the tag put beside each column on a plan - its name
 // and size on the right, and on the left the bubble with the detail number of
@@ -181,7 +177,7 @@ bool replaceExistingTitle = true;
 
 // Used by the table script only: which sections it draws on, how far above the
 // crop the table hangs, and whether it clears what it drew before.
-bool onlyTheActiveView = false;
+bool onlyTheActiveView = true;    // the plan you have open
 string viewNameContains = "COL SECTION";
 bool clearExistingAnnotation = true;
 double tableGapAboveViewMm = 4.0;
@@ -216,8 +212,6 @@ string[] widthParameterNames = new string[] { "b", "Width", "Depth 1", "bf" };
 string[] depthParameterNames = new string[] { "h", "Depth", "Height", "d" };
 string[] diameterParameterNames = new string[] { "Diameter", "D", "d" };
 
-// <<< SHARED SETTINGS END
-// >>> SHARED ANALYSIS START - the table script is built from this too, so that
 // it groups the columns by exactly what the sections were made from
 // ===========================================================================
 
@@ -1025,22 +1019,65 @@ else
         }
     }
 
-    // <<< SHARED ANALYSIS END
+    // ------------------------------- the detail number each type is drawn on --
 
-    // --------------------------------------- the view type and text type --
-
-    Autodesk.Revit.DB.ViewFamilyType sectionType = null;
+    // Read off the section views where they exist, so a bubble on the plan and
+    // the section it points at carry the same number.
+    var detailNumberOf = new System.Collections.Generic.Dictionary<string, string>();
     foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
-        .OfClass(typeof(Autodesk.Revit.DB.ViewFamilyType)))
+        .OfClass(typeof(Autodesk.Revit.DB.ViewSection)))
     {
-        var candidate = e as Autodesk.Revit.DB.ViewFamilyType;
-        if (candidate != null && candidate.ViewFamily == Autodesk.Revit.DB.ViewFamily.Section)
+        var section = e as Autodesk.Revit.DB.ViewSection;
+        if (section == null || section.IsTemplate) continue;
+        if (viewNameContains.Length > 0
+            && section.Name.IndexOf(viewNameContains, System.StringComparison.OrdinalIgnoreCase) < 0)
+            continue;
+
+        Autodesk.Revit.DB.XYZ eye = section.Origin;
+        double reach = toFeet(matchToleranceMm);
+        Autodesk.Revit.DB.ElementId found = null;
+        double nearest = double.MaxValue;
+        foreach (Autodesk.Revit.DB.ElementId id in ids)
         {
-            sectionType = candidate;
-            break;
+            Autodesk.Revit.DB.XYZ stands = basePointOf[id];
+            double dx = stands.X - eye.X, dy = stands.Y - eye.Y;
+            double distance = System.Math.Sqrt(dx * dx + dy * dy);
+            if (distance > reach) continue;
+            if (distance < nearest - 1e-6) { nearest = distance; found = id; }
+        }
+        if (found == null || !subjectOf.ContainsKey(found)) continue;
+
+        string trimmed = section.Name;
+        int bracket = trimmed.IndexOf('(');
+        if (bracket > 0) trimmed = trimmed.Substring(0, bracket);
+        trimmed = trimmed.Trim();
+        int lastPart = trimmed.LastIndexOf(" - ", System.StringComparison.Ordinal);
+        string code = lastPart >= 0 ? trimmed.Substring(lastPart + 3).Trim() : trimmed;
+        int dash = code.LastIndexOf('-');
+        if (dash < 0 || dash + 1 >= code.Length) continue;
+        detailNumberOf[keyOfSubject[subjectOf[found]]] = code.Substring(dash + 1).Trim();
+    }
+
+    // ------------------------------------------------------- the plan to do --
+
+    var plans = new System.Collections.Generic.List<Autodesk.Revit.DB.ViewPlan>();
+    var activePlan = theDoc.ActiveView as Autodesk.Revit.DB.ViewPlan;
+    if (onlyTheActiveView)
+    {
+        if (activePlan != null) plans.Add(activePlan);
+    }
+    else
+    {
+        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+            .OfClass(typeof(Autodesk.Revit.DB.ViewPlan)))
+        {
+            var plan = e as Autodesk.Revit.DB.ViewPlan;
+            if (plan == null || plan.IsTemplate || plan.GenLevel == null) continue;
+            plans.Add(plan);
         }
     }
 
+    // A text type to write with.
     Autodesk.Revit.DB.TextNoteType textType = null;
     Autodesk.Revit.DB.ElementId defaultTextId =
         theDoc.GetDefaultElementTypeId(Autodesk.Revit.DB.ElementTypeGroup.TextNoteType);
@@ -1056,54 +1093,20 @@ else
         }
     }
 
-    if (sectionType == null || textType == null)
+    if (plans.Count == 0 || textType == null)
     {
-        Autodesk.Revit.UI.TaskDialog.Show("Column sections", sectionType == null
-            ? "This model has no section view type, so no section can be created."
-            : "This model has no text type, so the note cannot be written.");
+        Autodesk.Revit.UI.TaskDialog.Show("Column plan tags", textType == null
+            ? "This model has no text type, so nothing can be written."
+            : "Open the plan you want tagged and run this again.");
     }
     else
     {
-        double textSizeFeet = 0.0082;
-        double textWidthFactor = 1.0;
+        double textSizeFeet = 0.0082;   // 2.5 mm on paper
         Autodesk.Revit.DB.Parameter textSizeParam =
             textType.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.TEXT_SIZE);
-        if (textSizeParam != null && textSizeParam.AsDouble() > 1e-9) textSizeFeet = textSizeParam.AsDouble();
-        Autodesk.Revit.DB.Parameter widthFactorParam =
-            textType.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.TEXT_WIDTH_SCALE);
-        if (widthFactorParam != null && widthFactorParam.AsDouble() > 1e-9) textWidthFactor = widthFactorParam.AsDouble();
+        if (textSizeParam != null && textSizeParam.AsDouble() > 1e-9)
+            textSizeFeet = textSizeParam.AsDouble();
 
-        var usedNames = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
-            .OfClass(typeof(Autodesk.Revit.DB.View)))
-        {
-            var view = e as Autodesk.Revit.DB.View;
-            if (view != null) usedNames.Add(view.Name);
-        }
-
-        // What every section keeps, whatever column it is of: the datums, and the
-        // categories named in the settings - the floors above, above all.
-        var alwaysVisibleIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
-        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
-            .OfClass(typeof(Autodesk.Revit.DB.Level)))
-        {
-            alwaysVisibleIds.Add(e.Id);
-        }
-        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
-            .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
-        {
-            alwaysVisibleIds.Add(e.Id);
-        }
-        foreach (Autodesk.Revit.DB.BuiltInCategory bic in alwaysVisibleCategories)
-        {
-            foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
-                .OfCategory(bic).WhereElementIsNotElementType())
-            {
-                alwaysVisibleIds.Add(e.Id);
-            }
-        }
-
-        // Detail lines and text, for the table drawn on each section.
         System.Action<Autodesk.Revit.DB.View, Autodesk.Revit.DB.XYZ, Autodesk.Revit.DB.XYZ> drawLine =
             (v, a, b) =>
         {
@@ -1111,664 +1114,182 @@ else
             theDoc.Create.NewDetailCurve(v, Autodesk.Revit.DB.Line.CreateBound(a, b));
         };
 
-        System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ, bool> cellText =
-            (v, text, origin, centred) =>
+        System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ,
+            Autodesk.Revit.DB.HorizontalTextAlignment> write = (v, text, origin, align) =>
         {
             if (string.IsNullOrEmpty(text)) return;
             var options = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
-            options.HorizontalAlignment = centred
-                ? Autodesk.Revit.DB.HorizontalTextAlignment.Center
-                : Autodesk.Revit.DB.HorizontalTextAlignment.Left;
+            options.HorizontalAlignment = align;
             options.Rotation = 0.0;
             Autodesk.Revit.DB.TextNote.Create(theDoc, v.Id, origin, text, options);
         };
 
-        // The lines of the note, and the summary line, for one type.
-        System.Func<Autodesk.Revit.DB.ElementId, string, int, string[]> noteLinesOf =
-            (id, code, count) =>
+        var tagged = new System.Collections.Generic.List<string>();
+        var skipped = new System.Collections.Generic.List<string>();
+        int taggedCount = 0, leftAlone = 0;
+
+        using (var transaction = new Autodesk.Revit.DB.Transaction(theDoc, "Column plan tags"))
         {
-            double[] n = numberOf[id];
-            string[] s = textOf[id];
-            var lines = new System.Collections.Generic.List<string>();
-            lines.Add(string.Format(inv, "{0} - {1} COLUMN{2} OF THIS TYPE",
-                code, count, count == 1 ? "" : "S"));
-            if (s[T_TAG].Length > 0) lines.Add("TAG: " + s[T_TAG]);
+            transaction.Start();
 
-            var chain = chainOf.ContainsKey(id) ? chainOf[id] : null;
-            if (chain != null && chain.Count > 1)
-            {
-                lines.Add(string.Format(inv, "{0} LIFTS, FOUNDATION UP", chain.Count));
-                int shownLifts = 0;
-                foreach (Autodesk.Revit.DB.ElementId member in chain)
-                {
-                    if (shownLifts >= maxLiftsInNote)
-                    {
-                        lines.Add(string.Format(inv, "(+{0} MORE LIFTS)", chain.Count - shownLifts));
-                        break;
-                    }
-                    double[] mn = numberOf[member];
-                    lines.Add(string.Format(inv, "LIFT {0}: {1}  ({2:0} TO {3:0})",
-                        shownLifts + 1, sizeTextOf(mn), mn[N_BASE], mn[N_TOP]));
-                    shownLifts++;
-                }
-            }
-            else
-            {
-                lines.Add("SIZE: " + sizeTextOf(n) + "  (" + s[T_TYPE] + ")");
-            }
-            lines.Add(n[N_HAS_FOUNDATION] > 0.5
-                ? string.Format(inv, "FDN TOP {0:+0;-0;0} ({1:0} THK)", n[N_FOUNDATION_TOP], n[N_FOUNDATION_THICKNESS])
-                : "NO FOUNDATION FOUND");
-            lines.Add(n[N_BEAMS] < 0.5
-                ? "NO BEAM CONNECTED"
-                : string.Format(inv, "{0:0} BEAM{1} CONNECTED{2}", n[N_BEAMS],
-                    n[N_BEAMS] > 1.5 ? "S" : "", n[N_BEAM_AT_TOP] > 0.5 ? " (AT TOP)" : ""));
-            lines.Add(n[N_FLOOR_AT_TOP] > 0.5
-                ? string.Format(inv, "SLAB AT TOP ({0:0} THK), {1:0} FLOOR{2} IN ALL",
-                    n[N_FLOOR_THICKNESS], n[N_FLOORS], n[N_FLOORS] > 1.5 ? "S" : "")
-                : (n[N_FLOORS] < 0.5
-                    ? "NO FLOOR MET"
-                    : string.Format(inv, "{0:0} FLOOR{1} MET, NONE AT TOP",
-                        n[N_FLOORS], n[N_FLOORS] > 1.5 ? "S" : "")));
-            lines.Add(s[T_BASE_LEVEL].Length > 0 || s[T_TOP_LEVEL].Length > 0
-                ? "LEVELS: " + (s[T_BASE_LEVEL].Length > 0 ? s[T_BASE_LEVEL] : "?")
-                    + " TO " + (s[T_TOP_LEVEL].Length > 0 ? s[T_TOP_LEVEL] : "?")
-                : "LEVELS: NOT SET");
-            lines.Add(System.Math.Abs(n[N_BELOW_GROUND]) < 1.0
-                ? "BASE AT GROUND LEVEL"
-                : (n[N_BELOW_GROUND] > 0
-                    ? string.Format(inv, "BASE {0:0} BELOW GROUND", n[N_BELOW_GROUND])
-                    : string.Format(inv, "BASE {0:0} ABOVE GROUND", -n[N_BELOW_GROUND])));
-            if (chain == null || chain.Count < 2)
-            {
-                lines.Add(s[T_SIZE_BELOW].Length == 0
-                    ? "NOTHING BELOW (COLUMN STARTS HERE)"
-                    : "BELOW: " + s[T_SIZE_BELOW] + (s[T_SIZE_BELOW] == sizeTextOf(n)
-                        ? " - SAME SIZE" : " - SIZE CHANGES"));
-                lines.Add(s[T_SIZE_ABOVE].Length == 0
-                    ? "NOTHING ABOVE (TOP OF STACK)"
-                    : "ABOVE: " + s[T_SIZE_ABOVE] + (s[T_SIZE_ABOVE] == sizeTextOf(n)
-                        ? " - SAME SIZE" : " - SIZE CHANGES"));
-                lines.Add(string.Format(inv, "BASE {0:0} / TOP {1:0} / HT {2:0}",
-                    n[N_BASE], n[N_TOP], n[N_HEIGHT]));
-            }
-
-            // The marks themselves are added by the caller, which knows the
-            // whole group.
-            return lines.ToArray();
-        };
-
-        // A summary of every type, for the dialogs.
-        var summary = new System.Text.StringBuilder();
-        for (int i = 0; i < keys.Count; i++)
-        {
-            System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
-            double[] n = numberOf[members[0]];
-            string[] s = textOf[members[0]];
-            summary.AppendFormat(inv, "{0}-{1:00}  {11}x{2}  {3}  |  {4}  |  {5} beam(s), {12:0} floor(s)  |  {6:0} below ground  |  {7} > {8} > {9}  |  {10} lift(s)\n",
-                typeCodePrefix, i + 1, members.Count, sizeTextOf(n),
-                n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "no foundation",
-                n[N_BEAMS], n[N_BELOW_GROUND],
-                s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "-",
-                sizeTextOf(n),
-                s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "-",
-                chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1,
-                s[T_TAG].Length > 0 ? "[" + s[T_TAG] + "]  " : "",
-                n[N_FLOORS]);
-        }
-
-        var ask = new Autodesk.Revit.UI.TaskDialog("Column sections");
-        ask.MainInstruction = string.Format(inv, "{0} column{1} in {2} type{3}.",
-            subjects.Count, subjects.Count == 1 ? "" : "s", keys.Count, keys.Count == 1 ? "" : "s");
-        ask.MainContent = string.Format(inv,
-            "Read from {0}, {1} columns in all. Ground is taken from level \"{2}\".\n\n{3}"
-            + "One cross section will be created for each type, with a note in it saying how "
-            + "many columns share that type.",
-            fromSelection ? "your selection" : "the whole model", ids.Count, groundFrom,
-            oneSectionPerStack
-                ? "A column standing on another is one column here, not two: the section is "
-                  + "taken on the one that starts at the foundation and covers every lift above "
-                  + "it, so the counts are counts of columns on the ground.\n\n"
-                : "");
-        ask.ExpandedContent = summary.ToString();
-        ask.CommonButtons = Autodesk.Revit.UI.TaskDialogCommonButtons.Yes
-                          | Autodesk.Revit.UI.TaskDialogCommonButtons.No;
-        ask.DefaultButton = Autodesk.Revit.UI.TaskDialogResult.Yes;
-
-        if (ask.Show() == Autodesk.Revit.UI.TaskDialogResult.Yes)
-        {
-            var failures = new System.Collections.Generic.List<string>();
-            int made = 0;
-
-            using (var transaction = new Autodesk.Revit.DB.Transaction(theDoc, "Column type cross sections"))
-            {
-                transaction.Start();
-
-                for (int index = 0; index < keys.Count; index++)
-                {
-                    System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[index]];
-                    Autodesk.Revit.DB.ElementId id = members[0];
-                    string code = string.Format(inv, "{0}-{1:00}", typeCodePrefix, index + 1);
-
-                    try
-                    {
-                        double[] n = numberOf[id];
-                        Autodesk.Revit.DB.XYZ origin = basePointOf[id];
-
-                        var right = new Autodesk.Revit.DB.XYZ(
-                            System.Math.Cos(n[N_ROTATION]), System.Math.Sin(n[N_ROTATION]), 0).Normalize();
-                        Autodesk.Revit.DB.XYZ up = Autodesk.Revit.DB.XYZ.BasisZ;
-                        Autodesk.Revit.DB.XYZ towardsViewer = right.CrossProduct(up).Normalize();
-
-                        // The stack itself, and nothing else, decides how wide
-                        // and how deep the view is - and how tall: every lift of
-                        // it is in the section, foundation to roof.
-                        var columnPoints = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
-                        foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
-                        {
-                            columnPoints.AddRange(cornersOf(boxOf[member]));
-                            columnPoints.Add(basePointOf[member]);
-                            columnPoints.Add(topPointOf[member]);
-                        }
-
-                        double minR = 0, maxR = 0, minU = 0, maxU = 0, minD = 0, maxD = 0;
-                        bool first = true;
-                        foreach (Autodesk.Revit.DB.XYZ p in columnPoints)
-                        {
-                            Autodesk.Revit.DB.XYZ v = p - origin;
-                            double r = v.DotProduct(right), u = v.DotProduct(up), d = v.DotProduct(towardsViewer);
-                            if (first)
-                            {
-                                minR = maxR = r; minU = maxU = u; minD = maxD = d;
-                                first = false;
-                                continue;
-                            }
-                            if (r < minR) minR = r; else if (r > maxR) maxR = r;
-                            if (u < minU) minU = u; else if (u > maxU) maxU = u;
-                            if (d < minD) minD = d; else if (d > maxD) maxD = d;
-                        }
-
-                        // The footing below and the lift above may take the view
-                        // higher or lower, and only so much wider. They may not
-                        // take it deeper at all - that is what kept the far clip
-                        // out at the size of the raft.
-                        var extraPoints = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
-                        if (foundationBoxOf.ContainsKey(id))
-                            extraPoints.AddRange(cornersOf(foundationBoxOf[id]));
-
-                        // Below the base whatever happens, so the footing is in
-                        // the view even where none was found to measure.
-                        extraPoints.Add(new Autodesk.Revit.DB.XYZ(
-                            origin.X, origin.Y, origin.Z - toFeet(alwaysShowBelowBaseMm)));
-
-                        if (!oneSectionPerStack)
-                        {
-                            // Without stacks, the lifts either side are only
-                            // glimpsed rather than drawn whole.
-                            if (aboveOf.ContainsKey(id) && boxOf.ContainsKey(aboveOf[id]))
-                            {
-                                double ceiling = topPointOf[id].Z + toFeet(showAboveMm);
-                                foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[aboveOf[id]]))
-                                    extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Min(p.Z, ceiling)));
-                            }
-                            if (belowOf.ContainsKey(id) && boxOf.ContainsKey(belowOf[id]))
-                            {
-                                double floor = origin.Z - toFeet(showBelowMm);
-                                foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[belowOf[id]]))
-                                    extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Max(p.Z, floor)));
-                            }
-                        }
-
-                        double reachLeft = minR - toFeet(maxExtraWidthMm);
-                        double reachRight = maxR + toFeet(maxExtraWidthMm);
-                        foreach (Autodesk.Revit.DB.XYZ p in extraPoints)
-                        {
-                            Autodesk.Revit.DB.XYZ v = p - origin;
-                            double r = v.DotProduct(right), u = v.DotProduct(up);
-                            if (r < reachLeft) r = reachLeft; else if (r > reachRight) r = reachRight;
-                            if (r < minR) minR = r; else if (r > maxR) maxR = r;
-                            if (u < minU) minU = u; else if (u > maxU) maxU = u;
-                        }
-
-                        minR -= toFeet(sideClearanceMm);
-                        maxR += toFeet(sideClearanceMm);
-                        minU -= toFeet(bottomClearanceMm);
-                        maxU += toFeet(topClearanceMm);
-                        // The cut goes through the middle of the column.
-                        double cutDepth = (minD + maxD) / 2.0;
-
-                        // The note goes in a band above the column, never on it.
-                        string[] lines = noteLinesOf(id, code, members.Count);
-                        var noteText = new System.Text.StringBuilder();
-                        int longest = 0;
-                        for (int i = 0; i < lines.Length; i++)
-                        {
-                            if (lines[i].Length == 0) continue;
-                            if (i > 0) noteText.Append("\n");
-                            noteText.Append(lines[i]);
-                            if (lines[i].Length > longest) longest = lines[i].Length;
-                        }
-                        if (maxMarksInNote > 0)
-                        {
-                            var marks = new System.Text.StringBuilder("MARKS: ");
-                            int shown = 0;
-                            foreach (Autodesk.Revit.DB.ElementId member in members)
-                            {
-                                if (shown >= maxMarksInNote) break;
-                                if (shown > 0) marks.Append(", ");
-                                marks.Append(textOf[member][T_MARK]);
-                                shown++;
-                            }
-                            if (members.Count > shown)
-                                marks.AppendFormat(inv, " (+{0} MORE)", members.Count - shown);
-                            noteText.Append("\n").Append(marks.ToString());
-                            if (marks.Length > longest) longest = marks.Length;
-                        }
-
-                        double lineHeight = textSizeFeet * viewScale * 1.4;
-                        double noteHeight = lineHeight * (lines.Length + 1);
-                        double noteWidth = longest * textSizeFeet * textWidthFactor * 0.62 * viewScale;
-                        double inset = textSizeFeet * viewScale;
-
-                        // The crop cuts detail lines, so the table has to be inside
-                        // it: a band is left across the top of the view for it.
-                        double bandRowH = toFeet(tableRowHeightMm * viewScale);
-                        double bandW = toFeet((tableLabelWidthMm + tableValueWidthMm) * viewScale);
-                        int bandRows = members.Count <= maxLocationRows
-                            ? System.Math.Max(members.Count, 1)
-                            : maxLocationRows + 1;
-                        double bandH = drawTable ? (3 + bandRows + 1) * bandRowH : 0.0;
-                        if (drawTable)
-                        {
-                            maxU += bandH + 2 * inset;
-                            double wantedWidth = bandW + 2 * inset;
-                            if (maxR - minR < wantedWidth)
-                            {
-                                double widen = (wantedWidth - (maxR - minR)) / 2.0;
-                                minR -= widen;
-                                maxR += widen;
-                            }
-                        }
-
-                        if (expandCropForNote)
-                        {
-                            // Room made for the note inside the crop, which is
-                            // what makes the view as wide as the longest line.
-                            maxU += noteHeight + 2 * inset;
-                            double needed = noteWidth + 2 * inset;
-                            if (maxR - minR < needed)
-                            {
-                                double grow = (needed - (maxR - minR)) / 2.0;
-                                minR -= grow;
-                                maxR += grow;
-                            }
-                        }
-
-                        Autodesk.Revit.DB.XYZ centreOfBox = origin
-                            + right * ((minR + maxR) / 2.0)
-                            + up * ((minU + maxU) / 2.0)
-                            + towardsViewer * cutDepth;
-
-                        Autodesk.Revit.DB.Transform transform = Autodesk.Revit.DB.Transform.Identity;
-                        transform.Origin = centreOfBox;
-                        transform.BasisX = right;
-                        transform.BasisY = up;
-                        transform.BasisZ = towardsViewer;
-
-                        double halfWidth = (maxR - minR) / 2.0;
-                        double halfHeight = (maxU - minU) / 2.0;
-                        double farClip = toFeet(farClipOffsetMm);
-
-                        var sectionBox = new Autodesk.Revit.DB.BoundingBoxXYZ();
-                        sectionBox.Transform = transform;
-                        // Nothing in front of the cut, and only the far clip behind
-                        // it, so the section is what the plane cuts and little else.
-                        sectionBox.Min = new Autodesk.Revit.DB.XYZ(-halfWidth, -halfHeight, -farClip);
-                        sectionBox.Max = new Autodesk.Revit.DB.XYZ(halfWidth, halfHeight, toFeet(1.0));
-
-                        Autodesk.Revit.DB.ViewSection view =
-                            Autodesk.Revit.DB.ViewSection.CreateSection(theDoc, sectionType.Id, sectionBox);
-                        view.Scale = viewScale;
-                        try { view.DetailLevel = Autodesk.Revit.DB.ViewDetailLevel.Fine; }
-                        catch { /* a view template may be holding it */ }
-                        try { view.CropBoxVisible = false; }
-                        catch { /* likewise */ }
-
-                        string tagForName = textOf[id][T_TAG];
-                        string wanted = tagForName.Length > 0
-                            ? string.Format(inv, "{0} - {1} - {2} ({3} NO{4})",
-                                viewNamePrefix, tagForName, code, members.Count,
-                                members.Count == 1 ? "" : "S")
-                            : string.Format(inv, "{0} - {1} ({2} NO{3})",
-                                viewNamePrefix, code, members.Count, members.Count == 1 ? "" : "S");
-                        char[] illegal = new char[] { '\\', ':', '{', '}', '[', ']', '|', ';', '<', '>', '?', '`', '~' };
-                        var cleaned = new System.Text.StringBuilder();
-                        foreach (char ch in wanted)
-                            cleaned.Append(System.Array.IndexOf(illegal, ch) >= 0 ? '-' : ch);
-                        string name = cleaned.ToString().Trim();
-                        string unique = name;
-                        int suffix = 2;
-                        while (usedNames.Contains(unique))
-                        {
-                            unique = name + " " + suffix;
-                            suffix++;
-                        }
-                        usedNames.Add(unique);
-                        view.Name = unique;
-
-                        theDoc.Regenerate();
-
-                        if (showOnlyThisColumn)
-                        {
-                            try
-                            {
-                                var keep = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
-                                foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
-                                {
-                                    keep.Add(member);
-                                    if (foundationIdOf.ContainsKey(member)) keep.Add(foundationIdOf[member]);
-                                    if (beamIdsOf.ContainsKey(member)) keep.AddRange(beamIdsOf[member]);
-                                }
-                                if (aboveOf.ContainsKey(id)) keep.Add(aboveOf[id]);
-                                if (belowOf.ContainsKey(id)) keep.Add(belowOf[id]);
-                                keep.AddRange(alwaysVisibleIds);
-                                view.IsolateElementsTemporary(keep);
-                                view.ConvertTemporaryHideIsolateToPermanent();
-                                theDoc.Regenerate();
-                            }
-                            catch { /* a view template may own the visibility */ }
-                        }
-
-                        if (hideGridsInSections)
-                        {
-                            try
-                            {
-                                Autodesk.Revit.DB.Category grids = Autodesk.Revit.DB.Category.GetCategory(
-                                    theDoc, Autodesk.Revit.DB.BuiltInCategory.OST_Grids);
-                                if (grids != null && view.CanCategoryBeHidden(grids.Id))
-                                    view.SetCategoryHidden(grids.Id, true);
-                            }
-                            catch { /* a view template may own the visibility */ }
-                        }
-
-                        // The table, sized on paper and turned into model size
-                        // by the view scale. Worked out first, because the note
-                        // goes above it.
-                        double labelW = toFeet(tableLabelWidthMm * viewScale);
-                        double valueW = toFeet(tableValueWidthMm * viewScale);
-                        double rowH = toFeet(tableRowHeightMm * viewScale);
-                        double textH = textSizeFeet * viewScale;
-                        double pad = (rowH - textH) / 2.0;
-
-                        // One location row per column of this type.
-                        var locY = new System.Collections.Generic.List<string>();
-                        var locX = new System.Collections.Generic.List<string>();
-                        foreach (Autodesk.Revit.DB.ElementId member in members)
-                        {
-                            if (locY.Count >= maxLocationRows)
-                            {
-                                locY.Add(string.Format(inv, "(+{0} MORE)", members.Count - locY.Count));
-                                locX.Add("");
-                                break;
-                            }
-                            locY.Add(textOf[member][T_LOCATION_Y]);
-                            locX.Add(textOf[member][T_LOCATION_X]);
-                        }
-                        if (locY.Count == 0)
-                        {
-                            locY.Add("");
-                            locX.Add("");
-                        }
-
-                        int rowCount = 3 + locY.Count + 1;  // type, number, heading, rows, detail
-                        double tableW = labelW + valueW;
-                        double tableH = drawTable ? rowCount * rowH : 0.0;
-
-                        if (keepTextNoteAsWell || !drawTable)
-                        {
-                            // Above the crop unless the crop was widened for it,
-                            // and above the table where there is one.
-                            Autodesk.Revit.DB.XYZ notePoint = expandCropForNote
-                                ? centreOfBox + right * (-halfWidth + inset) + up * (halfHeight - inset)
-                                : centreOfBox + right * (-halfWidth)
-                                    + up * (halfHeight + inset + noteHeight);
-                            var noteOptions = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
-                            noteOptions.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Left;
-                            noteOptions.Rotation = 0.0;
-                            Autodesk.Revit.DB.TextNote.Create(theDoc, view.Id, notePoint,
-                                noteText.ToString(), noteOptions);
-                        }
-
-                        if (drawBreakLines)
-                        {
-                            // A floor, a beam or a foundation that runs out of the
-                            // view is broken at the edge it leaves by, rather than
-                            // stopping dead at the crop.
-                            double kink = toFeet(breakLineKinkMm * viewScale);
-                            double wing = toFeet(breakLineWidthMm * viewScale);
-                            double edgeInset = toFeet(breakLineInsetMm * viewScale);
-
-                            // The members drawn beside this column: its footing, the
-                            // beams framing in, the slabs it meets - lift by lift.
-                            var beside = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
-                            foreach (Autodesk.Revit.DB.ElementId lift in chainOf[id])
-                            {
-                                if (foundationIdOf.ContainsKey(lift)) beside.Add(foundationIdOf[lift]);
-                                if (beamIdsOf.ContainsKey(lift)) beside.AddRange(beamIdsOf[lift]);
-                                if (floorIdsOf.ContainsKey(lift)) beside.AddRange(floorIdsOf[lift]);
-                            }
-
-                            var alreadyBroken = new System.Collections.Generic.HashSet<string>();
-                            foreach (Autodesk.Revit.DB.ElementId memberId in beside)
-                            {
-                                Autodesk.Revit.DB.Element member = theDoc.GetElement(memberId);
-                                if (member == null) continue;
-                                Autodesk.Revit.DB.BoundingBoxXYZ bb = member.get_BoundingBox(null);
-                                if (bb == null) continue;
-
-                                // Its reach across the view, and its thickness up it.
-                                double memberMinX = double.MaxValue, memberMaxX = double.MinValue;
-                                double memberMinY = double.MaxValue, memberMaxY = double.MinValue;
-                                foreach (Autodesk.Revit.DB.XYZ corner in cornersOf(bb))
-                                {
-                                    Autodesk.Revit.DB.XYZ v = corner - centreOfBox;
-                                    double cx = v.DotProduct(right), cy = v.DotProduct(up);
-                                    if (cx < memberMinX) memberMinX = cx;
-                                    if (cx > memberMaxX) memberMaxX = cx;
-                                    if (cy < memberMinY) memberMinY = cy;
-                                    if (cy > memberMaxY) memberMaxY = cy;
-                                }
-
-                                // Only what the view actually shows, and only where
-                                // it runs past an edge.
-                                double lowY = System.Math.Max(memberMinY, -halfHeight);
-                                double highY = System.Math.Min(memberMaxY, halfHeight);
-                                if (highY - lowY < 1e-6) continue;
-
-                                for (int side = 0; side < 2; side++)
-                                {
-                                    bool leftSide = side == 0;
-                                    if (leftSide && memberMinX > -halfWidth + 1e-6) continue;
-                                    if (!leftSide && memberMaxX < halfWidth - 1e-6) continue;
-
-                                    double x = leftSide ? -halfWidth + edgeInset : halfWidth - edgeInset;
-                                    // One break per edge and height, however many
-                                    // members meet there.
-                                    string place = string.Format(inv, "{0}:{1:0.000}:{2:0.000}",
-                                        leftSide ? "L" : "R", lowY, highY);
-                                    if (!alreadyBroken.Add(place)) continue;
-
-                                    double middle = (lowY + highY) / 2.0;
-                                    if (highY - lowY < 4 * kink)
-                                    {
-                                        // Too thin for a kink; a plain line will do.
-                                        drawLine(view, centreOfBox + right * x + up * lowY,
-                                                       centreOfBox + right * x + up * highY);
-                                        continue;
-                                    }
-
-                                    Autodesk.Revit.DB.XYZ p1 = centreOfBox + right * x + up * lowY;
-                                    Autodesk.Revit.DB.XYZ p2 = centreOfBox + right * x + up * (middle - kink);
-                                    Autodesk.Revit.DB.XYZ p3 = centreOfBox + right * (x + wing) + up * (middle - kink / 2.0);
-                                    Autodesk.Revit.DB.XYZ p4 = centreOfBox + right * (x - wing) + up * (middle + kink / 2.0);
-                                    Autodesk.Revit.DB.XYZ p5 = centreOfBox + right * x + up * (middle + kink);
-                                    Autodesk.Revit.DB.XYZ p6 = centreOfBox + right * x + up * highY;
-                                    drawLine(view, p1, p2);
-                                    drawLine(view, p2, p3);
-                                    drawLine(view, p3, p4);
-                                    drawLine(view, p4, p5);
-                                    drawLine(view, p5, p6);
-                                }
-                            }
-                        }
-
-                        if (drawTable)
-                        {
-                            string sizeCompact = sizeTextOf(numberOf[id]).Replace(" ", "");
-                            string typeCell = (textOf[id][T_TAG].Length > 0 ? textOf[id][T_TAG] : code)
-                                + "(" + sizeCompact + ")";
-                            // The detail number is the number in the type code:
-                            // CT-01 gives 01.
-                            int dash = code.LastIndexOf('-');
-                            string detailNumber = dash >= 0 && dash + 1 < code.Length
-                                ? code.Substring(dash + 1) : code;
-
-                            Autodesk.Revit.DB.XYZ topLeft = centreOfBox
-                                + right * (-halfWidth + inset)
-                                + up * (halfHeight - inset);
-
-                            // x runs across the table, y runs down it.
-                            System.Func<double, double, Autodesk.Revit.DB.XYZ> at =
-                                (x, y) => topLeft + right * x + up * (-y);
-
-                            // The frame, the label column, and the row lines. A row
-                            // line inside the location block starts at the label
-                            // column, because LOCATION runs on down beside them.
-                            drawLine(view, at(0, 0), at(tableW, 0));
-                            drawLine(view, at(0, tableH), at(tableW, tableH));
-                            drawLine(view, at(0, 0), at(0, tableH));
-                            drawLine(view, at(tableW, 0), at(tableW, tableH));
-                            drawLine(view, at(labelW, 0), at(labelW, tableH));
-                            for (int r = 1; r < rowCount; r++)
-                            {
-                                bool insideLocation = r >= 3 && r <= 2 + locY.Count;
-                                drawLine(view, at(insideLocation ? labelW : 0, r * rowH),
-                                               at(tableW, r * rowH));
-                            }
-
-                            // The location block is split into its two axes.
-                            double split = labelW + valueW / 2.0;
-                            drawLine(view, at(split, 2 * rowH), at(split, (3 + locY.Count) * rowH));
-
-                            double labelMid = labelW / 2.0;
-                            double valueMid = labelW + valueW / 2.0;
-                            double yMid = labelW + valueW / 4.0;
-                            double xMid = labelW + 3.0 * valueW / 4.0;
-
-                            cellText(view, "COLUMN TYPE", at(labelMid, pad), true);
-                            cellText(view, typeCell, at(valueMid, pad), true);
-                            cellText(view, "NUMBER", at(labelMid, rowH + pad), true);
-                            cellText(view, members.Count.ToString(inv), at(valueMid, rowH + pad), true);
-
-                            // LOCATION sits against the middle of its own block.
-                            double locationTop = ((5 + locY.Count) / 2.0) * rowH - textH / 2.0;
-                            cellText(view, "LOCATION", at(labelMid, locationTop), true);
-                            cellText(view, "Y-AXIS", at(yMid, 2 * rowH + pad), true);
-                            cellText(view, "X-AXIS", at(xMid, 2 * rowH + pad), true);
-                            for (int r = 0; r < locY.Count; r++)
-                            {
-                                cellText(view, locY[r], at(yMid, (3 + r) * rowH + pad), true);
-                                cellText(view, locX[r], at(xMid, (3 + r) * rowH + pad), true);
-                            }
-
-                            double detailRow = (3 + locY.Count) * rowH + pad;
-                            cellText(view, "DETAIL NUMBER", at(labelMid, detailRow), true);
-                            cellText(view, detailNumber, at(valueMid, detailRow), true);
-                        }
-
-                        if (stampTypeCodeInComments)
-                        {
-                            foreach (Autodesk.Revit.DB.ElementId member in members)
-                            {
-                                Autodesk.Revit.DB.Parameter comments = instanceOf[member].get_Parameter(
-                                    Autodesk.Revit.DB.BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-                                if (comments != null && !comments.IsReadOnly) comments.Set(code);
-                            }
-                        }
-                        made++;
-                    }
-                    catch (System.Exception ex)
-                    {
-                        failures.Add(code + ": " + ex.Message);
-                    }
-                }
-
-                transaction.Commit();
-            }
-
-            string csvPath = "";
-            if (writeCsvToTemp)
+            foreach (Autodesk.Revit.DB.ViewPlan plan in plans)
             {
                 try
                 {
-                    string title = string.IsNullOrEmpty(theDoc.Title) ? "model" : theDoc.Title;
-                    csvPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                        string.Format(inv, "{0}-column-types-{1:yyyyMMdd-HHmmss}.csv", title, System.DateTime.Now));
-                    var csv = new System.Text.StringBuilder();
-                    csv.AppendLine("Type,Tag,Count,Lifts,Family,Type name,Size,Height mm,Foundation,Foundation top mm,"
-                        + "Beams,Beam at top,Floors,Slab at top,Slab thickness mm,Base level,Top level,"
-                        + "Base mm,Top mm,Base below ground mm,Lift sizes,Marks");
-                    for (int i = 0; i < keys.Count; i++)
+                    if (plan.GenLevel == null)
                     {
-                        System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
-                        double[] n = numberOf[members[0]];
-                        string[] s = textOf[members[0]];
-                        var marks = new System.Text.StringBuilder();
-                        foreach (Autodesk.Revit.DB.ElementId member in members)
+                        skipped.Add(plan.Name + ": not a level's plan");
+                        continue;
+                    }
+
+                    int scale = plan.Scale > 0 ? plan.Scale : viewScale;
+                    double planZ = plan.Origin != null ? plan.Origin.Z : plan.GenLevel.Elevation;
+                    double cutAt = plan.GenLevel.Elevation + toFeet(planCutOffsetMm);
+                    Autodesk.Revit.DB.XYZ right = plan.RightDirection;
+                    Autodesk.Revit.DB.XYZ up = plan.UpDirection;
+
+                    double labelOut = toFeet(planLabelOffsetMm * scale);
+                    double bubbleOut = toFeet(planBubbleOffsetMm * scale);
+                    double radiusX = toFeet(planBubbleRadiusXMm * scale);
+                    double radiusY = toFeet(planBubbleRadiusYMm * scale);
+                    double arrow = toFeet(planArrowMm * scale);
+                    double textHeight = textSizeFeet * scale;
+                    double alreadyNear = toFeet(4.0 * scale);
+
+                    // What is already written on this plan, so a column somebody
+                    // has tagged by hand is left alone.
+                    var written = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
+                    if (skipWhereAlreadyTagged)
+                    {
+                        foreach (Autodesk.Revit.DB.Element e in
+                            new Autodesk.Revit.DB.FilteredElementCollector(theDoc, plan.Id)
+                            .OfClass(typeof(Autodesk.Revit.DB.TextNote)))
                         {
-                            if (marks.Length > 0) marks.Append(" ");
-                            marks.Append(textOf[member][T_MARK]);
+                            var note = e as Autodesk.Revit.DB.TextNote;
+                            if (note != null) written.Add(note.Coord);
                         }
-                        var lifts = new System.Text.StringBuilder();
-                        if (chainOf.ContainsKey(members[0]))
+                    }
+
+                    int onThisPlan = 0;
+                    foreach (Autodesk.Revit.DB.ElementId id in ids)
+                    {
+                        double[] n = numberOf[id];
+                        // Only the columns this plan cuts.
+                        if (cutAt < n[N_BASE_Z_FT] - 1e-6 || cutAt > n[N_TOP_Z_FT] + 1e-6) continue;
+
+                        Autodesk.Revit.DB.XYZ stands = basePointOf[id];
+                        Autodesk.Revit.DB.XYZ point = new Autodesk.Revit.DB.XYZ(
+                            stands.X, stands.Y, planZ);
+
+                        Autodesk.Revit.DB.XYZ labelAt = point + right * labelOut;
+                        if (skipWhereAlreadyTagged)
                         {
-                            foreach (Autodesk.Revit.DB.ElementId member in chainOf[members[0]])
+                            bool taken = false;
+                            foreach (Autodesk.Revit.DB.XYZ where in written)
                             {
-                                if (lifts.Length > 0) lifts.Append(" / ");
-                                lifts.Append(sizeTextOf(numberOf[member]));
+                                if (where.DistanceTo(labelAt) < alreadyNear) { taken = true; break; }
+                            }
+                            if (taken)
+                            {
+                                leftAlone++;
+                                continue;
                             }
                         }
-                        csv.AppendFormat(inv,
-                            "{0}-{1:00},\"{2}\",{3},{4},\"{5}\",\"{6}\",\"{7}\",{8:0},\"{9}\",{10:0},"
-                            + "{11:0},{12},{13:0},{14},{15:0},\"{16}\",\"{17}\",{18:0},{19:0},{20:0},\"{21}\",\"{22}\"\n",
-                            typeCodePrefix, i + 1, s[T_TAG], members.Count,
-                            chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1,
-                            s[T_FAMILY], s[T_TYPE], sizeTextOf(n),
-                            n[N_HEIGHT], n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "none",
-                            n[N_FOUNDATION_TOP], n[N_BEAMS], n[N_BEAM_AT_TOP] > 0.5 ? "yes" : "no",
-                            n[N_FLOORS], n[N_FLOOR_AT_TOP] > 0.5 ? "yes" : "no", n[N_FLOOR_THICKNESS],
-                            s[T_BASE_LEVEL], s[T_TOP_LEVEL],
-                            n[N_BASE], n[N_TOP], n[N_BELOW_GROUND],
-                            lifts.ToString(), marks.ToString());
+
+                        string tag = textOf[id][T_TAG];
+                        string size = sizeTextOf(n).Replace(" ", "");
+                        string detail = "";
+                        if (subjectOf.ContainsKey(id))
+                        {
+                            string key = keyOfSubject[subjectOf[id]];
+                            if (detailNumberOf.ContainsKey(key))
+                            {
+                                detail = detailNumberOf[key];
+                            }
+                            else
+                            {
+                                detail = string.Format(inv, "{0:00}", keys.IndexOf(key) + 1);
+                            }
+                        }
+                        if (tag.Length == 0) tag = typeCodePrefix + "-" + detail;
+
+                        // On the right: the tag, and the size under it.
+                        write(plan, tag + "\n" + string.Format(inv, planSizeFormat, size),
+                            labelAt + up * (textHeight / 2.0),
+                            Autodesk.Revit.DB.HorizontalTextAlignment.Left);
+
+                        // On the left: the bubble, the line across it, the tag
+                        // above and the detail number below.
+                        Autodesk.Revit.DB.XYZ centre = point - right * bubbleOut;
+                        try
+                        {
+                            Autodesk.Revit.DB.Curve top = Autodesk.Revit.DB.Ellipse.CreateCurve(
+                                centre, radiusX, radiusY, right, up, 0.0, System.Math.PI);
+                            Autodesk.Revit.DB.Curve bottom = Autodesk.Revit.DB.Ellipse.CreateCurve(
+                                centre, radiusX, radiusY, right, up, System.Math.PI, 2.0 * System.Math.PI);
+                            theDoc.Create.NewDetailCurve(plan, top);
+                            theDoc.Create.NewDetailCurve(plan, bottom);
+                        }
+                        catch
+                        {
+                            // No ellipse to be had: a box will do.
+                            drawLine(plan, centre + right * -radiusX + up * radiusY,
+                                           centre + right * radiusX + up * radiusY);
+                            drawLine(plan, centre + right * -radiusX - up * radiusY,
+                                           centre + right * radiusX - up * radiusY);
+                            drawLine(plan, centre + right * -radiusX - up * radiusY,
+                                           centre + right * -radiusX + up * radiusY);
+                            drawLine(plan, centre + right * radiusX - up * radiusY,
+                                           centre + right * radiusX + up * radiusY);
+                        }
+
+                        drawLine(plan, centre - right * radiusX, centre + right * radiusX);
+                        write(plan, tag, centre + up * (textHeight + textHeight / 4.0),
+                            Autodesk.Revit.DB.HorizontalTextAlignment.Center);
+                        write(plan, detail, centre - up * (textHeight / 4.0),
+                            Autodesk.Revit.DB.HorizontalTextAlignment.Center);
+
+                        // The leader, from the bubble to the face of the column.
+                        double halfSide = toFeet(System.Math.Max(n[N_WIDTH], n[N_DEPTH])) / 2.0;
+                        Autodesk.Revit.DB.XYZ tip = point - right * halfSide;
+                        Autodesk.Revit.DB.XYZ from = centre + right * radiusX;
+                        drawLine(plan, from, tip);
+
+                        // Its head: two strokes back along the leader.
+                        Autodesk.Revit.DB.XYZ along = (tip - from);
+                        if (along.GetLength() > 1e-9)
+                        {
+                            along = along.Normalize();
+                            Autodesk.Revit.DB.XYZ across = up.CrossProduct(along).Normalize();
+                            drawLine(plan, tip, tip - along * arrow + across * (arrow / 3.0));
+                            drawLine(plan, tip, tip - along * arrow - across * (arrow / 3.0));
+                        }
+
+                        taggedCount++;
+                        onThisPlan++;
                     }
-                    System.IO.File.WriteAllText(csvPath, csv.ToString(), System.Text.Encoding.UTF8);
+
+                    tagged.Add(string.Format(inv, "{0}  ->  {1} column{2}",
+                        plan.Name, onThisPlan, onThisPlan == 1 ? "" : "s"));
                 }
                 catch (System.Exception ex)
                 {
-                    csvPath = "could not be written: " + ex.Message;
+                    skipped.Add(plan.Name + ": " + ex.Message);
                 }
             }
 
-            var done = new Autodesk.Revit.UI.TaskDialog("Column sections");
-            done.MainInstruction = string.Format(inv, "{0} section{1} created.", made, made == 1 ? "" : "s");
-            done.MainContent = (failures.Count == 0
-                    ? "They are in the project browser under Sections."
-                    : string.Format(inv, "{0} could not be created:\n{1}", failures.Count,
-                        string.Join("\n", failures.ToArray())))
-                + (csvPath.Length > 0 ? "\n\nCSV: " + csvPath : "");
-            done.ExpandedContent = summary.ToString();
-            done.Show();
+            transaction.Commit();
         }
+
+        var done = new Autodesk.Revit.UI.TaskDialog("Column plan tags");
+        done.MainInstruction = string.Format(inv, "{0} column{1} tagged.",
+            taggedCount, taggedCount == 1 ? "" : "s");
+        done.MainContent = string.Format(inv,
+            "{0} left alone, having something written beside them already.{1}",
+            leftAlone,
+            skipped.Count == 0 ? "" : "\n\n" + string.Join("\n", skipped.ToArray()));
+        done.ExpandedContent = string.Join("\n", tagged.ToArray());
+        done.Show();
     }
 }
 
