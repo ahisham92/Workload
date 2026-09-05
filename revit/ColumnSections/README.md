@@ -85,6 +85,23 @@ turn each of those off.
 The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
 is one.
 
+## The break lines, as a script of its own
+
+[`devkit/ColumnBreakLinesDevKit.cs`](devkit/ColumnBreakLinesDevKit.cs) places
+your own break line detail item — `DT_BreakLine` by default — on the sections,
+wherever a floor, a beam or a foundation runs out of the view: one to each edge
+a member leaves by, turned 90° to cut across it rather than along it, and set to
+the thickness of what it breaks where the family has a length parameter to set.
+
+The family has to be loaded in the project first; the script places it, it does
+not create it. Point `breakFamilyName` and `breakTypeName` at whatever yours is
+called. It clears the break lines it placed before, so it can be re-run.
+
+Like the table script, it is built from the sections script, so it knows which
+column each section is of and which slabs, beams and footing belong to it. The
+sections script's own drawn break lines are off (`drawBreakLines`) because this
+replaces them.
+
 ## The table, as a script of its own
 
 [`devkit/ColumnTableDevKit.cs`](devkit/ColumnTableDevKit.cs) draws the table on

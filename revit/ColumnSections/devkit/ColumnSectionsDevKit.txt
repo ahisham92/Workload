@@ -78,12 +78,26 @@ double farClipOffsetMm = 50.0;
 // Grids are hidden in every section made.
 bool hideGridsInSections = true;
 
-// Break lines where a floor, a beam or a foundation runs out of the view, drawn
-// at the edge it leaves by. Sizes are ON PAPER.
-bool drawBreakLines = true;
+// Break lines where a floor, a beam or a foundation runs out of the view, at the
+// edge it leaves by. These are drawn in detail lines; ColumnBreakLinesDevKit
+// places your own break line family instead, which is why this is off. Sizes
+// are ON PAPER.
+bool drawBreakLines = false;
 double breakLineKinkMm = 3.0;
 double breakLineWidthMm = 2.0;
 double breakLineInsetMm = 2.0;
+
+// Used by the break line script: the detail item family it places, the type of
+// it, and how far round to turn each one - the family is drawn across the page,
+// and a member leaving by a side edge is broken by a line up it. Empty type
+// name: the first type of the family. It also looks for a length parameter to
+// set to the thickness of what is being broken.
+string breakFamilyName = "DT_BreakLine";
+string breakTypeName = "BreakLine";
+double breakLineRotationDegrees = 90.0;
+bool replaceExistingBreakLines = true;
+string[] breakLengthParameterNames = new string[]
+    { "Length", "L", "Break Length", "Width", "Size" };
 
 // How far past the column's faces a footing may widen the view, before the side
 // clearance is added on top. A pad footing shows; a raft is cut off here, so it
