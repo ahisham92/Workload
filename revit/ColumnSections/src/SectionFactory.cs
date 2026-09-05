@@ -207,8 +207,12 @@ namespace ColumnSections
             try { view.DetailLevel = ViewDetailLevel.Fine; } catch { /* view template may lock it */ }
             try { view.CropBoxVisible = false; } catch { /* likewise */ }
 
-            view.Name = UniqueName(string.Format("{0} - {1} ({2} NO{3})",
-                _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
+            string tag = group.Signature.Tag;
+            view.Name = UniqueName(tag.Length > 0
+                ? string.Format("{0} - {1} - {2} ({3} NO{4})",
+                    _s.ViewNamePrefix, tag, group.Code, group.Count, group.Count == 1 ? "" : "S")
+                : string.Format("{0} - {1} ({2} NO{3})",
+                    _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
 
             _doc.Regenerate();
 

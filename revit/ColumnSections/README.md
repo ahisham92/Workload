@@ -11,7 +11,13 @@ standing on 60 foundations gives counts that add up to 60, which is what a
 schedule of column sections is counting. `oneSectionPerStack = false` goes back
 to one section per column element.
 
-Two stacks are the same type when all five of these agree:
+Two stacks are the same type when all of these agree. **The tag leads**: a
+column's tag is read from its **Comments** parameter, and two columns with
+different tags are different types whatever else they share. Point
+`tagParameterName` at `Mark` or a shared parameter if the tag lives elsewhere,
+or set `tagIsPartOfType = false` to go back to grouping on geometry alone.
+
+After the tag:
 
 1. **Size** — family and type, and the section dimensions (`b`/`h`, `Width`/`Depth`
    or `Diameter`; measured off the solid when the family has no such parameters).
@@ -20,9 +26,11 @@ Two stacks are the same type when all five of these agree:
    type, the level of its top and its thickness.
 3. **Whether a beam is connected** — how many beams frame into the column, and
    whether one lands at the top.
-4. **The level of the ground** — how far the column base sits below (or above)
-   ground level.
-5. **What the stack does** — every lift standing on the column, in order. A
+4. **The floors it meets** — how many slabs cover the column, whether one lands
+   on its top, and how thick that one is, lift by lift.
+5. **The levels it runs between** — the base and top level of every lift, by
+   name, and how far the column base sits below (or above) ground level.
+6. **What the stack does** — every lift standing on the column, in order. A
    600x900 that carries a 400x900 is not the same type as a 600x900 that carries
    its own size on up, nor as one with nothing above it, and two stacks are the
    same only if they change size at the same places.
@@ -36,11 +44,14 @@ of it, and writes a note in it:
 
 ```
 CT-01 - 7 COLUMNS OF THIS TYPE
+TAG: C1
 2 LIFTS, FOUNDATION UP
 LIFT 1: 600 x 900  (-1500 TO 3600)
 LIFT 2: 400 x 900  (3600 TO 7200)
 FDN TOP -1500 (600 THK)
 2 BEAMS CONNECTED (AT TOP)
+SLAB AT TOP (200 THK), 2 FLOORS IN ALL
+LEVELS: FOUNDATION TO L2
 BASE 1500 BELOW GROUND
 MARKS: C1, C2, C3, C4, C5, C6, C7
 ```
@@ -66,7 +77,8 @@ it, so a long line cannot drag the drawing out wide. `showOnlyThisColumn` and
 `expandCropForNote` (`ShowOnlyThisColumn`, `ExpandCropForNote` in the add-in)
 turn each of those off.
 
-The view is named `COL SECTION - CT-01 (7 NOS)`.
+The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
+is one.
 
 ## Getting it into Revit
 

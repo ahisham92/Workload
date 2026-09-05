@@ -11,6 +11,9 @@ namespace ColumnSections
     /// </summary>
     public sealed class ColumnSignature
     {
+        /// <summary>The tag written on the column, from the settings' parameter.</summary>
+        public string Tag = "";
+
         // Size
         public string FamilyName = "";
         public string TypeName = "";
@@ -28,6 +31,11 @@ namespace ColumnSections
         // Beam connection
         public int BeamCount;
         public bool BeamAtTop;
+
+        // The slabs it meets
+        public int FloorCount;
+        public bool FloorAtTop;
+        public double FloorThicknessMm;
 
         // The stack: what sits on the same location above and below
         public bool HasColumnAbove;
@@ -67,8 +75,25 @@ namespace ColumnSections
             GroundElevationMm = Units.Snap(GroundElevationMm, s.LevelToleranceMm);
             BaseBelowGroundMm = Units.Snap(BaseBelowGroundMm, s.LevelToleranceMm);
 
+            FloorThicknessMm = Units.Snap(FloorThicknessMm, s.LevelToleranceMm);
+
             var k = new StringBuilder();
             var c = CultureInfo.InvariantCulture;
+
+            // Every part that reads down the stack works off this: the lifts
+            // standing on the column, or the column alone where there are none.
+            var run = lifts != null && lifts.Count > 0
+                ? lifts
+                : new System.Collections.Generic.List<ColumnInfo>();
+
+            // The tag first: whatever else two columns share, a different tag
+            // makes them different columns.
+            if (s.TagIsPartOfType)
+            {
+                k.Append("T:").Append(Tag);
+                foreach (ColumnInfo lift in run) k.Append(';').Append(lift.Signature.Tag);
+                k.Append('|');
+            }
 
             if (s.FamilyNameIsPartOfType)
                 k.Append(FamilyName).Append('|').Append(TypeName).Append('|');
@@ -86,6 +111,26 @@ namespace ColumnSections
                 ? string.Format(c, "B:{0}:{1}", BeamCount, BeamAtTop ? 1 : 0)
                 : string.Format(c, "B:{0}", BeamCount > 0 ? 1 : 0));
             k.Append('|');
+
+            // The slabs, and the levels each lift runs between.
+            if (s.FloorsArePartOfType)
+            {
+                k.Append("D:").AppendFormat(c, "{0}:{1}:{2:0}", FloorCount, FloorAtTop ? 1 : 0, FloorThicknessMm);
+                foreach (ColumnInfo lift in run)
+                {
+                    ColumnSignature g = lift.Signature;
+                    k.AppendFormat(c, ";{0}:{1}:{2:0}", g.FloorCount, g.FloorAtTop ? 1 : 0, g.FloorThicknessMm);
+                }
+                k.Append('|');
+            }
+            if (s.LevelNamesArePartOfType)
+            {
+                k.Append("V:").Append(BaseLevelName).Append('>').Append(TopLevelName);
+                foreach (ColumnInfo lift in run)
+                    k.Append(';').Append(lift.Signature.BaseLevelName)
+                     .Append('>').Append(lift.Signature.TopLevelName);
+                k.Append('|');
+            }
 
             k.Append(string.Format(c, "G:{0:0}", BaseBelowGroundMm));
 
@@ -148,6 +193,30 @@ namespace ColumnSections
                 var c = CultureInfo.InvariantCulture;
                 return string.Format(c, "{0} BEAM{1} CONNECTED{2}",
                     BeamCount, BeamCount == 1 ? "" : "S", BeamAtTop ? " (AT TOP)" : "");
+            }
+        }
+
+        public string FloorText
+        {
+            get
+            {
+                var c = CultureInfo.InvariantCulture;
+                if (FloorAtTop)
+                    return string.Format(c, "SLAB AT TOP ({0:0} THK), {1} FLOOR{2} IN ALL",
+                        FloorThicknessMm, FloorCount, FloorCount == 1 ? "" : "S");
+                if (FloorCount == 0) return "NO FLOOR MET";
+                return string.Format(c, "{0} FLOOR{1} MET, NONE AT TOP",
+                    FloorCount, FloorCount == 1 ? "" : "S");
+            }
+        }
+
+        public string LevelText
+        {
+            get
+            {
+                if (BaseLevelName.Length == 0 && TopLevelName.Length == 0) return "LEVELS: NOT SET";
+                return "LEVELS: " + (BaseLevelName.Length > 0 ? BaseLevelName : "?")
+                    + " TO " + (TopLevelName.Length > 0 ? TopLevelName : "?");
             }
         }
 
@@ -216,9 +285,12 @@ namespace ColumnSections
         {
             var c = CultureInfo.InvariantCulture;
             var lines = new System.Collections.Generic.List<string>();
+            if (Tag.Length > 0) lines.Add("TAG: " + Tag);
             if (!liftsAreListed) lines.Add("SIZE: " + SizeText + "  (" + TypeName + ")");
             lines.Add(FoundationText);
             lines.Add(BeamText);
+            lines.Add(FloorText);
+            lines.Add(LevelText);
             lines.Add(GroundText);
             if (!liftsAreListed)
             {

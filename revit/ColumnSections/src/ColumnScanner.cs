@@ -14,6 +14,7 @@ namespace ColumnSections
         private readonly Settings _s;
         private readonly List<FoundationRef> _foundations = new List<FoundationRef>();
         private readonly List<BeamRef> _beams = new List<BeamRef>();
+        private readonly List<BoundingBoxXYZ> _floors = new List<BoundingBoxXYZ>();
         private double _groundElevation;
 
         public string GroundLevelName { get; private set; }
@@ -119,6 +120,15 @@ namespace ColumnSections
                 });
             }
 
+            // Floors, as footprints: a column meets the slab that covers it.
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Floors)
+                .WhereElementIsNotElementType())
+            {
+                BoundingBoxXYZ bb = e.get_BoundingBox(null);
+                if (bb != null) _floors.Add(bb);
+            }
+
             foreach (Element e in new FilteredElementCollector(_doc)
                 .OfCategory(BuiltInCategory.OST_StructuralFraming)
                 .WhereElementIsNotElementType())
@@ -209,7 +219,8 @@ namespace ColumnSections
                 GroundElevationMm = Units.ToMm(_groundElevation),
                 BaseBelowGroundMm = Units.ToMm(_groundElevation - baseZ),
                 BaseLevelName = LevelName(column, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM),
-                TopLevelName = LevelName(column, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)
+                TopLevelName = LevelName(column, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM),
+                Tag = TagOf(column)
             };
 
             MeasureSection(column, info.Rotation, sig);
@@ -221,6 +232,10 @@ namespace ColumnSections
 
             FindFoundation(info, sig);
             CountBeams(info, sig);
+            CountFloors(info, sig);
+            // Rounded here as well as in Build: the lifts of a stack are read
+            // into its key before their own signatures are closed.
+            sig.FloorThicknessMm = Units.Snap(sig.FloorThicknessMm, _s.LevelToleranceMm);
 
             info.Signature = sig;
             return info;
@@ -586,6 +601,41 @@ namespace ColumnSections
             }
             sig.BeamCount = count;
             sig.BeamAtTop = atTop;
+        }
+
+        /// <summary>The tag written on the column: the settings' parameter first,
+        /// Comments after it.</summary>
+        private string TagOf(Element column)
+        {
+            Parameter p = string.IsNullOrEmpty(_s.TagParameterName)
+                ? null : column.LookupParameter(_s.TagParameterName);
+            if (p == null) p = column.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+            if (p == null || p.StorageType != StorageType.String) return "";
+            string value = p.AsString();
+            return string.IsNullOrEmpty(value) ? "" : value.Trim();
+        }
+
+        /// <summary>The slabs the column meets: any floor whose footprint covers it
+        /// and whose thickness falls within its height, and whether one lands on
+        /// top of it.</summary>
+        private void CountFloors(ColumnInfo info, ColumnSignature sig)
+        {
+            double reach = Units.ToFeet(_s.FloorSearchToleranceMm);
+            double baseZ = info.BasePoint.Z, topZ = info.TopPoint.Z;
+
+            foreach (BoundingBoxXYZ bb in _floors)
+            {
+                if (info.BasePoint.X < bb.Min.X || info.BasePoint.X > bb.Max.X) continue;
+                if (info.BasePoint.Y < bb.Min.Y || info.BasePoint.Y > bb.Max.Y) continue;
+                if (bb.Max.Z < baseZ - reach || bb.Min.Z > topZ + reach) continue;
+
+                sig.FloorCount++;
+                if (bb.Max.Z > topZ - reach && bb.Min.Z < topZ + reach)
+                {
+                    sig.FloorAtTop = true;
+                    sig.FloorThicknessMm = Units.ToMm(bb.Max.Z - bb.Min.Z);
+                }
+            }
         }
 
         /// <summary>Shortest distance in plan from a point to a tessellated curve.</summary>
