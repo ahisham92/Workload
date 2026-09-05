@@ -136,6 +136,10 @@ string viewNameContains = "COL SECTION";
 bool clearExistingAnnotation = true;
 double tableGapAboveViewMm = 4.0;
 
+// How far from a section's own origin the column it was cut on may be before
+// the table script gives up on it and reads the view's name instead.
+double matchToleranceMm = 2000.0;
+
 // The left location cell names the grid running parallel to Y, the right one
 // the grid running parallel to X. True swaps the two columns over.
 bool swapAxisColumns = false;
