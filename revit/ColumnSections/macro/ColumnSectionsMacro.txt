@@ -94,6 +94,18 @@ namespace ColumnSections
         /// to this before they are compared.</summary>
         public double LevelToleranceMm = 10.0;
 
+        /// <summary>The tag written on each column, read from this instance
+        /// parameter. Change the name if the tag lives elsewhere - "Mark", or a
+        /// shared parameter. Falls back to Comments when the name is not found.</summary>
+        public string TagParameterName = "Comments";
+
+        /// <summary>Columns with different tags are always different types.</summary>
+        public bool TagIsPartOfType = true;
+
+        /// <summary>The slabs a column meets, and the levels it runs between.</summary>
+        public bool FloorsArePartOfType = true;
+        public bool LevelNamesArePartOfType = true;
+
         /// <summary>True: two beams framing in is a different type from three.
         /// False: only connected / not connected matters.</summary>
         public bool CountBeamsSeparately = true;
@@ -143,6 +155,10 @@ namespace ColumnSections
         /// <summary>How far above the column top a beam centre line may sit and
         /// still count as landing on it (roughly half a beam depth, plus slack).</summary>
         public double BeamVerticalToleranceMm = 900.0;
+
+        /// <summary>How far above the column top a slab may sit and still count as
+        /// landing on it.</summary>
+        public double FloorSearchToleranceMm = 600.0;
 
         /// <summary>Name of the level to read "ground" from. Empty: the level whose
         /// elevation is closest to zero is used.</summary>
@@ -214,8 +230,8 @@ namespace ColumnSections
         /// <summary>Type codes are numbered CT-01, CT-02, ...</summary>
         public string TypeCodePrefix = "CT";
 
-        /// <summary>Write the type code into each column's Comments parameter, so the
-        /// plan can be tagged with it. Off by default: it edits your model data.</summary>
+        /// <summary>Write the type code into each column's Comments parameter. Leave
+        /// it off where Comments holds your tags: it would write over them.</summary>
         public bool StampTypeCodeInComments = false;
 
         /// <summary>List the marks of the columns of the type in the section's note,
@@ -260,6 +276,9 @@ namespace ColumnSections
     /// </summary>
     public sealed class ColumnSignature
     {
+        /// <summary>The tag written on the column, from the settings' parameter.</summary>
+        public string Tag = "";
+
         // Size
         public string FamilyName = "";
         public string TypeName = "";
@@ -277,6 +296,11 @@ namespace ColumnSections
         // Beam connection
         public int BeamCount;
         public bool BeamAtTop;
+
+        // The slabs it meets
+        public int FloorCount;
+        public bool FloorAtTop;
+        public double FloorThicknessMm;
 
         // The stack: what sits on the same location above and below
         public bool HasColumnAbove;
@@ -316,8 +340,25 @@ namespace ColumnSections
             GroundElevationMm = Units.Snap(GroundElevationMm, s.LevelToleranceMm);
             BaseBelowGroundMm = Units.Snap(BaseBelowGroundMm, s.LevelToleranceMm);
 
+            FloorThicknessMm = Units.Snap(FloorThicknessMm, s.LevelToleranceMm);
+
             var k = new StringBuilder();
             var c = CultureInfo.InvariantCulture;
+
+            // Every part that reads down the stack works off this: the lifts
+            // standing on the column, or the column alone where there are none.
+            var run = lifts != null && lifts.Count > 0
+                ? lifts
+                : new System.Collections.Generic.List<ColumnInfo>();
+
+            // The tag first: whatever else two columns share, a different tag
+            // makes them different columns.
+            if (s.TagIsPartOfType)
+            {
+                k.Append("T:").Append(Tag);
+                foreach (ColumnInfo lift in run) k.Append(';').Append(lift.Signature.Tag);
+                k.Append('|');
+            }
 
             if (s.FamilyNameIsPartOfType)
                 k.Append(FamilyName).Append('|').Append(TypeName).Append('|');
@@ -335,6 +376,26 @@ namespace ColumnSections
                 ? string.Format(c, "B:{0}:{1}", BeamCount, BeamAtTop ? 1 : 0)
                 : string.Format(c, "B:{0}", BeamCount > 0 ? 1 : 0));
             k.Append('|');
+
+            // The slabs, and the levels each lift runs between.
+            if (s.FloorsArePartOfType)
+            {
+                k.Append("D:").AppendFormat(c, "{0}:{1}:{2:0}", FloorCount, FloorAtTop ? 1 : 0, FloorThicknessMm);
+                foreach (ColumnInfo lift in run)
+                {
+                    ColumnSignature g = lift.Signature;
+                    k.AppendFormat(c, ";{0}:{1}:{2:0}", g.FloorCount, g.FloorAtTop ? 1 : 0, g.FloorThicknessMm);
+                }
+                k.Append('|');
+            }
+            if (s.LevelNamesArePartOfType)
+            {
+                k.Append("V:").Append(BaseLevelName).Append('>').Append(TopLevelName);
+                foreach (ColumnInfo lift in run)
+                    k.Append(';').Append(lift.Signature.BaseLevelName)
+                     .Append('>').Append(lift.Signature.TopLevelName);
+                k.Append('|');
+            }
 
             k.Append(string.Format(c, "G:{0:0}", BaseBelowGroundMm));
 
@@ -397,6 +458,30 @@ namespace ColumnSections
                 var c = CultureInfo.InvariantCulture;
                 return string.Format(c, "{0} BEAM{1} CONNECTED{2}",
                     BeamCount, BeamCount == 1 ? "" : "S", BeamAtTop ? " (AT TOP)" : "");
+            }
+        }
+
+        public string FloorText
+        {
+            get
+            {
+                var c = CultureInfo.InvariantCulture;
+                if (FloorAtTop)
+                    return string.Format(c, "SLAB AT TOP ({0:0} THK), {1} FLOOR{2} IN ALL",
+                        FloorThicknessMm, FloorCount, FloorCount == 1 ? "" : "S");
+                if (FloorCount == 0) return "NO FLOOR MET";
+                return string.Format(c, "{0} FLOOR{1} MET, NONE AT TOP",
+                    FloorCount, FloorCount == 1 ? "" : "S");
+            }
+        }
+
+        public string LevelText
+        {
+            get
+            {
+                if (BaseLevelName.Length == 0 && TopLevelName.Length == 0) return "LEVELS: NOT SET";
+                return "LEVELS: " + (BaseLevelName.Length > 0 ? BaseLevelName : "?")
+                    + " TO " + (TopLevelName.Length > 0 ? TopLevelName : "?");
             }
         }
 
@@ -465,9 +550,12 @@ namespace ColumnSections
         {
             var c = CultureInfo.InvariantCulture;
             var lines = new System.Collections.Generic.List<string>();
+            if (Tag.Length > 0) lines.Add("TAG: " + Tag);
             if (!liftsAreListed) lines.Add("SIZE: " + SizeText + "  (" + TypeName + ")");
             lines.Add(FoundationText);
             lines.Add(BeamText);
+            lines.Add(FloorText);
+            lines.Add(LevelText);
             lines.Add(GroundText);
             if (!liftsAreListed)
             {
@@ -551,6 +639,7 @@ namespace ColumnSections
         private readonly Settings _s;
         private readonly List<FoundationRef> _foundations = new List<FoundationRef>();
         private readonly List<BeamRef> _beams = new List<BeamRef>();
+        private readonly List<BoundingBoxXYZ> _floors = new List<BoundingBoxXYZ>();
         private double _groundElevation;
 
         public string GroundLevelName { get; private set; }
@@ -656,6 +745,15 @@ namespace ColumnSections
                 });
             }
 
+            // Floors, as footprints: a column meets the slab that covers it.
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Floors)
+                .WhereElementIsNotElementType())
+            {
+                BoundingBoxXYZ bb = e.get_BoundingBox(null);
+                if (bb != null) _floors.Add(bb);
+            }
+
             foreach (Element e in new FilteredElementCollector(_doc)
                 .OfCategory(BuiltInCategory.OST_StructuralFraming)
                 .WhereElementIsNotElementType())
@@ -746,7 +844,8 @@ namespace ColumnSections
                 GroundElevationMm = Units.ToMm(_groundElevation),
                 BaseBelowGroundMm = Units.ToMm(_groundElevation - baseZ),
                 BaseLevelName = LevelName(column, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM),
-                TopLevelName = LevelName(column, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)
+                TopLevelName = LevelName(column, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM),
+                Tag = TagOf(column)
             };
 
             MeasureSection(column, info.Rotation, sig);
@@ -758,6 +857,10 @@ namespace ColumnSections
 
             FindFoundation(info, sig);
             CountBeams(info, sig);
+            CountFloors(info, sig);
+            // Rounded here as well as in Build: the lifts of a stack are read
+            // into its key before their own signatures are closed.
+            sig.FloorThicknessMm = Units.Snap(sig.FloorThicknessMm, _s.LevelToleranceMm);
 
             info.Signature = sig;
             return info;
@@ -1125,6 +1228,41 @@ namespace ColumnSections
             sig.BeamAtTop = atTop;
         }
 
+        /// <summary>The tag written on the column: the settings' parameter first,
+        /// Comments after it.</summary>
+        private string TagOf(Element column)
+        {
+            Parameter p = string.IsNullOrEmpty(_s.TagParameterName)
+                ? null : column.LookupParameter(_s.TagParameterName);
+            if (p == null) p = column.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+            if (p == null || p.StorageType != StorageType.String) return "";
+            string value = p.AsString();
+            return string.IsNullOrEmpty(value) ? "" : value.Trim();
+        }
+
+        /// <summary>The slabs the column meets: any floor whose footprint covers it
+        /// and whose thickness falls within its height, and whether one lands on
+        /// top of it.</summary>
+        private void CountFloors(ColumnInfo info, ColumnSignature sig)
+        {
+            double reach = Units.ToFeet(_s.FloorSearchToleranceMm);
+            double baseZ = info.BasePoint.Z, topZ = info.TopPoint.Z;
+
+            foreach (BoundingBoxXYZ bb in _floors)
+            {
+                if (info.BasePoint.X < bb.Min.X || info.BasePoint.X > bb.Max.X) continue;
+                if (info.BasePoint.Y < bb.Min.Y || info.BasePoint.Y > bb.Max.Y) continue;
+                if (bb.Max.Z < baseZ - reach || bb.Min.Z > topZ + reach) continue;
+
+                sig.FloorCount++;
+                if (bb.Max.Z > topZ - reach && bb.Min.Z < topZ + reach)
+                {
+                    sig.FloorAtTop = true;
+                    sig.FloorThicknessMm = Units.ToMm(bb.Max.Z - bb.Min.Z);
+                }
+            }
+        }
+
         /// <summary>Shortest distance in plan from a point to a tessellated curve.</summary>
         private static double PlanDistance(IList<XYZ> points, XYZ target)
         {
@@ -1388,8 +1526,12 @@ namespace ColumnSections
             try { view.DetailLevel = ViewDetailLevel.Fine; } catch { /* view template may lock it */ }
             try { view.CropBoxVisible = false; } catch { /* likewise */ }
 
-            view.Name = UniqueName(string.Format("{0} - {1} ({2} NO{3})",
-                _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
+            string tag = group.Signature.Tag;
+            view.Name = UniqueName(tag.Length > 0
+                ? string.Format("{0} - {1} - {2} ({3} NO{4})",
+                    _s.ViewNamePrefix, tag, group.Code, group.Count, group.Count == 1 ? "" : "S")
+                : string.Format("{0} - {1} ({2} NO{3})",
+                    _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
 
             _doc.Regenerate();
 
@@ -1774,13 +1916,14 @@ namespace ColumnSections
             var text = new StringBuilder();
             foreach (ColumnTypeGroup g in groups)
             {
-                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
+                text.AppendFormat("{0}  {8}x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
                     g.Code, g.Count, g.Signature.SizeText, g.Signature.FoundationText,
-                    g.Signature.BeamText, g.Signature.GroundText,
+                    g.Signature.BeamText + ", " + g.Signature.FloorText, g.Signature.GroundText,
                     g.Representative.Lifts.Count,
                     string.Join(" / ", g.Signature.LiftSizes.Length > 0
                         ? g.Signature.LiftSizes
-                        : new[] { g.Signature.SizeText }));
+                        : new[] { g.Signature.SizeText }),
+                    g.Signature.Tag.Length > 0 ? "[" + g.Signature.Tag + "]  " : "");
             }
             return text.ToString();
         }
@@ -1793,24 +1936,26 @@ namespace ColumnSections
 
             var c = CultureInfo.InvariantCulture;
             var text = new StringBuilder();
-            text.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
-                            "Foundation thickness mm,Beams,Beam at top,Base level,Base mm,Top mm," +
-                            "Base below ground mm,Lifts,Lift sizes,Size changes,Stack position,Marks");
+            text.AppendLine("Type,Tag,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
+                            "Foundation thickness mm,Beams,Beam at top,Floors,Slab at top,Slab thickness mm," +
+                            "Base level,Top level,Base mm,Top mm," +
+                            "Base below ground mm,Lifts,Lift sizes,Stack position,Marks");
             foreach (ColumnTypeGroup g in groups)
             {
                 ColumnSignature s = g.Signature;
                 var marks = new List<string>();
                 foreach (ColumnInfo m in g.Members) marks.Add(m.Mark);
                 text.AppendFormat(c,
-                    "{0},{1},{2},{3},{4},{5:0},{6},{7:0},{8:0},{9},{10},{11},{12:0},{13:0},{14:0}," +
-                    "{15},{16},{17},{18},{19}\n",
-                    Csv(g.Code), g.Count, Csv(s.FamilyName), Csv(s.TypeName), Csv(s.SizeText),
+                    "{0},{1},{2},{3},{4},{5},{6:0},{7},{8:0},{9:0},{10},{11},{12},{13},{14:0}," +
+                    "{15},{16},{17:0},{18:0},{19:0},{20},{21},{22},{23}\n",
+                    Csv(g.Code), Csv(s.Tag), g.Count, Csv(s.FamilyName), Csv(s.TypeName), Csv(s.SizeText),
                     s.HeightMm, s.HasFoundation ? Csv(s.FoundationTypeName) : "none",
                     s.FoundationTopMm, s.FoundationThicknessMm, s.BeamCount, s.BeamAtTop ? "yes" : "no",
-                    Csv(s.BaseLevelName), s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
+                    s.FloorCount, s.FloorAtTop ? "yes" : "no", s.FloorThicknessMm,
+                    Csv(s.BaseLevelName), Csv(s.TopLevelName),
+                    s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
                     g.Representative.Lifts.Count,
                     Csv(string.Join(" / ", s.LiftSizes.Length > 0 ? s.LiftSizes : new[] { s.SizeText })),
-                    s.SizeChangesBelow || s.SizeChangesAbove ? "yes" : "no",
                     Csv(s.StackPosition),
                     Csv(string.Join(" ", marks.ToArray())));
             }

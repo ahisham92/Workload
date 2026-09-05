@@ -34,7 +34,15 @@ Autodesk.Revit.DB.Document theDoc = doc;
 double sizeToleranceMm = 5.0;
 double levelToleranceMm = 10.0;
 
+// The tag you have written on each column. Read from this instance parameter;
+// change the name if your tag lives somewhere else - "Mark", or a shared
+// parameter. Columns with different tags are always different types.
+string tagParameterName = "Comments";
+bool tagIsPartOfType = true;
+
 // What counts as a different type.
+bool floorsArePartOfType = true;      // the slabs the column meets
+bool levelNamesArePartOfType = true;  // which levels it runs between
 bool familyNameIsPartOfType = true;   // false: size alone, whatever the family
 bool heightIsPartOfType = true;       // false: storey height stops mattering
 bool countBeamsSeparately = true;     // false: only connected / not connected
@@ -44,6 +52,7 @@ bool stackChangeIsPartOfType = true;  // false: what is above and below stops co
 double foundationSearchToleranceMm = 250.0;
 double beamSearchToleranceMm = 200.0;    // past the column face, in plan
 double beamVerticalToleranceMm = 900.0;  // above the top, for a beam sitting on it
+double floorSearchToleranceMm = 600.0;   // above the top, for a slab landing on it
 double stackSearchToleranceMm = 300.0;   // plus half the smaller column's least side
 double stackVerticalToleranceMm = 600.0; // a slab thickness between two lifts
 
@@ -104,7 +113,8 @@ string viewNamePrefix = "COL SECTION";
 string typeCodePrefix = "CT";
 int maxMarksInNote = 12;
 
-bool stampTypeCodeInComments = false;  // writes the code into each column's Comments
+// Leave this off now that Comments holds your tags: it would write over them.
+bool stampTypeCodeInComments = false;
 bool writeCsvToTemp = true;
 
 // Section size parameters looked for, in order, before the solid is measured.
@@ -143,7 +153,10 @@ const int N_FOUNDATION_TOP = 11;
 const int N_FOUNDATION_THICKNESS = 12;
 const int N_BEAMS = 13;
 const int N_BEAM_AT_TOP = 14;
-const int NUMBER_SLOTS = 15;
+const int N_FLOORS = 15;
+const int N_FLOOR_AT_TOP = 16;
+const int N_FLOOR_THICKNESS = 17;
+const int NUMBER_SLOTS = 18;
 
 // Slots in the text row. An empty string means there is none.
 const int T_FAMILY = 0;
@@ -153,7 +166,9 @@ const int T_MARK = 3;
 const int T_BASE_LEVEL = 4;
 const int T_SIZE_ABOVE = 5;
 const int T_SIZE_BELOW = 6;
-const int TEXT_SLOTS = 7;
+const int T_TAG = 7;
+const int T_TOP_LEVEL = 8;
+const int TEXT_SLOTS = 9;
 
 var ids = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
 var instanceOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.FamilyInstance>();
@@ -236,6 +251,16 @@ else
         foundationBoxes.Add(bb);
         foundationNames.Add(elementType != null ? elementType.Name : e.Name);
         foundationIds.Add(e.Id);
+    }
+
+    // Floors, as footprints: a column meets the slab that covers it.
+    var floorBoxes = new System.Collections.Generic.List<Autodesk.Revit.DB.BoundingBoxXYZ>();
+    foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+        .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Floors)
+        .WhereElementIsNotElementType())
+    {
+        Autodesk.Revit.DB.BoundingBoxXYZ bb = e.get_BoundingBox(null);
+        if (bb != null) floorBoxes.Add(bb);
     }
 
     // Beams, as a tessellated centre line and the height band it lies in.
@@ -431,6 +456,7 @@ else
                 if (o != null && o.StorageType == Autodesk.Revit.DB.StorageType.Double) offset = o.AsDouble();
                 baseZ = level.Elevation + offset;
                 s[T_BASE_LEVEL] = level.Name;
+
             }
         }
         if (topLevelParam != null && topLevelParam.StorageType == Autodesk.Revit.DB.StorageType.ElementId)
@@ -443,6 +469,7 @@ else
                     Autodesk.Revit.DB.BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM);
                 if (o != null && o.StorageType == Autodesk.Revit.DB.StorageType.Double) offset = o.AsDouble();
                 topZ = level.Elevation + offset;
+                s[T_TOP_LEVEL] = level.Name;
             }
         }
         if (topZ < baseZ)
@@ -530,6 +557,20 @@ else
 
         s[T_FAMILY] = familyName;
         s[T_TYPE] = typeName;
+
+        // The tag written on the column. Named parameter first, Comments after.
+        string tag = "";
+        Autodesk.Revit.DB.Parameter tagParam = string.IsNullOrEmpty(tagParameterName)
+            ? null : column.LookupParameter(tagParameterName);
+        if (tagParam == null)
+            tagParam = column.get_Parameter(
+                Autodesk.Revit.DB.BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+        if (tagParam != null && tagParam.StorageType == Autodesk.Revit.DB.StorageType.String)
+        {
+            string raw = tagParam.AsString();
+            if (!string.IsNullOrEmpty(raw)) tag = raw.Trim();
+        }
+        s[T_TAG] = tag;
         Autodesk.Revit.DB.Parameter markParam =
             column.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ALL_MODEL_MARK);
         string mark = markParam != null ? markParam.AsString() : null;
@@ -581,6 +622,28 @@ else
         beamIdsOf[column.Id] = connectedBeams;
         n[N_BEAMS] = beams;
         n[N_BEAM_AT_TOP] = beamAtTop ? 1 : 0;
+
+        // The slabs it meets: any floor whose footprint covers the column and
+        // whose thickness falls within its height, and whether one lands on top.
+        double floorReach = toFeet(floorSearchToleranceMm);
+        int floors = 0;
+        bool floorAtTop = false;
+        double floorThickness = 0.0;
+        foreach (Autodesk.Revit.DB.BoundingBoxXYZ bb in floorBoxes)
+        {
+            if (basePoint.X < bb.Min.X || basePoint.X > bb.Max.X) continue;
+            if (basePoint.Y < bb.Min.Y || basePoint.Y > bb.Max.Y) continue;
+            if (bb.Max.Z < baseZ - floorReach || bb.Min.Z > topZ + floorReach) continue;
+            floors++;
+            if (bb.Max.Z > topZ - floorReach && bb.Min.Z < topZ + floorReach)
+            {
+                floorAtTop = true;
+                floorThickness = toMm(bb.Max.Z - bb.Min.Z);
+            }
+        }
+        n[N_FLOORS] = floors;
+        n[N_FLOOR_AT_TOP] = floorAtTop ? 1 : 0;
+        n[N_FLOOR_THICKNESS] = snap(floorThickness, levelToleranceMm);
 
         ids.Add(column.Id);
         instanceOf[column.Id] = column;
@@ -694,6 +757,17 @@ else
         string[] s = textOf[id];
         var key = new System.Text.StringBuilder();
 
+        // The tag first: whatever else two columns share, a different tag makes
+        // them different columns. Where a stack is tagged lift by lift, the
+        // whole run of tags counts.
+        if (tagIsPartOfType)
+        {
+            key.Append("T:");
+            foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+                key.Append(textOf[member][T_TAG]).Append(';');
+            key.Append('|');
+        }
+
         if (familyNameIsPartOfType) key.Append(s[T_FAMILY]).Append('|').Append(s[T_TYPE]).Append('|');
         key.Append(sizeTextOf(n)).Append('|');
         if (heightIsPartOfType) key.AppendFormat(inv, "H{0:0}|", n[N_HEIGHT]);
@@ -703,6 +777,27 @@ else
         key.Append(countBeamsSeparately
             ? string.Format(inv, "B:{0:0}:{1:0}", n[N_BEAMS], n[N_BEAM_AT_TOP])
             : string.Format(inv, "B:{0}", n[N_BEAMS] > 0.5 ? 1 : 0)).Append('|');
+
+        // The slabs, and the levels each lift runs between.
+        if (floorsArePartOfType)
+        {
+            key.Append("D:");
+            foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+            {
+                double[] mn = numberOf[member];
+                key.AppendFormat(inv, "{0:0}:{1:0}:{2:0};",
+                    mn[N_FLOORS], mn[N_FLOOR_AT_TOP], mn[N_FLOOR_THICKNESS]);
+            }
+            key.Append('|');
+        }
+        if (levelNamesArePartOfType)
+        {
+            key.Append("V:");
+            foreach (Autodesk.Revit.DB.ElementId member in chainOf[id])
+                key.Append(textOf[member][T_BASE_LEVEL]).Append('>')
+                   .Append(textOf[member][T_TOP_LEVEL]).Append(';');
+            key.Append('|');
+        }
         key.AppendFormat(inv, "G:{0:0}", n[N_BELOW_GROUND]);
         if (stackChangeIsPartOfType)
         {
@@ -837,6 +932,7 @@ else
             var lines = new System.Collections.Generic.List<string>();
             lines.Add(string.Format(inv, "{0} - {1} COLUMN{2} OF THIS TYPE",
                 code, count, count == 1 ? "" : "S"));
+            if (s[T_TAG].Length > 0) lines.Add("TAG: " + s[T_TAG]);
 
             var chain = chainOf.ContainsKey(id) ? chainOf[id] : null;
             if (chain != null && chain.Count > 1)
@@ -867,6 +963,17 @@ else
                 ? "NO BEAM CONNECTED"
                 : string.Format(inv, "{0:0} BEAM{1} CONNECTED{2}", n[N_BEAMS],
                     n[N_BEAMS] > 1.5 ? "S" : "", n[N_BEAM_AT_TOP] > 0.5 ? " (AT TOP)" : ""));
+            lines.Add(n[N_FLOOR_AT_TOP] > 0.5
+                ? string.Format(inv, "SLAB AT TOP ({0:0} THK), {1:0} FLOOR{2} IN ALL",
+                    n[N_FLOOR_THICKNESS], n[N_FLOORS], n[N_FLOORS] > 1.5 ? "S" : "")
+                : (n[N_FLOORS] < 0.5
+                    ? "NO FLOOR MET"
+                    : string.Format(inv, "{0:0} FLOOR{1} MET, NONE AT TOP",
+                        n[N_FLOORS], n[N_FLOORS] > 1.5 ? "S" : "")));
+            lines.Add(s[T_BASE_LEVEL].Length > 0 || s[T_TOP_LEVEL].Length > 0
+                ? "LEVELS: " + (s[T_BASE_LEVEL].Length > 0 ? s[T_BASE_LEVEL] : "?")
+                    + " TO " + (s[T_TOP_LEVEL].Length > 0 ? s[T_TOP_LEVEL] : "?")
+                : "LEVELS: NOT SET");
             lines.Add(System.Math.Abs(n[N_BELOW_GROUND]) < 1.0
                 ? "BASE AT GROUND LEVEL"
                 : (n[N_BELOW_GROUND] > 0
@@ -898,14 +1005,16 @@ else
             System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
             double[] n = numberOf[members[0]];
             string[] s = textOf[members[0]];
-            summary.AppendFormat(inv, "{0}-{1:00}  x{2}  {3}  |  {4}  |  {5} beam(s)  |  {6:0} below ground  |  {7} > {8} > {9}  |  {10} lift(s)\n",
+            summary.AppendFormat(inv, "{0}-{1:00}  {11}x{2}  {3}  |  {4}  |  {5} beam(s), {12:0} floor(s)  |  {6:0} below ground  |  {7} > {8} > {9}  |  {10} lift(s)\n",
                 typeCodePrefix, i + 1, members.Count, sizeTextOf(n),
                 n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "no foundation",
                 n[N_BEAMS], n[N_BELOW_GROUND],
                 s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "-",
                 sizeTextOf(n),
                 s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "-",
-                chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1);
+                chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1,
+                s[T_TAG].Length > 0 ? "[" + s[T_TAG] + "]  " : "",
+                n[N_FLOORS]);
         }
 
         var ask = new Autodesk.Revit.UI.TaskDialog("Column sections");
@@ -1103,8 +1212,13 @@ else
                         try { view.CropBoxVisible = false; }
                         catch { /* likewise */ }
 
-                        string wanted = string.Format(inv, "{0} - {1} ({2} NO{3})",
-                            viewNamePrefix, code, members.Count, members.Count == 1 ? "" : "S");
+                        string tagForName = textOf[id][T_TAG];
+                        string wanted = tagForName.Length > 0
+                            ? string.Format(inv, "{0} - {1} - {2} ({3} NO{4})",
+                                viewNamePrefix, tagForName, code, members.Count,
+                                members.Count == 1 ? "" : "S")
+                            : string.Format(inv, "{0} - {1} ({2} NO{3})",
+                                viewNamePrefix, code, members.Count, members.Count == 1 ? "" : "S");
                         char[] illegal = new char[] { '\\', ':', '{', '}', '[', ']', '|', ';', '<', '>', '?', '`', '~' };
                         var cleaned = new System.Text.StringBuilder();
                         foreach (char ch in wanted)
@@ -1183,8 +1297,9 @@ else
                     csvPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                         string.Format(inv, "{0}-column-types-{1:yyyyMMdd-HHmmss}.csv", title, System.DateTime.Now));
                     var csv = new System.Text.StringBuilder();
-                    csv.AppendLine("Type,Count,Lifts,Family,Type name,Size,Height mm,Foundation,Foundation top mm,"
-                        + "Beams,Beam at top,Base mm,Top mm,Base below ground mm,Size below,Size above,Lift sizes,Marks");
+                    csv.AppendLine("Type,Tag,Count,Lifts,Family,Type name,Size,Height mm,Foundation,Foundation top mm,"
+                        + "Beams,Beam at top,Floors,Slab at top,Slab thickness mm,Base level,Top level,"
+                        + "Base mm,Top mm,Base below ground mm,Lift sizes,Marks");
                     for (int i = 0; i < keys.Count; i++)
                     {
                         System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[keys[i]];
@@ -1206,15 +1321,16 @@ else
                             }
                         }
                         csv.AppendFormat(inv,
-                            "{0}-{1:00},{2},{3},\"{4}\",\"{5}\",\"{6}\",{7:0},\"{8}\",{9:0},{10:0},{11},{12:0},{13:0},{14:0},\"{15}\",\"{16}\",\"{17}\",\"{18}\"\n",
-                            typeCodePrefix, i + 1, members.Count,
+                            "{0}-{1:00},\"{2}\",{3},{4},\"{5}\",\"{6}\",\"{7}\",{8:0},\"{9}\",{10:0},"
+                            + "{11:0},{12},{13:0},{14},{15:0},\"{16}\",\"{17}\",{18:0},{19:0},{20:0},\"{21}\",\"{22}\"\n",
+                            typeCodePrefix, i + 1, s[T_TAG], members.Count,
                             chainOf.ContainsKey(members[0]) ? chainOf[members[0]].Count : 1,
                             s[T_FAMILY], s[T_TYPE], sizeTextOf(n),
                             n[N_HEIGHT], n[N_HAS_FOUNDATION] > 0.5 ? s[T_FOUNDATION] : "none",
                             n[N_FOUNDATION_TOP], n[N_BEAMS], n[N_BEAM_AT_TOP] > 0.5 ? "yes" : "no",
+                            n[N_FLOORS], n[N_FLOOR_AT_TOP] > 0.5 ? "yes" : "no", n[N_FLOOR_THICKNESS],
+                            s[T_BASE_LEVEL], s[T_TOP_LEVEL],
                             n[N_BASE], n[N_TOP], n[N_BELOW_GROUND],
-                            s[T_SIZE_BELOW].Length > 0 ? s[T_SIZE_BELOW] : "none",
-                            s[T_SIZE_ABOVE].Length > 0 ? s[T_SIZE_ABOVE] : "none",
                             lifts.ToString(), marks.ToString());
                     }
                     System.IO.File.WriteAllText(csvPath, csv.ToString(), System.Text.Encoding.UTF8);

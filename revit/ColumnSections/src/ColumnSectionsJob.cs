@@ -198,13 +198,14 @@ namespace ColumnSections
             var text = new StringBuilder();
             foreach (ColumnTypeGroup g in groups)
             {
-                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
+                text.AppendFormat("{0}  {8}x{1}  {2}  |  {3}  |  {4}  |  {5}  |  {6} lift(s): {7}\n",
                     g.Code, g.Count, g.Signature.SizeText, g.Signature.FoundationText,
-                    g.Signature.BeamText, g.Signature.GroundText,
+                    g.Signature.BeamText + ", " + g.Signature.FloorText, g.Signature.GroundText,
                     g.Representative.Lifts.Count,
                     string.Join(" / ", g.Signature.LiftSizes.Length > 0
                         ? g.Signature.LiftSizes
-                        : new[] { g.Signature.SizeText }));
+                        : new[] { g.Signature.SizeText }),
+                    g.Signature.Tag.Length > 0 ? "[" + g.Signature.Tag + "]  " : "");
             }
             return text.ToString();
         }
@@ -217,24 +218,26 @@ namespace ColumnSections
 
             var c = CultureInfo.InvariantCulture;
             var text = new StringBuilder();
-            text.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
-                            "Foundation thickness mm,Beams,Beam at top,Base level,Base mm,Top mm," +
-                            "Base below ground mm,Lifts,Lift sizes,Size changes,Stack position,Marks");
+            text.AppendLine("Type,Tag,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
+                            "Foundation thickness mm,Beams,Beam at top,Floors,Slab at top,Slab thickness mm," +
+                            "Base level,Top level,Base mm,Top mm," +
+                            "Base below ground mm,Lifts,Lift sizes,Stack position,Marks");
             foreach (ColumnTypeGroup g in groups)
             {
                 ColumnSignature s = g.Signature;
                 var marks = new List<string>();
                 foreach (ColumnInfo m in g.Members) marks.Add(m.Mark);
                 text.AppendFormat(c,
-                    "{0},{1},{2},{3},{4},{5:0},{6},{7:0},{8:0},{9},{10},{11},{12:0},{13:0},{14:0}," +
-                    "{15},{16},{17},{18},{19}\n",
-                    Csv(g.Code), g.Count, Csv(s.FamilyName), Csv(s.TypeName), Csv(s.SizeText),
+                    "{0},{1},{2},{3},{4},{5},{6:0},{7},{8:0},{9:0},{10},{11},{12},{13},{14:0}," +
+                    "{15},{16},{17:0},{18:0},{19:0},{20},{21},{22},{23}\n",
+                    Csv(g.Code), Csv(s.Tag), g.Count, Csv(s.FamilyName), Csv(s.TypeName), Csv(s.SizeText),
                     s.HeightMm, s.HasFoundation ? Csv(s.FoundationTypeName) : "none",
                     s.FoundationTopMm, s.FoundationThicknessMm, s.BeamCount, s.BeamAtTop ? "yes" : "no",
-                    Csv(s.BaseLevelName), s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
+                    s.FloorCount, s.FloorAtTop ? "yes" : "no", s.FloorThicknessMm,
+                    Csv(s.BaseLevelName), Csv(s.TopLevelName),
+                    s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
                     g.Representative.Lifts.Count,
                     Csv(string.Join(" / ", s.LiftSizes.Length > 0 ? s.LiftSizes : new[] { s.SizeText })),
-                    s.SizeChangesBelow || s.SizeChangesAbove ? "yes" : "no",
                     Csv(s.StackPosition),
                     Csv(string.Join(" ", marks.ToArray())));
             }

@@ -22,6 +22,18 @@ namespace ColumnSections
         /// to this before they are compared.</summary>
         public double LevelToleranceMm = 10.0;
 
+        /// <summary>The tag written on each column, read from this instance
+        /// parameter. Change the name if the tag lives elsewhere - "Mark", or a
+        /// shared parameter. Falls back to Comments when the name is not found.</summary>
+        public string TagParameterName = "Comments";
+
+        /// <summary>Columns with different tags are always different types.</summary>
+        public bool TagIsPartOfType = true;
+
+        /// <summary>The slabs a column meets, and the levels it runs between.</summary>
+        public bool FloorsArePartOfType = true;
+        public bool LevelNamesArePartOfType = true;
+
         /// <summary>True: two beams framing in is a different type from three.
         /// False: only connected / not connected matters.</summary>
         public bool CountBeamsSeparately = true;
@@ -71,6 +83,10 @@ namespace ColumnSections
         /// <summary>How far above the column top a beam centre line may sit and
         /// still count as landing on it (roughly half a beam depth, plus slack).</summary>
         public double BeamVerticalToleranceMm = 900.0;
+
+        /// <summary>How far above the column top a slab may sit and still count as
+        /// landing on it.</summary>
+        public double FloorSearchToleranceMm = 600.0;
 
         /// <summary>Name of the level to read "ground" from. Empty: the level whose
         /// elevation is closest to zero is used.</summary>
@@ -142,8 +158,8 @@ namespace ColumnSections
         /// <summary>Type codes are numbered CT-01, CT-02, ...</summary>
         public string TypeCodePrefix = "CT";
 
-        /// <summary>Write the type code into each column's Comments parameter, so the
-        /// plan can be tagged with it. Off by default: it edits your model data.</summary>
+        /// <summary>Write the type code into each column's Comments parameter. Leave
+        /// it off where Comments holds your tags: it would write over them.</summary>
         public bool StampTypeCodeInComments = false;
 
         /// <summary>List the marks of the columns of the type in the section's note,
