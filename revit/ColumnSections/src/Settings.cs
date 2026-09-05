@@ -51,8 +51,8 @@ namespace ColumnSections
 
         /// <summary>How much of the column above, and of the one below, the section
         /// reaches up and down to take in, so the change of size is drawn.</summary>
-        public double StackShowAboveMm = 900.0;
-        public double StackShowBelowMm = 600.0;
+        public double StackShowAboveMm = 600.0;
+        public double StackShowBelowMm = 300.0;
 
         // ---------------------------------------------------------------
         // Finding the things around a column
@@ -86,13 +86,23 @@ namespace ColumnSections
 
         public int ViewScale = 50;
 
-        /// <summary>Empty space left around the column in the section.</summary>
-        public double SideClearanceMm = 600.0;
-        public double TopClearanceMm = 900.0;
-        public double BottomClearanceMm = 600.0;
+        /// <summary>Empty space left around the column in the section. Kept tight;
+        /// raise it to bring more of the frame around the column into the view.</summary>
+        public double SideClearanceMm = 300.0;
+        public double TopClearanceMm = 450.0;
+        public double BottomClearanceMm = 300.0;
 
-        /// <summary>How deep the section looks past the column.</summary>
-        public double ViewDepthClearanceMm = 900.0;
+        /// <summary>How far past the column the section sees. Small, so the model
+        /// behind the column does not fill the drawing.</summary>
+        public double ViewDepthClearanceMm = 150.0;
+
+        /// <summary>Hide everything in the section but this column, its foundation,
+        /// the beams framing into it, the lift above and below, and the datums.</summary>
+        public bool ShowOnlyThisColumn = true;
+
+        /// <summary>The note sits above the crop, so a long line cannot force the
+        /// view wide. True puts it inside the crop instead.</summary>
+        public bool ExpandCropForNote = false;
 
         /// <summary>Prefix of the created view names, e.g. "COL SECTION - CT-01".</summary>
         public string ViewNamePrefix = "COL SECTION";

@@ -18,6 +18,7 @@ namespace ColumnSections
 
         private ElementId _sectionTypeId = ElementId.InvalidElementId;
         private ElementId _textTypeId = ElementId.InvalidElementId;
+        private readonly List<ElementId> _datumIds = new List<ElementId>();
         private double _textSizeFeet = 0.0082;   // 2.5 mm on paper
         private double _textWidthFactor = 1.0;
 
@@ -79,6 +80,17 @@ namespace ColumnSections
                 var view = e as View;
                 if (view != null) _usedNames.Add(view.Name);
             }
+
+            // Levels and grids stay visible when the rest of the model is hidden.
+            foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(Level)))
+            {
+                _datumIds.Add(e.Id);
+            }
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+            {
+                _datumIds.Add(e.Id);
+            }
             return true;
         }
 
@@ -118,8 +130,6 @@ namespace ColumnSections
             minD -= Units.ToFeet(_s.ViewDepthClearanceMm);
             maxD += Units.ToFeet(_s.ViewDepthClearanceMm);
 
-            // Leave a band above the column wide and tall enough for the note,
-            // so it never lands on top of the drawing.
             string[] lines = NoteLines(group);
             double lineHeight = _textSizeFeet * _s.ViewScale * 1.4;
             double noteHeight = lineHeight * lines.Length;
@@ -131,13 +141,18 @@ namespace ColumnSections
             double noteWidth = longestLine * _textSizeFeet * _textWidthFactor * 0.62 * _s.ViewScale;
             double inset = _textSizeFeet * _s.ViewScale;
 
-            maxU += noteHeight + 2 * inset;
-            double needed = noteWidth + 2 * inset;
-            if (maxR - minR < needed)
+            if (_s.ExpandCropForNote)
             {
-                double grow = (needed - (maxR - minR)) / 2.0;
-                minR -= grow;
-                maxR += grow;
+                // Room for the note inside the crop, which is what makes the view
+                // as wide as the note's longest line.
+                maxU += noteHeight + 2 * inset;
+                double needed = noteWidth + 2 * inset;
+                if (maxR - minR < needed)
+                {
+                    double grow = (needed - (maxR - minR)) / 2.0;
+                    minR -= grow;
+                    maxR += grow;
+                }
             }
 
             XYZ centre = origin
@@ -165,16 +180,22 @@ namespace ColumnSections
             ViewSection view = ViewSection.CreateSection(_doc, _sectionTypeId, box);
             view.Scale = _s.ViewScale;
             try { view.DetailLevel = ViewDetailLevel.Fine; } catch { /* view template may lock it */ }
+            try { view.CropBoxVisible = false; } catch { /* likewise */ }
 
             view.Name = UniqueName(string.Format("{0} - {1} ({2} NO{3})",
                 _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
 
             _doc.Regenerate();
 
-            // Top left of the band above the column.
-            XYZ notePoint = centre
-                + right * (-halfWidth + inset)
-                + up * (halfHeight - inset);
+            // Hidden first, written second: a note made before this would be
+            // hidden along with everything else.
+            if (_s.ShowOnlyThisColumn) ShowOnly(view, column);
+
+            // Above the crop, unless the crop was widened to hold it, so the
+            // drawing stays the size of the column.
+            XYZ notePoint = _s.ExpandCropForNote
+                ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                : centre + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
             var options = new TextNoteOptions(_textTypeId)
             {
                 HorizontalAlignment = HorizontalTextAlignment.Left,
@@ -185,6 +206,31 @@ namespace ColumnSections
             group.ViewId = view.Id;
             group.ViewName = view.Name;
             return view;
+        }
+
+        /// <summary>Hides everything in the view but this column and what belongs to
+        /// it, so the section is of the column rather than of the building.</summary>
+        private void ShowOnly(View view, ColumnInfo column)
+        {
+            try
+            {
+                var keep = new List<ElementId> { column.Instance.Id };
+                if (column.FoundationId != null && column.FoundationId != ElementId.InvalidElementId)
+                    keep.Add(column.FoundationId);
+                keep.AddRange(column.BeamIds);
+                if (column.Above != null) keep.Add(column.Above.Instance.Id);
+                if (column.Below != null) keep.Add(column.Below.Instance.Id);
+                keep.AddRange(_datumIds);
+
+                view.IsolateElementsTemporary(keep);
+                view.ConvertTemporaryHideIsolateToPermanent();
+                _doc.Regenerate();
+            }
+            catch
+            {
+                // A view template can own the visibility settings; the section is
+                // still worth having without the isolation.
+            }
         }
 
         /// <summary>The note in the section: the count first, then why this type is

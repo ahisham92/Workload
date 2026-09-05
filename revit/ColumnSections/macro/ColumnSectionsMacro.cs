@@ -125,8 +125,8 @@ namespace ColumnSections
 
         /// <summary>How much of the column above, and of the one below, the section
         /// reaches up and down to take in, so the change of size is drawn.</summary>
-        public double StackShowAboveMm = 900.0;
-        public double StackShowBelowMm = 600.0;
+        public double StackShowAboveMm = 600.0;
+        public double StackShowBelowMm = 300.0;
 
         // ---------------------------------------------------------------
         // Finding the things around a column
@@ -160,13 +160,23 @@ namespace ColumnSections
 
         public int ViewScale = 50;
 
-        /// <summary>Empty space left around the column in the section.</summary>
-        public double SideClearanceMm = 600.0;
-        public double TopClearanceMm = 900.0;
-        public double BottomClearanceMm = 600.0;
+        /// <summary>Empty space left around the column in the section. Kept tight;
+        /// raise it to bring more of the frame around the column into the view.</summary>
+        public double SideClearanceMm = 300.0;
+        public double TopClearanceMm = 450.0;
+        public double BottomClearanceMm = 300.0;
 
-        /// <summary>How deep the section looks past the column.</summary>
-        public double ViewDepthClearanceMm = 900.0;
+        /// <summary>How far past the column the section sees. Small, so the model
+        /// behind the column does not fill the drawing.</summary>
+        public double ViewDepthClearanceMm = 150.0;
+
+        /// <summary>Hide everything in the section but this column, its foundation,
+        /// the beams framing into it, the lift above and below, and the datums.</summary>
+        public bool ShowOnlyThisColumn = true;
+
+        /// <summary>The note sits above the crop, so a long line cannot force the
+        /// view wide. True puts it inside the crop instead.</summary>
+        public bool ExpandCropForNote = false;
 
         /// <summary>Prefix of the created view names, e.g. "COL SECTION - CT-01".</summary>
         public string ViewNamePrefix = "COL SECTION";
@@ -429,6 +439,10 @@ namespace ColumnSections
         public double Rotation;
         public BoundingBoxXYZ Box;
         public BoundingBoxXYZ FoundationBox;
+        /// <summary>The foundation under it, and the beams framing into it: what the
+        /// section keeps when everything else is hidden.</summary>
+        public ElementId FoundationId;
+        public readonly List<ElementId> BeamIds = new List<ElementId>();
         /// <summary>The columns sharing this plan location, one storey up and one down.</summary>
         public ColumnInfo Above;
         public ColumnInfo Below;
@@ -977,6 +991,7 @@ namespace ColumnSections
             sig.FoundationTopMm = Units.ToMm(best.Box.Max.Z);
             sig.FoundationThicknessMm = Units.ToMm(best.Box.Max.Z - best.Box.Min.Z);
             info.FoundationBox = best.Box;
+            info.FoundationId = best.Element.Id;
         }
 
         // -----------------------------------------------------------------
@@ -998,6 +1013,7 @@ namespace ColumnSections
                 double distance = PlanDistance(beam.Points, info.BasePoint);
                 if (distance > planTol) continue;
                 count++;
+                info.BeamIds.Add(beam.Element.Id);
                 if (beam.ZMax > topZ - vTol) atTop = true;
             }
             sig.BeamCount = count;
@@ -1078,6 +1094,7 @@ namespace ColumnSections
 
         private ElementId _sectionTypeId = ElementId.InvalidElementId;
         private ElementId _textTypeId = ElementId.InvalidElementId;
+        private readonly List<ElementId> _datumIds = new List<ElementId>();
         private double _textSizeFeet = 0.0082;   // 2.5 mm on paper
         private double _textWidthFactor = 1.0;
 
@@ -1139,6 +1156,17 @@ namespace ColumnSections
                 var view = e as View;
                 if (view != null) _usedNames.Add(view.Name);
             }
+
+            // Levels and grids stay visible when the rest of the model is hidden.
+            foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(Level)))
+            {
+                _datumIds.Add(e.Id);
+            }
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+            {
+                _datumIds.Add(e.Id);
+            }
             return true;
         }
 
@@ -1178,8 +1206,6 @@ namespace ColumnSections
             minD -= Units.ToFeet(_s.ViewDepthClearanceMm);
             maxD += Units.ToFeet(_s.ViewDepthClearanceMm);
 
-            // Leave a band above the column wide and tall enough for the note,
-            // so it never lands on top of the drawing.
             string[] lines = NoteLines(group);
             double lineHeight = _textSizeFeet * _s.ViewScale * 1.4;
             double noteHeight = lineHeight * lines.Length;
@@ -1191,13 +1217,18 @@ namespace ColumnSections
             double noteWidth = longestLine * _textSizeFeet * _textWidthFactor * 0.62 * _s.ViewScale;
             double inset = _textSizeFeet * _s.ViewScale;
 
-            maxU += noteHeight + 2 * inset;
-            double needed = noteWidth + 2 * inset;
-            if (maxR - minR < needed)
+            if (_s.ExpandCropForNote)
             {
-                double grow = (needed - (maxR - minR)) / 2.0;
-                minR -= grow;
-                maxR += grow;
+                // Room for the note inside the crop, which is what makes the view
+                // as wide as the note's longest line.
+                maxU += noteHeight + 2 * inset;
+                double needed = noteWidth + 2 * inset;
+                if (maxR - minR < needed)
+                {
+                    double grow = (needed - (maxR - minR)) / 2.0;
+                    minR -= grow;
+                    maxR += grow;
+                }
             }
 
             XYZ centre = origin
@@ -1225,16 +1256,22 @@ namespace ColumnSections
             ViewSection view = ViewSection.CreateSection(_doc, _sectionTypeId, box);
             view.Scale = _s.ViewScale;
             try { view.DetailLevel = ViewDetailLevel.Fine; } catch { /* view template may lock it */ }
+            try { view.CropBoxVisible = false; } catch { /* likewise */ }
 
             view.Name = UniqueName(string.Format("{0} - {1} ({2} NO{3})",
                 _s.ViewNamePrefix, group.Code, group.Count, group.Count == 1 ? "" : "S"));
 
             _doc.Regenerate();
 
-            // Top left of the band above the column.
-            XYZ notePoint = centre
-                + right * (-halfWidth + inset)
-                + up * (halfHeight - inset);
+            // Hidden first, written second: a note made before this would be
+            // hidden along with everything else.
+            if (_s.ShowOnlyThisColumn) ShowOnly(view, column);
+
+            // Above the crop, unless the crop was widened to hold it, so the
+            // drawing stays the size of the column.
+            XYZ notePoint = _s.ExpandCropForNote
+                ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                : centre + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
             var options = new TextNoteOptions(_textTypeId)
             {
                 HorizontalAlignment = HorizontalTextAlignment.Left,
@@ -1245,6 +1282,31 @@ namespace ColumnSections
             group.ViewId = view.Id;
             group.ViewName = view.Name;
             return view;
+        }
+
+        /// <summary>Hides everything in the view but this column and what belongs to
+        /// it, so the section is of the column rather than of the building.</summary>
+        private void ShowOnly(View view, ColumnInfo column)
+        {
+            try
+            {
+                var keep = new List<ElementId> { column.Instance.Id };
+                if (column.FoundationId != null && column.FoundationId != ElementId.InvalidElementId)
+                    keep.Add(column.FoundationId);
+                keep.AddRange(column.BeamIds);
+                if (column.Above != null) keep.Add(column.Above.Instance.Id);
+                if (column.Below != null) keep.Add(column.Below.Instance.Id);
+                keep.AddRange(_datumIds);
+
+                view.IsolateElementsTemporary(keep);
+                view.ConvertTemporaryHideIsolateToPermanent();
+                _doc.Regenerate();
+            }
+            catch
+            {
+                // A view template can own the visibility settings; the section is
+                // still worth having without the isolation.
+            }
         }
 
         /// <summary>The note in the section: the count first, then why this type is

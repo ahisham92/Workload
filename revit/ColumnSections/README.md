@@ -42,6 +42,14 @@ MARKS: C1, C2, C3, C4, C5, C6, C7
 The section reaches a little past the column at both ends, so the change of size
 is drawn where it happens rather than only written down.
 
+The view is cropped to the column itself — 300 mm around it, 150 mm past its
+face — and everything else in the model is hidden in that view: what stays is
+the column, the foundation under it, the beams framing into it, the lift above
+and below, and the levels and grids. The note goes above the crop rather than in
+it, so a long line cannot drag the drawing out wide. `showOnlyThisColumn` and
+`expandCropForNote` (`ShowOnlyThisColumn`, `ExpandCropForNote` in the add-in)
+turn each of those off.
+
 The view is named `COL SECTION - CT-01 (7 NOS)`.
 
 ## Getting it into Revit

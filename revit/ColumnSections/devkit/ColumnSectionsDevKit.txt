@@ -50,14 +50,23 @@ double stackVerticalToleranceMm = 600.0; // a slab thickness between two lifts
 // The level ground is read from. Empty: the level nearest project zero.
 string groundLevelName = "";
 
-// The sections that get drawn.
+// The sections that get drawn. Kept tight to the column: raise these if you
+// want more of the frame around it in the view.
 int viewScale = 50;
-double sideClearanceMm = 600.0;
-double topClearanceMm = 900.0;
-double bottomClearanceMm = 600.0;
-double viewDepthClearanceMm = 900.0;
-double showAboveMm = 900.0;   // how much of the next lift up the section takes in
-double showBelowMm = 600.0;
+double sideClearanceMm = 300.0;
+double topClearanceMm = 450.0;
+double bottomClearanceMm = 300.0;
+double viewDepthClearanceMm = 150.0;  // how far past the column the view sees
+double showAboveMm = 600.0;   // how much of the next lift up the section takes in
+double showBelowMm = 300.0;
+
+// Hide everything in the section except this column, its foundation, the beams
+// framing into it, the lift above and below, and the levels and grids.
+bool showOnlyThisColumn = true;
+
+// The note sits above the crop, so it does not force the view wide. True puts
+// it inside the crop instead, which makes the view as wide as the longest line.
+bool expandCropForNote = false;
 string viewNamePrefix = "COL SECTION";
 string typeCodePrefix = "CT";
 int maxMarksInNote = 12;
@@ -123,6 +132,9 @@ var basePointOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.El
 var topPointOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.XYZ>();
 var aboveOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
 var belowOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
+var foundationIdOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
+var beamIdsOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId,
+    System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
 
 // "400 x 900", or "D500" for a round one.
 System.Func<double[], string> sizeTextOf = n => n[N_IS_ROUND] > 0.5
@@ -180,6 +192,7 @@ else
     // Foundations, with the footprint and the type name kept.
     var foundationBoxes = new System.Collections.Generic.List<Autodesk.Revit.DB.BoundingBoxXYZ>();
     var foundationNames = new System.Collections.Generic.List<string>();
+    var foundationIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
     foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
         .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_StructuralFoundation)
         .WhereElementIsNotElementType())
@@ -189,12 +202,14 @@ else
         var elementType = theDoc.GetElement(e.GetTypeId()) as Autodesk.Revit.DB.ElementType;
         foundationBoxes.Add(bb);
         foundationNames.Add(elementType != null ? elementType.Name : e.Name);
+        foundationIds.Add(e.Id);
     }
 
     // Beams, as a tessellated centre line and the height band it lies in.
     var beamPoints = new System.Collections.Generic.List<System.Collections.Generic.IList<Autodesk.Revit.DB.XYZ>>();
     var beamZMin = new System.Collections.Generic.List<double>();
     var beamZMax = new System.Collections.Generic.List<double>();
+    var beamIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
     foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
         .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_StructuralFraming)
         .WhereElementIsNotElementType())
@@ -212,6 +227,7 @@ else
         beamPoints.Add(pts);
         beamZMin.Add(zLow);
         beamZMax.Add(zHigh);
+        beamIds.Add(e.Id);
     }
 
     // Ground: the level named above, or the one nearest project zero.
@@ -509,6 +525,7 @@ else
             n[N_FOUNDATION_THICKNESS] = snap(toMm(bb.Max.Z - bb.Min.Z), levelToleranceMm);
             s[T_FOUNDATION] = foundationNames[bestFoundation];
             foundationBoxOf[column.Id] = bb;
+            foundationIdOf[column.Id] = foundationIds[bestFoundation];
         }
 
         // The beams framing into it: centre lines passing close to it in plan
@@ -519,13 +536,16 @@ else
         double beamReach = toFeet(beamVerticalToleranceMm);
         int beams = 0;
         bool beamAtTop = false;
+        var connectedBeams = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
         for (int i = 0; i < beamPoints.Count; i++)
         {
             if (beamZMax[i] < baseZ - beamReach || beamZMin[i] > topZ + beamReach) continue;
             if (planDistance(beamPoints[i], basePoint) > planReach) continue;
             beams++;
+            connectedBeams.Add(beamIds[i]);
             if (beamZMax[i] > topZ - beamReach) beamAtTop = true;
         }
+        beamIdsOf[column.Id] = connectedBeams;
         n[N_BEAMS] = beams;
         n[N_BEAM_AT_TOP] = beamAtTop ? 1 : 0;
 
@@ -693,6 +713,18 @@ else
         {
             var view = e as Autodesk.Revit.DB.View;
             if (view != null) usedNames.Add(view.Name);
+        }
+
+        var datumIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+            .OfClass(typeof(Autodesk.Revit.DB.Level)))
+        {
+            datumIds.Add(e.Id);
+        }
+        foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
+            .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+        {
+            datumIds.Add(e.Id);
         }
 
         // The lines of the note, and the summary line, for one type.
@@ -863,13 +895,18 @@ else
                         double noteWidth = longest * textSizeFeet * textWidthFactor * 0.62 * viewScale;
                         double inset = textSizeFeet * viewScale;
 
-                        maxU += noteHeight + 2 * inset;
-                        double needed = noteWidth + 2 * inset;
-                        if (maxR - minR < needed)
+                        if (expandCropForNote)
                         {
-                            double grow = (needed - (maxR - minR)) / 2.0;
-                            minR -= grow;
-                            maxR += grow;
+                            // Room made for the note inside the crop, which is
+                            // what makes the view as wide as the longest line.
+                            maxU += noteHeight + 2 * inset;
+                            double needed = noteWidth + 2 * inset;
+                            if (maxR - minR < needed)
+                            {
+                                double grow = (needed - (maxR - minR)) / 2.0;
+                                minR -= grow;
+                                maxR += grow;
+                            }
                         }
 
                         Autodesk.Revit.DB.XYZ centreOfBox = origin
@@ -897,6 +934,8 @@ else
                         view.Scale = viewScale;
                         try { view.DetailLevel = Autodesk.Revit.DB.ViewDetailLevel.Fine; }
                         catch { /* a view template may be holding it */ }
+                        try { view.CropBoxVisible = false; }
+                        catch { /* likewise */ }
 
                         string wanted = string.Format(inv, "{0} - {1} ({2} NO{3})",
                             viewNamePrefix, code, members.Count, members.Count == 1 ? "" : "S");
@@ -917,9 +956,29 @@ else
 
                         theDoc.Regenerate();
 
-                        Autodesk.Revit.DB.XYZ notePoint = centreOfBox
-                            + right * (-halfWidth + inset)
-                            + up * (halfHeight - inset);
+                        if (showOnlyThisColumn)
+                        {
+                            try
+                            {
+                                var keep = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+                                keep.Add(id);
+                                if (foundationIdOf.ContainsKey(id)) keep.Add(foundationIdOf[id]);
+                                if (beamIdsOf.ContainsKey(id)) keep.AddRange(beamIdsOf[id]);
+                                if (aboveOf.ContainsKey(id)) keep.Add(aboveOf[id]);
+                                if (belowOf.ContainsKey(id)) keep.Add(belowOf[id]);
+                                keep.AddRange(datumIds);
+                                view.IsolateElementsTemporary(keep);
+                                view.ConvertTemporaryHideIsolateToPermanent();
+                                theDoc.Regenerate();
+                            }
+                            catch { /* a view template may own the visibility */ }
+                        }
+
+                        // Above the crop unless the crop was widened for it, so
+                        // the drawing stays the size of the column.
+                        Autodesk.Revit.DB.XYZ notePoint = expandCropForNote
+                            ? centreOfBox + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                            : centreOfBox + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
                         var noteOptions = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
                         noteOptions.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Left;
                         noteOptions.Rotation = 0.0;

@@ -16,6 +16,10 @@ namespace ColumnSections
         public double Rotation;
         public BoundingBoxXYZ Box;
         public BoundingBoxXYZ FoundationBox;
+        /// <summary>The foundation under it, and the beams framing into it: what the
+        /// section keeps when everything else is hidden.</summary>
+        public ElementId FoundationId;
+        public readonly List<ElementId> BeamIds = new List<ElementId>();
         /// <summary>The columns sharing this plan location, one storey up and one down.</summary>
         public ColumnInfo Above;
         public ColumnInfo Below;

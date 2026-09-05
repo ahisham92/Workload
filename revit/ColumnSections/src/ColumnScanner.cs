@@ -516,6 +516,7 @@ namespace ColumnSections
             sig.FoundationTopMm = Units.ToMm(best.Box.Max.Z);
             sig.FoundationThicknessMm = Units.ToMm(best.Box.Max.Z - best.Box.Min.Z);
             info.FoundationBox = best.Box;
+            info.FoundationId = best.Element.Id;
         }
 
         // -----------------------------------------------------------------
@@ -537,6 +538,7 @@ namespace ColumnSections
                 double distance = PlanDistance(beam.Points, info.BasePoint);
                 if (distance > planTol) continue;
                 count++;
+                info.BeamIds.Add(beam.Element.Id);
                 if (beam.ZMax > topZ - vTol) atTop = true;
             }
             sig.BeamCount = count;
