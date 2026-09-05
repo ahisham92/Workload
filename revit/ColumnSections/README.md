@@ -80,7 +80,17 @@ turn each of those off.
 The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
 is one.
 
-## The table on each section
+## The table, as a script of its own
+
+[`devkit/ColumnTableDevKit.cs`](devkit/ColumnTableDevKit.cs) draws the table on
+sections that already exist. Run the sections script first, then this one — or
+this one on its own, over sections made by hand. It works out which column each
+section is of by looking inside the crop, takes that column's tag, and lists
+every column in the model wearing the same tag. Run it as often as you like: it
+clears what it drew before rather than stacking a second table on the first.
+
+In the sections script, `drawTable` is off for that reason; set it true and the
+table is drawn as each section is made instead.
 
 Above the section, drawn in detail lines and text:
 
@@ -112,8 +122,13 @@ Above the section, drawn in detail lines and text:
 
 Sizes are millimetres **on paper** — 32 mm for the label column, 64 mm for the
 value column, 7 mm rows — so the table comes out the same size on the sheet
-whatever the view scale is. `drawTable = false` leaves it off; the written note
-is replaced by the table unless `keepTextNoteAsWell` is on.
+whatever the view scale is.
+
+The table script takes the sections to draw on from `viewNameContains`
+(`COL SECTION` by default), or from the active view with `onlyTheActiveView`.
+`clearExistingAnnotation` is what makes it repeatable: it clears the
+view-specific lines and text in each section before drawing, so turn it off if
+you have annotated those sections by hand.
 
 ## Getting it into Revit
 

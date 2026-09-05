@@ -110,10 +110,11 @@ Autodesk.Revit.DB.BuiltInCategory[] alwaysVisibleCategories =
 // it inside the crop instead, which makes the view as wide as the longest line.
 bool expandCropForNote = false;
 
-// The table drawn on each section: column type, how many there are, where each
-// one stands against the grid, and the detail number taken from the type code.
-// Drawn as detail lines and text, at these sizes ON PAPER.
-bool drawTable = true;
+// The table on each section - column type, how many there are, where each one
+// stands against the grid, the detail number - is a script of its own now:
+// ColumnTableDevKit. Run that after this one. True draws it from here instead,
+// at these sizes ON PAPER.
+bool drawTable = false;
 bool keepTextNoteAsWell = false;   // true: the written note is placed too
 double tableLabelWidthMm = 32.0;
 double tableValueWidthMm = 64.0;

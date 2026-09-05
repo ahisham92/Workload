@@ -122,7 +122,12 @@ def main():
     # A .txt of each pasteable file as well: some machines will not open, mail
     # or download a .cs, and these are only ever copied out of, never compiled
     # where they sit.
-    for source in [HERE / "devkit" / "ColumnSectionsDevKit.cs", out]:
+    pasteable = [
+        HERE / "devkit" / "ColumnSectionsDevKit.cs",
+        HERE / "devkit" / "ColumnTableDevKit.cs",
+        out,
+    ]
+    for source in pasteable:
         mirror = source.with_suffix(".txt")
         mirror.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         print("wrote %s" % mirror)
