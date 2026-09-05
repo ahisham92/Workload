@@ -73,10 +73,19 @@ double bottomClearanceMm = 600.0;
 // footing is in the view whatever it was modelled as.
 double alwaysShowBelowBaseMm = 1000.0;
 
-// How far past the column's own faces the view looks. This alone sets the far
-// clip: nothing else is allowed to push it out, so a raft under the column
-// cannot turn the section into a view of the whole building.
-double viewDepthClearanceMm = 500.0;
+// The section is cut through the MIDDLE of the column, and this is all it sees
+// behind that plane. 50mm: what the plane cuts, and next to nothing else.
+double farClipOffsetMm = 50.0;
+
+// Grids are hidden in every section made.
+bool hideGridsInSections = true;
+
+// Break lines where a floor, a beam or a foundation runs out of the view, drawn
+// at the edge it leaves by. Sizes are ON PAPER.
+bool drawBreakLines = true;
+double breakLineKinkMm = 3.0;
+double breakLineWidthMm = 2.0;
+double breakLineInsetMm = 2.0;
 
 // How far past the column's faces a footing may widen the view, before the side
 // clearance is added on top. A pad footing shows; a raft is cut off here, so it
@@ -113,11 +122,11 @@ Autodesk.Revit.DB.BuiltInCategory[] alwaysVisibleCategories =
 // it inside the crop instead, which makes the view as wide as the longest line.
 bool expandCropForNote = false;
 
-// The table on each section - column type, how many there are, where each one
-// stands against the grid, the detail number - is a script of its own now:
-// ColumnTableDevKit. Run that after this one. True draws it from here instead,
-// at these sizes ON PAPER.
-bool drawTable = false;
+// The table on each section: column type, how many there are, where each one
+// stands against the grid, and the detail number. Drawn as the section is made,
+// so one run does the lot. ColumnTableDevKit draws the same table on sections
+// that already exist. Sizes are ON PAPER.
+bool drawTable = true;
 bool keepTextNoteAsWell = false;   // true: the written note is placed too
 double tableLabelWidthMm = 32.0;
 double tableValueWidthMm = 64.0;
@@ -232,6 +241,8 @@ var belowOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.Elemen
 var foundationIdOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
 var beamIdsOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId,
     System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
+var floorIdsOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId,
+    System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
 
 // "400 x 900", or "D500" for a round one.
 System.Func<double[], string> sizeTextOf = n => n[N_IS_ROUND] > 0.5
@@ -307,12 +318,15 @@ else
 
     // Floors, as footprints: a column meets the slab that covers it.
     var floorBoxes = new System.Collections.Generic.List<Autodesk.Revit.DB.BoundingBoxXYZ>();
+    var floorIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
     foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
         .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Floors)
         .WhereElementIsNotElementType())
     {
         Autodesk.Revit.DB.BoundingBoxXYZ bb = e.get_BoundingBox(null);
-        if (bb != null) floorBoxes.Add(bb);
+        if (bb == null) continue;
+        floorBoxes.Add(bb);
+        floorIds.Add(e.Id);
     }
 
     // Beams, as a tessellated centre line and the height band it lies in.
@@ -699,12 +713,15 @@ else
         int floors = 0;
         bool floorAtTop = false;
         double floorThickness = 0.0;
-        foreach (Autodesk.Revit.DB.BoundingBoxXYZ bb in floorBoxes)
+        var metFloors = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+        for (int fi = 0; fi < floorBoxes.Count; fi++)
         {
+            Autodesk.Revit.DB.BoundingBoxXYZ bb = floorBoxes[fi];
             if (basePoint.X < bb.Min.X || basePoint.X > bb.Max.X) continue;
             if (basePoint.Y < bb.Min.Y || basePoint.Y > bb.Max.Y) continue;
             if (bb.Max.Z < baseZ - floorReach || bb.Min.Z > topZ + floorReach) continue;
             floors++;
+            metFloors.Add(floorIds[fi]);
             if (bb.Max.Z > topZ - floorReach && bb.Min.Z < topZ + floorReach)
             {
                 floorAtTop = true;
@@ -747,6 +764,7 @@ else
         n[N_FLOORS] = floors;
         n[N_FLOOR_AT_TOP] = floorAtTop ? 1 : 0;
         n[N_FLOOR_THICKNESS] = snap(floorThickness, levelToleranceMm);
+        floorIdsOf[column.Id] = metFloors;
 
         ids.Add(column.Id);
         instanceOf[column.Id] = column;

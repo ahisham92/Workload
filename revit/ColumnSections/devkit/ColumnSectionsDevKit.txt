@@ -71,10 +71,19 @@ double bottomClearanceMm = 600.0;
 // footing is in the view whatever it was modelled as.
 double alwaysShowBelowBaseMm = 1000.0;
 
-// How far past the column's own faces the view looks. This alone sets the far
-// clip: nothing else is allowed to push it out, so a raft under the column
-// cannot turn the section into a view of the whole building.
-double viewDepthClearanceMm = 500.0;
+// The section is cut through the MIDDLE of the column, and this is all it sees
+// behind that plane. 50mm: what the plane cuts, and next to nothing else.
+double farClipOffsetMm = 50.0;
+
+// Grids are hidden in every section made.
+bool hideGridsInSections = true;
+
+// Break lines where a floor, a beam or a foundation runs out of the view, drawn
+// at the edge it leaves by. Sizes are ON PAPER.
+bool drawBreakLines = true;
+double breakLineKinkMm = 3.0;
+double breakLineWidthMm = 2.0;
+double breakLineInsetMm = 2.0;
 
 // How far past the column's faces a footing may widen the view, before the side
 // clearance is added on top. A pad footing shows; a raft is cut off here, so it
@@ -111,11 +120,11 @@ Autodesk.Revit.DB.BuiltInCategory[] alwaysVisibleCategories =
 // it inside the crop instead, which makes the view as wide as the longest line.
 bool expandCropForNote = false;
 
-// The table on each section - column type, how many there are, where each one
-// stands against the grid, the detail number - is a script of its own now:
-// ColumnTableDevKit. Run that after this one. True draws it from here instead,
-// at these sizes ON PAPER.
-bool drawTable = false;
+// The table on each section: column type, how many there are, where each one
+// stands against the grid, and the detail number. Drawn as the section is made,
+// so one run does the lot. ColumnTableDevKit draws the same table on sections
+// that already exist. Sizes are ON PAPER.
+bool drawTable = true;
 bool keepTextNoteAsWell = false;   // true: the written note is placed too
 double tableLabelWidthMm = 32.0;
 double tableValueWidthMm = 64.0;
@@ -232,6 +241,8 @@ var belowOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.Elemen
 var foundationIdOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId, Autodesk.Revit.DB.ElementId>();
 var beamIdsOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId,
     System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
+var floorIdsOf = new System.Collections.Generic.Dictionary<Autodesk.Revit.DB.ElementId,
+    System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>>();
 
 // "400 x 900", or "D500" for a round one.
 System.Func<double[], string> sizeTextOf = n => n[N_IS_ROUND] > 0.5
@@ -307,12 +318,15 @@ else
 
     // Floors, as footprints: a column meets the slab that covers it.
     var floorBoxes = new System.Collections.Generic.List<Autodesk.Revit.DB.BoundingBoxXYZ>();
+    var floorIds = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
     foreach (Autodesk.Revit.DB.Element e in new Autodesk.Revit.DB.FilteredElementCollector(theDoc)
         .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Floors)
         .WhereElementIsNotElementType())
     {
         Autodesk.Revit.DB.BoundingBoxXYZ bb = e.get_BoundingBox(null);
-        if (bb != null) floorBoxes.Add(bb);
+        if (bb == null) continue;
+        floorBoxes.Add(bb);
+        floorIds.Add(e.Id);
     }
 
     // Beams, as a tessellated centre line and the height band it lies in.
@@ -699,12 +713,15 @@ else
         int floors = 0;
         bool floorAtTop = false;
         double floorThickness = 0.0;
-        foreach (Autodesk.Revit.DB.BoundingBoxXYZ bb in floorBoxes)
+        var metFloors = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+        for (int fi = 0; fi < floorBoxes.Count; fi++)
         {
+            Autodesk.Revit.DB.BoundingBoxXYZ bb = floorBoxes[fi];
             if (basePoint.X < bb.Min.X || basePoint.X > bb.Max.X) continue;
             if (basePoint.Y < bb.Min.Y || basePoint.Y > bb.Max.Y) continue;
             if (bb.Max.Z < baseZ - floorReach || bb.Min.Z > topZ + floorReach) continue;
             floors++;
+            metFloors.Add(floorIds[fi]);
             if (bb.Max.Z > topZ - floorReach && bb.Min.Z < topZ + floorReach)
             {
                 floorAtTop = true;
@@ -747,6 +764,7 @@ else
         n[N_FLOORS] = floors;
         n[N_FLOOR_AT_TOP] = floorAtTop ? 1 : 0;
         n[N_FLOOR_THICKNESS] = snap(floorThickness, levelToleranceMm);
+        floorIdsOf[column.Id] = metFloors;
 
         ids.Add(column.Id);
         instanceOf[column.Id] = column;
@@ -1275,8 +1293,8 @@ else
                         maxR += toFeet(sideClearanceMm);
                         minU -= toFeet(bottomClearanceMm);
                         maxU += toFeet(topClearanceMm);
-                        minD -= toFeet(viewDepthClearanceMm);
-                        maxD += toFeet(viewDepthClearanceMm);
+                        // The cut goes through the middle of the column.
+                        double cutDepth = (minD + maxD) / 2.0;
 
                         // The note goes in a band above the column, never on it.
                         string[] lines = noteLinesOf(id, code, members.Count);
@@ -1311,6 +1329,26 @@ else
                         double noteWidth = longest * textSizeFeet * textWidthFactor * 0.62 * viewScale;
                         double inset = textSizeFeet * viewScale;
 
+                        // The crop cuts detail lines, so the table has to be inside
+                        // it: a band is left across the top of the view for it.
+                        double bandRowH = toFeet(tableRowHeightMm * viewScale);
+                        double bandW = toFeet((tableLabelWidthMm + tableValueWidthMm) * viewScale);
+                        int bandRows = members.Count <= maxLocationRows
+                            ? System.Math.Max(members.Count, 1)
+                            : maxLocationRows + 1;
+                        double bandH = drawTable ? (3 + bandRows + 1) * bandRowH : 0.0;
+                        if (drawTable)
+                        {
+                            maxU += bandH + 2 * inset;
+                            double wantedWidth = bandW + 2 * inset;
+                            if (maxR - minR < wantedWidth)
+                            {
+                                double widen = (wantedWidth - (maxR - minR)) / 2.0;
+                                minR -= widen;
+                                maxR += widen;
+                            }
+                        }
+
                         if (expandCropForNote)
                         {
                             // Room made for the note inside the crop, which is
@@ -1328,7 +1366,7 @@ else
                         Autodesk.Revit.DB.XYZ centreOfBox = origin
                             + right * ((minR + maxR) / 2.0)
                             + up * ((minU + maxU) / 2.0)
-                            + towardsViewer * ((minD + maxD) / 2.0);
+                            + towardsViewer * cutDepth;
 
                         Autodesk.Revit.DB.Transform transform = Autodesk.Revit.DB.Transform.Identity;
                         transform.Origin = centreOfBox;
@@ -1338,12 +1376,14 @@ else
 
                         double halfWidth = (maxR - minR) / 2.0;
                         double halfHeight = (maxU - minU) / 2.0;
-                        double halfDepth = (maxD - minD) / 2.0;
+                        double farClip = toFeet(farClipOffsetMm);
 
                         var sectionBox = new Autodesk.Revit.DB.BoundingBoxXYZ();
                         sectionBox.Transform = transform;
-                        sectionBox.Min = new Autodesk.Revit.DB.XYZ(-halfWidth, -halfHeight, -halfDepth);
-                        sectionBox.Max = new Autodesk.Revit.DB.XYZ(halfWidth, halfHeight, halfDepth);
+                        // Nothing in front of the cut, and only the far clip behind
+                        // it, so the section is what the plane cuts and little else.
+                        sectionBox.Min = new Autodesk.Revit.DB.XYZ(-halfWidth, -halfHeight, -farClip);
+                        sectionBox.Max = new Autodesk.Revit.DB.XYZ(halfWidth, halfHeight, toFeet(1.0));
 
                         Autodesk.Revit.DB.ViewSection view =
                             Autodesk.Revit.DB.ViewSection.CreateSection(theDoc, sectionType.Id, sectionBox);
@@ -1398,6 +1438,18 @@ else
                             catch { /* a view template may own the visibility */ }
                         }
 
+                        if (hideGridsInSections)
+                        {
+                            try
+                            {
+                                Autodesk.Revit.DB.Category grids = Autodesk.Revit.DB.Category.GetCategory(
+                                    theDoc, Autodesk.Revit.DB.BuiltInCategory.OST_Grids);
+                                if (grids != null && view.CanCategoryBeHidden(grids.Id))
+                                    view.SetCategoryHidden(grids.Id, true);
+                            }
+                            catch { /* a view template may own the visibility */ }
+                        }
+
                         // The table, sized on paper and turned into model size
                         // by the view scale. Worked out first, because the note
                         // goes above it.
@@ -1438,13 +1490,95 @@ else
                             Autodesk.Revit.DB.XYZ notePoint = expandCropForNote
                                 ? centreOfBox + right * (-halfWidth + inset) + up * (halfHeight - inset)
                                 : centreOfBox + right * (-halfWidth)
-                                    + up * (halfHeight + inset + tableH + noteHeight
-                                            + (tableH > 0 ? inset : 0.0));
+                                    + up * (halfHeight + inset + noteHeight);
                             var noteOptions = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
                             noteOptions.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Left;
                             noteOptions.Rotation = 0.0;
                             Autodesk.Revit.DB.TextNote.Create(theDoc, view.Id, notePoint,
                                 noteText.ToString(), noteOptions);
+                        }
+
+                        if (drawBreakLines)
+                        {
+                            // A floor, a beam or a foundation that runs out of the
+                            // view is broken at the edge it leaves by, rather than
+                            // stopping dead at the crop.
+                            double kink = toFeet(breakLineKinkMm * viewScale);
+                            double wing = toFeet(breakLineWidthMm * viewScale);
+                            double edgeInset = toFeet(breakLineInsetMm * viewScale);
+
+                            // The members drawn beside this column: its footing, the
+                            // beams framing in, the slabs it meets - lift by lift.
+                            var beside = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
+                            foreach (Autodesk.Revit.DB.ElementId lift in chainOf[id])
+                            {
+                                if (foundationIdOf.ContainsKey(lift)) beside.Add(foundationIdOf[lift]);
+                                if (beamIdsOf.ContainsKey(lift)) beside.AddRange(beamIdsOf[lift]);
+                                if (floorIdsOf.ContainsKey(lift)) beside.AddRange(floorIdsOf[lift]);
+                            }
+
+                            var alreadyBroken = new System.Collections.Generic.HashSet<string>();
+                            foreach (Autodesk.Revit.DB.ElementId memberId in beside)
+                            {
+                                Autodesk.Revit.DB.Element member = theDoc.GetElement(memberId);
+                                if (member == null) continue;
+                                Autodesk.Revit.DB.BoundingBoxXYZ bb = member.get_BoundingBox(null);
+                                if (bb == null) continue;
+
+                                // Its reach across the view, and its thickness up it.
+                                double memberMinX = double.MaxValue, memberMaxX = double.MinValue;
+                                double memberMinY = double.MaxValue, memberMaxY = double.MinValue;
+                                foreach (Autodesk.Revit.DB.XYZ corner in cornersOf(bb))
+                                {
+                                    Autodesk.Revit.DB.XYZ v = corner - centreOfBox;
+                                    double cx = v.DotProduct(right), cy = v.DotProduct(up);
+                                    if (cx < memberMinX) memberMinX = cx;
+                                    if (cx > memberMaxX) memberMaxX = cx;
+                                    if (cy < memberMinY) memberMinY = cy;
+                                    if (cy > memberMaxY) memberMaxY = cy;
+                                }
+
+                                // Only what the view actually shows, and only where
+                                // it runs past an edge.
+                                double lowY = System.Math.Max(memberMinY, -halfHeight);
+                                double highY = System.Math.Min(memberMaxY, halfHeight);
+                                if (highY - lowY < 1e-6) continue;
+
+                                for (int side = 0; side < 2; side++)
+                                {
+                                    bool leftSide = side == 0;
+                                    if (leftSide && memberMinX > -halfWidth + 1e-6) continue;
+                                    if (!leftSide && memberMaxX < halfWidth - 1e-6) continue;
+
+                                    double x = leftSide ? -halfWidth + edgeInset : halfWidth - edgeInset;
+                                    // One break per edge and height, however many
+                                    // members meet there.
+                                    string place = string.Format(inv, "{0}:{1:0.000}:{2:0.000}",
+                                        leftSide ? "L" : "R", lowY, highY);
+                                    if (!alreadyBroken.Add(place)) continue;
+
+                                    double middle = (lowY + highY) / 2.0;
+                                    if (highY - lowY < 4 * kink)
+                                    {
+                                        // Too thin for a kink; a plain line will do.
+                                        drawLine(view, centreOfBox + right * x + up * lowY,
+                                                       centreOfBox + right * x + up * highY);
+                                        continue;
+                                    }
+
+                                    Autodesk.Revit.DB.XYZ p1 = centreOfBox + right * x + up * lowY;
+                                    Autodesk.Revit.DB.XYZ p2 = centreOfBox + right * x + up * (middle - kink);
+                                    Autodesk.Revit.DB.XYZ p3 = centreOfBox + right * (x + wing) + up * (middle - kink / 2.0);
+                                    Autodesk.Revit.DB.XYZ p4 = centreOfBox + right * (x - wing) + up * (middle + kink / 2.0);
+                                    Autodesk.Revit.DB.XYZ p5 = centreOfBox + right * x + up * (middle + kink);
+                                    Autodesk.Revit.DB.XYZ p6 = centreOfBox + right * x + up * highY;
+                                    drawLine(view, p1, p2);
+                                    drawLine(view, p2, p3);
+                                    drawLine(view, p3, p4);
+                                    drawLine(view, p4, p5);
+                                    drawLine(view, p5, p6);
+                                }
+                            }
                         }
 
                         if (drawTable)
@@ -1459,8 +1593,8 @@ else
                                 ? code.Substring(dash + 1) : code;
 
                             Autodesk.Revit.DB.XYZ topLeft = centreOfBox
-                                + right * (-halfWidth)
-                                + up * (halfHeight + inset + tableH);
+                                + right * (-halfWidth + inset)
+                                + up * (halfHeight - inset);
 
                             // x runs across the table, y runs down it.
                             System.Func<double, double, Autodesk.Revit.DB.XYZ> at =
