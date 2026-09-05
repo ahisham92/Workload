@@ -46,7 +46,7 @@ The view is named `COL SECTION - CT-01 (7 NOS)`.
 
 ## Getting it into Revit
 
-There are two ways in, and **only one file to handle** in either case. Do not
+There are three ways in, and **only one file to handle** in each. Do not
 paste the files in `src/` one at a time into a code-runner window: they are eight
 parts of one program, and a window that wraps what you paste inside a method
 cannot take a `using` line or a `namespace` at all.
@@ -73,7 +73,34 @@ hidden half of the class.
 Macros live in the project file, so this travels with the model and has to be
 done again in the next one. The add-in does not.
 
-### 2. As an add-in — built once, on every project after that
+### 2. In a paste-in code runner (DevKit and the like)
+
+Use [`devkit/ColumnSectionsDevKit.cs`](devkit/ColumnSectionsDevKit.cs). Those
+tools wrap what you paste inside a method of their own, which is why they choke
+on the other files: a `using` line, a `namespace` and a `class` cannot go inside
+a method. This one is statements only, with every type written out in full, so it
+does not care what the tool has already imported.
+
+Paste the whole file, then check the one line marked `>>>` near the top — how the
+code gets hold of the document. Four versions are given; keep the one that
+compiles in your tool and delete the rest:
+
+```csharp
+Autodesk.Revit.DB.Document theDoc = uidoc.Document;
+Autodesk.Revit.DB.Document theDoc = uiapp.ActiveUIDocument.Document;
+Autodesk.Revit.DB.Document theDoc = commandData.Application.ActiveUIDocument.Document;
+Autodesk.Revit.DB.Document theDoc = doc;
+```
+
+If it then says not all code paths return a value, add the return the tool wants
+as the last line — the commented lines at the bottom of the file.
+
+This is the same program, but a second copy of it rather than a generated one:
+without classes it has to be written differently, keeping each column's
+measurements in plain arrays. The settings are the first forty lines. It does the
+sections and the CSV; it has no separate report command.
+
+### 3. As an add-in — built once, on every project after that
 
 Needs Visual Studio or the .NET SDK on a machine with Revit installed; see
 **Building** below. It produces `ColumnSections.dll`, and the two files go here:
