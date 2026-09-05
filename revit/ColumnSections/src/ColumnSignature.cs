@@ -48,9 +48,14 @@ namespace ColumnSections
 
         public string Key { get; private set; }
 
+        /// <summary>The sizes of the stack this column starts, bottom first, once
+        /// the key is built. Empty when it is not the bottom of one.</summary>
+        public string[] LiftSizes = new string[0];
+
         /// <summary>Freezes the signature: rounds every measurement to the
-        /// tolerances in <paramref name="s"/> and builds the comparison key.</summary>
-        public void Build(Settings s)
+        /// tolerances in <paramref name="s"/> and builds the comparison key.
+        /// <paramref name="lifts"/> is the stack standing on this column.</summary>
+        public void Build(Settings s, System.Collections.Generic.List<ColumnInfo> lifts)
         {
             WidthMm = Units.Snap(WidthMm, s.SizeToleranceMm);
             DepthMm = Units.Snap(DepthMm, s.SizeToleranceMm);
@@ -87,8 +92,27 @@ namespace ColumnSections
             if (s.StackChangeIsPartOfType)
             {
                 k.Append('|');
-                k.Append("A:").Append(HasColumnAbove ? SizeAboveText : "none").Append('|');
-                k.Append("U:").Append(HasColumnBelow ? SizeBelowText : "none");
+                if (s.OneSectionPerStack && lifts != null && lifts.Count > 0)
+                {
+                    // Every lift of the stack, in order: two stacks are the same
+                    // only if they change size at the same places.
+                    var sizes = new string[lifts.Count];
+                    k.Append("L:");
+                    for (int i = 0; i < lifts.Count; i++)
+                    {
+                        sizes[i] = lifts[i].Signature.SizeText;
+                        k.Append(sizes[i]);
+                        if (s.HeightIsPartOfType)
+                            k.AppendFormat(c, "@{0:0}", lifts[i].Signature.HeightMm);
+                        k.Append(';');
+                    }
+                    LiftSizes = sizes;
+                }
+                else
+                {
+                    k.Append("A:").Append(HasColumnAbove ? SizeAboveText : "none").Append('|');
+                    k.Append("U:").Append(HasColumnBelow ? SizeBelowText : "none");
+                }
             }
 
             Key = k.ToString();
@@ -185,21 +209,25 @@ namespace ColumnSections
             }
         }
 
-        /// <summary>The five criteria, one per line, for the note in the section.</summary>
-        public string[] DescriptionLines()
+        /// <summary>The criteria, one per line, for the note in the section. Where
+        /// the lifts are listed above it, what is above and below is already said
+        /// and is left out.</summary>
+        public string[] DescriptionLines(bool liftsAreListed)
         {
             var c = CultureInfo.InvariantCulture;
-            return new[]
+            var lines = new System.Collections.Generic.List<string>();
+            if (!liftsAreListed) lines.Add("SIZE: " + SizeText + "  (" + TypeName + ")");
+            lines.Add(FoundationText);
+            lines.Add(BeamText);
+            lines.Add(GroundText);
+            if (!liftsAreListed)
             {
-                "SIZE: " + SizeText + "  (" + TypeName + ")",
-                FoundationText,
-                BeamText,
-                GroundText,
-                BelowText,
-                AboveText,
-                string.Format(c, "BASE {0:0} / TOP {1:0} / HT {2:0}",
-                    BaseElevationMm, TopElevationMm, HeightMm)
-            };
+                lines.Add(BelowText);
+                lines.Add(AboveText);
+                lines.Add(string.Format(c, "BASE {0:0} / TOP {1:0} / HT {2:0}",
+                    BaseElevationMm, TopElevationMm, HeightMm));
+            }
+            return lines.ToArray();
         }
     }
 }

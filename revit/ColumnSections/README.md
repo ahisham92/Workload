@@ -3,7 +3,15 @@
 Takes a section of every column that is *different*, and says on the drawing how
 many columns are not.
 
-Two columns are the same type when all five of these agree:
+**A section is taken per column stack, not per column.** A 600x900 that runs to
+level 3 with a 400x900 above it is one column here, sectioned once and counted
+once: the section is taken on the column that starts at the foundation and covers
+every lift standing on it, up to the roof. So a model with 104 column elements
+standing on 60 foundations gives counts that add up to 60, which is what a
+schedule of column sections is counting. `oneSectionPerStack = false` goes back
+to one section per column element.
+
+Two stacks are the same type when all five of these agree:
 
 1. **Size** — family and type, and the section dimensions (`b`/`h`, `Width`/`Depth`
    or `Diameter`; measured off the solid when the family has no such parameters).
@@ -14,11 +22,10 @@ Two columns are the same type when all five of these agree:
    whether one lands at the top.
 4. **The level of the ground** — how far the column base sits below (or above)
    ground level.
-5. **What the stack does** — the size of the column sitting on the same plan
-   location above it and below it. A 600x900 that carries a 400x900 is not the
-   same type as a 600x900 that carries its own size on up, nor as one with
-   nothing above it; and the 400x900 landing on a 600x900 is not the same as one
-   landing on another 400x900.
+5. **What the stack does** — every lift standing on the column, in order. A
+   600x900 that carries a 400x900 is not the same type as a 600x900 that carries
+   its own size on up, nor as one with nothing above it, and two stacks are the
+   same only if they change size at the same places.
 
 Everything is rounded before it is compared — 5 mm on sizes, 10 mm on levels — so
 a model that is a millimetre out does not produce two types.
@@ -29,18 +36,19 @@ of it, and writes a note in it:
 
 ```
 CT-01 - 7 COLUMNS OF THIS TYPE
-SIZE: 600 x 900  (C-600x900)
+2 LIFTS, FOUNDATION UP
+LIFT 1: 600 x 900  (-1500 TO 3600)
+LIFT 2: 400 x 900  (3600 TO 7200)
 FDN TOP -1500 (600 THK)
 2 BEAMS CONNECTED (AT TOP)
 BASE 1500 BELOW GROUND
-NOTHING BELOW (COLUMN STARTS HERE)
-ABOVE: 400 x 900 - SIZE CHANGES
-BASE -1500 / TOP 3600 / HT 5100
 MARKS: C1, C2, C3, C4, C5, C6, C7
 ```
 
-The section reaches a little past the column at both ends, so the change of size
-is drawn where it happens rather than only written down.
+The section covers the stack whole, foundation to roof, so every change of size
+is drawn where it happens rather than only written down. It also reaches 1 m
+below the base of the column whatever else it finds, so the footing is in the
+view even where none was found to measure.
 
 The view is cropped to the column itself — 1 m each side of it, 500 mm past its
 face — and everything else in the model is hidden in that view: what stays is

@@ -43,11 +43,12 @@ namespace ColumnSections
                 if (info != null) measured.Add(info);
             }
             LinkStacks(measured);
+            List<ColumnInfo> subjects = BuildStacks(measured);
 
             var byKey = new Dictionary<string, ColumnTypeGroup>();
-            foreach (ColumnInfo info in measured)
+            foreach (ColumnInfo info in subjects)
             {
-                info.Signature.Build(_s);
+                info.Signature.Build(_s, info.Lifts);
 
                 ColumnTypeGroup group;
                 if (!byKey.TryGetValue(info.Signature.Key, out group))
@@ -216,6 +217,7 @@ namespace ColumnSections
             // before the signature is closed.
             sig.WidthMm = Units.Snap(sig.WidthMm, _s.SizeToleranceMm);
             sig.DepthMm = Units.Snap(sig.DepthMm, _s.SizeToleranceMm);
+            sig.HeightMm = Units.Snap(sig.HeightMm, _s.LevelToleranceMm);
 
             FindFoundation(info, sig);
             CountBeams(info, sig);
@@ -484,6 +486,47 @@ namespace ColumnSections
                         StringComparison.OrdinalIgnoreCase);
                 }
             }
+        }
+
+        /// <summary>Turns the linked columns into stacks: walking Above from a
+        /// column with nothing under it gives one column line, bottom lift first.
+        /// Returns the columns a section is taken of - the bottom of each stack,
+        /// or every column when stacks are switched off.</summary>
+        private List<ColumnInfo> BuildStacks(List<ColumnInfo> columns)
+        {
+            var subjects = new List<ColumnInfo>();
+            if (!_s.OneSectionPerStack)
+            {
+                foreach (ColumnInfo column in columns)
+                {
+                    column.Lifts.Add(column);
+                    subjects.Add(column);
+                }
+                return subjects;
+            }
+
+            var claimed = new HashSet<ElementId>();
+            // Bottoms first, so every stack is walked from the ground up; the
+            // second pass picks up anything the first could not reach.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                foreach (ColumnInfo column in columns)
+                {
+                    if (claimed.Contains(column.Instance.Id)) continue;
+                    if (pass == 0 && column.Below != null) continue;
+
+                    ColumnInfo walk = column;
+                    while (walk != null && !claimed.Contains(walk.Instance.Id)
+                           && column.Lifts.Count < 200)
+                    {
+                        column.Lifts.Add(walk);
+                        claimed.Add(walk.Instance.Id);
+                        walk = walk.Above;
+                    }
+                    subjects.Add(column);
+                }
+            }
+            return subjects;
         }
 
         private static long CellKey(int x, int y)

@@ -233,16 +233,43 @@ namespace ColumnSections
             return view;
         }
 
+        /// <summary>The lifts of the stack, one line each, where there is more than
+        /// one of them.</summary>
+        private IEnumerable<string> LiftLines(ColumnInfo column)
+        {
+            if (column.Lifts.Count < 2) yield break;
+
+            yield return string.Format("{0} LIFTS, FOUNDATION UP", column.Lifts.Count);
+            for (int i = 0; i < column.Lifts.Count; i++)
+            {
+                if (i >= _s.MaxLiftsInNote)
+                {
+                    yield return string.Format("(+{0} MORE LIFTS)", column.Lifts.Count - i);
+                    yield break;
+                }
+                ColumnSignature lift = column.Lifts[i].Signature;
+                yield return string.Format("LIFT {0}: {1}  ({2:0} TO {3:0})",
+                    i + 1, lift.SizeText, lift.BaseElevationMm, lift.TopElevationMm);
+            }
+        }
+
         /// <summary>Hides everything in the view but this column and what belongs to
         /// it, so the section is of the column rather than of the building.</summary>
         private void ShowOnly(View view, ColumnInfo column)
         {
             try
             {
-                var keep = new List<ElementId> { column.Instance.Id };
-                if (column.FoundationId != null && column.FoundationId != ElementId.InvalidElementId)
-                    keep.Add(column.FoundationId);
-                keep.AddRange(column.BeamIds);
+                var keep = new List<ElementId>();
+                List<ColumnInfo> lifts = column.Lifts.Count > 0
+                    ? column.Lifts
+                    : new List<ColumnInfo> { column };
+                foreach (ColumnInfo lift in lifts)
+                {
+                    keep.Add(lift.Instance.Id);
+                    if (lift.FoundationId != null && lift.FoundationId != ElementId.InvalidElementId)
+                        keep.Add(lift.FoundationId);
+                    keep.AddRange(lift.BeamIds);
+                }
                 if (column.Above != null) keep.Add(column.Above.Instance.Id);
                 if (column.Below != null) keep.Add(column.Below.Instance.Id);
                 keep.AddRange(_alwaysVisibleIds);
@@ -267,7 +294,8 @@ namespace ColumnSections
                 string.Format("{0} - {1} COLUMN{2} OF THIS TYPE",
                     group.Code, group.Count, group.Count == 1 ? "" : "S")
             };
-            lines.AddRange(group.Signature.DescriptionLines());
+            lines.AddRange(LiftLines(group.Representative));
+            lines.AddRange(group.Signature.DescriptionLines(group.Representative.Lifts.Count > 1));
 
             if (_s.MaxMarksInNote > 0)
             {
@@ -290,12 +318,19 @@ namespace ColumnSections
             return lines.ToArray();
         }
 
-        /// <summary>The column and nothing else: what the view is sized from.</summary>
+        /// <summary>The stack and nothing else: what the view is sized from. Every
+        /// lift of it is in the section, foundation to roof.</summary>
         private static IEnumerable<XYZ> ColumnPoints(ColumnInfo column)
         {
-            foreach (XYZ p in Corners(column.Box)) yield return p;
-            yield return column.BasePoint;
-            yield return column.TopPoint;
+            List<ColumnInfo> lifts = column.Lifts.Count > 0
+                ? column.Lifts
+                : new List<ColumnInfo> { column };
+            foreach (ColumnInfo lift in lifts)
+            {
+                foreach (XYZ p in Corners(lift.Box)) yield return p;
+                yield return lift.BasePoint;
+                yield return lift.TopPoint;
+            }
         }
 
         /// <summary>The foundation under it and the first stretch of the lifts above
@@ -306,6 +341,14 @@ namespace ColumnSections
             if (column.FoundationBox != null)
                 foreach (XYZ p in Corners(column.FoundationBox)) yield return p;
 
+            // Below the base whatever happens, so the footing is in the view even
+            // where none was found to measure.
+            yield return new XYZ(column.BasePoint.X, column.BasePoint.Y,
+                column.BasePoint.Z - Units.ToFeet(s.AlwaysShowBelowBaseMm));
+
+            if (s.OneSectionPerStack) yield break;
+
+            // Without stacks, the lifts either side are glimpsed, not drawn whole.
             if (column.Above != null && column.Above.Box != null)
             {
                 double ceiling = column.TopPoint.Z + Units.ToFeet(s.StackShowAboveMm);

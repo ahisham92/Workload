@@ -23,6 +23,10 @@ namespace ColumnSections
         /// <summary>The columns sharing this plan location, one storey up and one down.</summary>
         public ColumnInfo Above;
         public ColumnInfo Below;
+
+        /// <summary>On the column a section is taken of: every lift of its stack,
+        /// bottom first, itself included. Empty on the lifts above.</summary>
+        public readonly List<ColumnInfo> Lifts = new List<ColumnInfo>();
         public ColumnSignature Signature;
 
         /// <summary>The least of the two plan dimensions, in feet. Used to decide how
