@@ -34,11 +34,21 @@ namespace ColumnSections
         {
             LoadContext();
 
-            var byKey = new Dictionary<string, ColumnTypeGroup>();
+            // Measured first, all of them: a column's type depends on what sits on
+            // its own location above and below, which is only known once the rest
+            // have been measured too.
+            var measured = new List<ColumnInfo>();
             foreach (FamilyInstance column in columns)
             {
                 ColumnInfo info = Measure(column);
-                if (info == null) continue;
+                if (info != null) measured.Add(info);
+            }
+            LinkStacks(measured);
+
+            var byKey = new Dictionary<string, ColumnTypeGroup>();
+            foreach (ColumnInfo info in measured)
+            {
+                info.Signature.Build(_s);
 
                 ColumnTypeGroup group;
                 if (!byKey.TryGetValue(info.Signature.Key, out group))
@@ -187,10 +197,14 @@ namespace ColumnSections
             };
 
             MeasureSection(column, info.Rotation, sig);
+            // Rounded now, not only in Build: the sizes are compared up the stack
+            // before the signature is closed.
+            sig.WidthMm = Units.Snap(sig.WidthMm, _s.SizeToleranceMm);
+            sig.DepthMm = Units.Snap(sig.DepthMm, _s.SizeToleranceMm);
+
             FindFoundation(info, sig);
             CountBeams(info, sig);
 
-            sig.Build(_s);
             info.Signature = sig;
             return info;
         }
@@ -368,6 +382,98 @@ namespace ColumnSections
                     if (inner != null) Collect(inner, points);
                 }
             }
+        }
+
+        // -----------------------------------------------------------------
+        // The stack: same location, storey over storey
+        // -----------------------------------------------------------------
+
+        /// <summary>Finds, for each column, the column on the same plan location one
+        /// lift up and one lift down, and records whether the size changes there.
+        /// A 600x900 carrying a 400x900 is a different case from one that carries
+        /// its own size on up, and from one with nothing above it at all.</summary>
+        private void LinkStacks(List<ColumnInfo> columns)
+        {
+            // Bucketed by a coarse plan grid, so this stays quick on a whole tower.
+            double cell = Units.ToFeet(3000.0);
+            var grid = new Dictionary<long, List<ColumnInfo>>();
+            foreach (ColumnInfo c in columns)
+            {
+                long key = CellKey((int)Math.Floor(c.BasePoint.X / cell),
+                                   (int)Math.Floor(c.BasePoint.Y / cell));
+                List<ColumnInfo> bucket;
+                if (!grid.TryGetValue(key, out bucket))
+                {
+                    bucket = new List<ColumnInfo>();
+                    grid.Add(key, bucket);
+                }
+                bucket.Add(c);
+            }
+
+            double slack = Units.ToFeet(_s.StackSearchToleranceMm);
+            double vTol = Units.ToFeet(_s.StackVerticalToleranceMm);
+
+            foreach (ColumnInfo column in columns)
+            {
+                int ix = (int)Math.Floor(column.BasePoint.X / cell);
+                int iy = (int)Math.Floor(column.BasePoint.Y / cell);
+
+                ColumnInfo above = null, below = null;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        List<ColumnInfo> bucket;
+                        if (!grid.TryGetValue(CellKey(ix + dx, iy + dy), out bucket)) continue;
+
+                        foreach (ColumnInfo other in bucket)
+                        {
+                            if (ReferenceEquals(other, column)) continue;
+
+                            double reach = slack + Math.Min(column.LeastPlanDimension,
+                                                            other.LeastPlanDimension) / 2.0;
+                            double dxx = other.BasePoint.X - column.BasePoint.X;
+                            double dyy = other.BasePoint.Y - column.BasePoint.Y;
+                            if (Math.Sqrt(dxx * dxx + dyy * dyy) > reach) continue;
+
+                            bool sitsAbove = other.BasePoint.Z >= column.TopPoint.Z - vTol
+                                             && other.TopPoint.Z > column.TopPoint.Z + 1e-6;
+                            if (sitsAbove && (above == null || other.BasePoint.Z < above.BasePoint.Z))
+                                above = other;
+
+                            bool sitsBelow = other.TopPoint.Z <= column.BasePoint.Z + vTol
+                                             && other.BasePoint.Z < column.BasePoint.Z - 1e-6;
+                            if (sitsBelow && (below == null || other.TopPoint.Z > below.TopPoint.Z))
+                                below = other;
+                        }
+                    }
+                }
+
+                column.Above = above;
+                column.Below = below;
+                ColumnSignature sig = column.Signature;
+
+                sig.HasColumnAbove = above != null;
+                if (above != null)
+                {
+                    sig.SizeAboveText = above.Signature.SizeText;
+                    sig.SizeChangesAbove = !string.Equals(sig.SizeAboveText, sig.SizeText,
+                        StringComparison.OrdinalIgnoreCase);
+                }
+
+                sig.HasColumnBelow = below != null;
+                if (below != null)
+                {
+                    sig.SizeBelowText = below.Signature.SizeText;
+                    sig.SizeChangesBelow = !string.Equals(sig.SizeBelowText, sig.SizeText,
+                        StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
+
+        private static long CellKey(int x, int y)
+        {
+            return ((long)x << 32) ^ (uint)y;
         }
 
         // -----------------------------------------------------------------

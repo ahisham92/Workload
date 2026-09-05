@@ -66,8 +66,10 @@ namespace ColumnSections
                     groups.Count, groups.Count == 1 ? "" : "s"),
                 MainContent = string.Format(
                     "Read from {0}. Ground is taken from level \"{1}\".\n\n" +
-                    "One cross section will be created for each type, with a note in it " +
-                    "saying how many columns share that type.",
+                    "A type is a size, a foundation below, a beam connection, a level " +
+                    "against ground, and what the stack does above and below it. One " +
+                    "cross section will be created for each, with a note in it saying " +
+                    "how many columns share that type.",
                     fromSelection ? "your selection" : "the whole model",
                     scanner.GroundLevelName),
                 ExpandedContent = Summary(groups),
@@ -145,9 +147,9 @@ namespace ColumnSections
             var text = new StringBuilder();
             foreach (ColumnTypeGroup g in groups)
             {
-                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}\n",
+                text.AppendFormat("{0}  x{1}  {2}  |  {3}  |  {4}  |  {5}  |  STACK {6}\n",
                     g.Code, g.Count, g.Signature.SizeText, g.Signature.FoundationText,
-                    g.Signature.BeamText, g.Signature.GroundText);
+                    g.Signature.BeamText, g.Signature.GroundText, g.Signature.StackText);
             }
             return text.ToString();
         }

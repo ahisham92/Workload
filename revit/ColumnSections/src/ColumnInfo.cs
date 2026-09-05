@@ -16,7 +16,21 @@ namespace ColumnSections
         public double Rotation;
         public BoundingBoxXYZ Box;
         public BoundingBoxXYZ FoundationBox;
+        /// <summary>The columns sharing this plan location, one storey up and one down.</summary>
+        public ColumnInfo Above;
+        public ColumnInfo Below;
         public ColumnSignature Signature;
+
+        /// <summary>The least of the two plan dimensions, in feet. Used to decide how
+        /// far a column above may step in and still be the same stack.</summary>
+        public double LeastPlanDimension
+        {
+            get
+            {
+                double least = System.Math.Min(Signature.WidthMm, Signature.DepthMm);
+                return Units.ToFeet(least);
+            }
+        }
     }
 
     /// <summary>All the columns that came out identical, and the section drawn for them.</summary>
