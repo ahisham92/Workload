@@ -158,8 +158,8 @@ bool useSelectionWhenAny = false;   // the table always reads the whole model
 // and size on the right, and on the left the bubble with the detail number of
 // the section that column is drawn on. Sizes are ON PAPER.
 double planCutOffsetMm = 1200.0;      // how far above its level the plan cuts
-double planLabelOffsetMm = 12.0;      // right of the column
-double planBubbleOffsetMm = 30.0;     // left of the column
+double planLabelOffsetMm = 8.0;       // right of the column
+double planBubbleOffsetMm = 18.0;     // left of the column - the leader spans it
 double planBubbleRadiusXMm = 9.0;
 double planBubbleRadiusYMm = 5.5;
 double planArrowMm = 2.5;
