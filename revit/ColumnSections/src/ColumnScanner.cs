@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Autodesk.Revit.DB;
 
 namespace ColumnSections
@@ -60,11 +59,15 @@ namespace ColumnSections
             }
 
             // Most common type first, so CT-01 is the one that repeats most.
-            List<ColumnTypeGroup> groups = byKey.Values
-                .OrderByDescending(g => g.Count)
-                .ThenBy(g => g.Signature.SizeText, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(g => g.Signature.Key, StringComparer.Ordinal)
-                .ToList();
+            var groups = new List<ColumnTypeGroup>(byKey.Values);
+            groups.Sort(delegate(ColumnTypeGroup a, ColumnTypeGroup b)
+            {
+                if (a.Count != b.Count) return b.Count.CompareTo(a.Count);
+                int bySize = string.Compare(a.Signature.SizeText, b.Signature.SizeText,
+                    StringComparison.OrdinalIgnoreCase);
+                if (bySize != 0) return bySize;
+                return string.Compare(a.Signature.Key, b.Signature.Key, StringComparison.Ordinal);
+            });
 
             for (int i = 0; i < groups.Count; i++)
             {
@@ -78,20 +81,20 @@ namespace ColumnSections
         /// <summary>Every structural column in the model.</summary>
         public static List<FamilyInstance> AllColumns(Document doc)
         {
-            var columns = new FilteredElementCollector(doc)
-                .OfCategory(BuiltInCategory.OST_StructuralColumns)
-                .OfClass(typeof(FamilyInstance))
-                .WhereElementIsNotElementType()
-                .Cast<FamilyInstance>()
-                .ToList();
-
             // Architectural columns count too, if that is all the model has.
-            columns.AddRange(new FilteredElementCollector(doc)
-                .OfCategory(BuiltInCategory.OST_Columns)
-                .OfClass(typeof(FamilyInstance))
-                .WhereElementIsNotElementType()
-                .Cast<FamilyInstance>());
-
+            var categories = new[] { BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_Columns };
+            var columns = new List<FamilyInstance>();
+            foreach (BuiltInCategory category in categories)
+            {
+                foreach (Element e in new FilteredElementCollector(doc)
+                    .OfCategory(category)
+                    .OfClass(typeof(FamilyInstance))
+                    .WhereElementIsNotElementType())
+                {
+                    var instance = e as FamilyInstance;
+                    if (instance != null) columns.Add(instance);
+                }
+            }
             return columns;
         }
 
@@ -123,13 +126,13 @@ namespace ColumnSections
                 if (lc == null || lc.Curve == null) continue;
                 IList<XYZ> pts = lc.Curve.Tessellate();
                 if (pts == null || pts.Count < 2) continue;
-                _beams.Add(new BeamRef
+                double zMin = pts[0].Z, zMax = pts[0].Z;
+                foreach (XYZ p in pts)
                 {
-                    Element = e,
-                    Points = pts,
-                    ZMin = pts.Min(p => p.Z),
-                    ZMax = pts.Max(p => p.Z)
-                });
+                    if (p.Z < zMin) zMin = p.Z;
+                    if (p.Z > zMax) zMax = p.Z;
+                }
+                _beams.Add(new BeamRef { Element = e, Points = pts, ZMin = zMin, ZMax = zMax });
             }
 
             Level ground = FindGroundLevel();
@@ -139,18 +142,30 @@ namespace ColumnSections
 
         private Level FindGroundLevel()
         {
-            List<Level> levels = new FilteredElementCollector(_doc)
-                .OfClass(typeof(Level)).Cast<Level>().ToList();
+            var levels = new List<Level>();
+            foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(Level)))
+            {
+                var level = e as Level;
+                if (level != null) levels.Add(level);
+            }
             if (levels.Count == 0) return null;
 
             if (!string.IsNullOrEmpty(_s.GroundLevelName))
             {
-                Level named = levels.FirstOrDefault(l =>
-                    string.Equals(l.Name, _s.GroundLevelName, StringComparison.OrdinalIgnoreCase));
-                if (named != null) return named;
+                foreach (Level level in levels)
+                {
+                    if (string.Equals(level.Name, _s.GroundLevelName, StringComparison.OrdinalIgnoreCase))
+                        return level;
+                }
             }
+
             // Otherwise the level sitting closest to project zero.
-            return levels.OrderBy(l => Math.Abs(l.Elevation)).First();
+            Level nearest = levels[0];
+            foreach (Level level in levels)
+            {
+                if (Math.Abs(level.Elevation) < Math.Abs(nearest.Elevation)) nearest = level;
+            }
+            return nearest;
         }
 
         // -----------------------------------------------------------------
