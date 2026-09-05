@@ -42,12 +42,16 @@ MARKS: C1, C2, C3, C4, C5, C6, C7
 The section reaches a little past the column at both ends, so the change of size
 is drawn where it happens rather than only written down.
 
-The view is cropped to the column itself — 300 mm around it, 150 mm past its
+The view is cropped to the column itself — 1 m each side of it, 500 mm past its
 face — and everything else in the model is hidden in that view: what stays is
 the column, the foundation under it, the beams framing into it, the lift above
 and below, the levels and grids, and the floors. Floors are kept because the
 slab the column carries is half of what a column section is for; since the view
-sees only 150 mm past the column, what shows of them is the slice at the column.
+sees only 500 mm past the column, what shows of them is the slice at the column.
+
+The column alone sizes the view. What stands under it may take the section
+deeper down the page and no wider than `maxExtraWidthMm` — otherwise a raft or a
+slab-on-grade sets the crop and the far clip to the size of the building.
 `alwaysVisibleCategories` in the settings is that list — add `OST_Walls`,
 `OST_Roofs`, `OST_StructuralFraming` or anything else you want left in. The note goes above the crop rather than in
 it, so a long line cannot drag the drawing out wide. `showOnlyThisColumn` and

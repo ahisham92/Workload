@@ -53,10 +53,20 @@ string groundLevelName = "";
 // The sections that get drawn. Kept tight to the column: raise these if you
 // want more of the frame around it in the view.
 int viewScale = 50;
-double sideClearanceMm = 300.0;
+double sideClearanceMm = 1000.0;      // crop, left and right of the column
 double topClearanceMm = 600.0;
 double bottomClearanceMm = 300.0;
-double viewDepthClearanceMm = 150.0;  // how far past the column the view sees
+
+// How far past the column's own faces the view looks. This alone sets the far
+// clip: nothing else is allowed to push it out, so a raft under the column
+// cannot turn the section into a view of the whole building.
+double viewDepthClearanceMm = 500.0;
+
+// How far past the column's faces a footing may widen the view, before the side
+// clearance is added on top. Zero keeps the crop at exactly the column plus the
+// clearance either side - a footing wider than the column still shows, as far
+// out as that band reaches. Raise it only for a footing too wide to fit.
+double maxExtraWidthMm = 0.0;
 double showAboveMm = 600.0;   // how much of the next lift up the section takes in
 double showBelowMm = 300.0;
 
@@ -840,29 +850,15 @@ else
                         Autodesk.Revit.DB.XYZ up = Autodesk.Revit.DB.XYZ.BasisZ;
                         Autodesk.Revit.DB.XYZ towardsViewer = right.CrossProduct(up).Normalize();
 
-                        // Everything the section has to frame: the column, its
-                        // footing, and the start of the lift above and below.
-                        var extent = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
-                        extent.AddRange(cornersOf(boxOf[id]));
-                        if (foundationBoxOf.ContainsKey(id)) extent.AddRange(cornersOf(foundationBoxOf[id]));
-                        extent.Add(origin);
-                        extent.Add(topPointOf[id]);
-                        if (aboveOf.ContainsKey(id) && boxOf.ContainsKey(aboveOf[id]))
-                        {
-                            double ceiling = topPointOf[id].Z + toFeet(showAboveMm);
-                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[aboveOf[id]]))
-                                extent.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Min(p.Z, ceiling)));
-                        }
-                        if (belowOf.ContainsKey(id) && boxOf.ContainsKey(belowOf[id]))
-                        {
-                            double floor = origin.Z - toFeet(showBelowMm);
-                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[belowOf[id]]))
-                                extent.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Max(p.Z, floor)));
-                        }
+                        // The column itself, and nothing else, decides how wide
+                        // and how deep the view is.
+                        var columnPoints = cornersOf(boxOf[id]);
+                        columnPoints.Add(origin);
+                        columnPoints.Add(topPointOf[id]);
 
                         double minR = 0, maxR = 0, minU = 0, maxU = 0, minD = 0, maxD = 0;
                         bool first = true;
-                        foreach (Autodesk.Revit.DB.XYZ p in extent)
+                        foreach (Autodesk.Revit.DB.XYZ p in columnPoints)
                         {
                             Autodesk.Revit.DB.XYZ v = p - origin;
                             double r = v.DotProduct(right), u = v.DotProduct(up), d = v.DotProduct(towardsViewer);
@@ -875,6 +871,37 @@ else
                             if (r < minR) minR = r; else if (r > maxR) maxR = r;
                             if (u < minU) minU = u; else if (u > maxU) maxU = u;
                             if (d < minD) minD = d; else if (d > maxD) maxD = d;
+                        }
+
+                        // The footing below and the lift above may take the view
+                        // higher or lower, and only so much wider. They may not
+                        // take it deeper at all - that is what kept the far clip
+                        // out at the size of the raft.
+                        var extraPoints = new System.Collections.Generic.List<Autodesk.Revit.DB.XYZ>();
+                        if (foundationBoxOf.ContainsKey(id))
+                            extraPoints.AddRange(cornersOf(foundationBoxOf[id]));
+                        if (aboveOf.ContainsKey(id) && boxOf.ContainsKey(aboveOf[id]))
+                        {
+                            double ceiling = topPointOf[id].Z + toFeet(showAboveMm);
+                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[aboveOf[id]]))
+                                extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Min(p.Z, ceiling)));
+                        }
+                        if (belowOf.ContainsKey(id) && boxOf.ContainsKey(belowOf[id]))
+                        {
+                            double floor = origin.Z - toFeet(showBelowMm);
+                            foreach (Autodesk.Revit.DB.XYZ p in cornersOf(boxOf[belowOf[id]]))
+                                extraPoints.Add(new Autodesk.Revit.DB.XYZ(p.X, p.Y, System.Math.Max(p.Z, floor)));
+                        }
+
+                        double reachLeft = minR - toFeet(maxExtraWidthMm);
+                        double reachRight = maxR + toFeet(maxExtraWidthMm);
+                        foreach (Autodesk.Revit.DB.XYZ p in extraPoints)
+                        {
+                            Autodesk.Revit.DB.XYZ v = p - origin;
+                            double r = v.DotProduct(right), u = v.DotProduct(up);
+                            if (r < reachLeft) r = reachLeft; else if (r > reachRight) r = reachRight;
+                            if (r < minR) minR = r; else if (r > maxR) maxR = r;
+                            if (u < minU) minU = u; else if (u > maxU) maxU = u;
                         }
 
                         minR -= toFeet(sideClearanceMm);

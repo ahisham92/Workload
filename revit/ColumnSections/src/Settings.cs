@@ -88,15 +88,21 @@ namespace ColumnSections
 
         public int ViewScale = 50;
 
-        /// <summary>Empty space left around the column in the section. Kept tight;
-        /// raise it to bring more of the frame around the column into the view.</summary>
-        public double SideClearanceMm = 300.0;
+        /// <summary>Crop left and right of the column, and above and below it.</summary>
+        public double SideClearanceMm = 1000.0;
         public double TopClearanceMm = 600.0;
         public double BottomClearanceMm = 300.0;
 
-        /// <summary>How far past the column the section sees. Small, so the model
-        /// behind the column does not fill the drawing.</summary>
-        public double ViewDepthClearanceMm = 150.0;
+        /// <summary>How far past the column's own faces the view looks. This alone
+        /// sets the far clip - nothing else may push it out, so a raft under the
+        /// column cannot turn the section into a view of the whole building.</summary>
+        public double ViewDepthClearanceMm = 500.0;
+
+        /// <summary>How far past the column's faces a footing may widen the view,
+        /// before the side clearance is added on top. Zero keeps the crop at the
+        /// column plus the clearance either side; a footing wider than the column
+        /// still shows, as far out as that band reaches.</summary>
+        public double MaxExtraWidthMm = 0.0;
 
         /// <summary>Hide everything in the section but this column, its foundation,
         /// the beams framing into it, the lift above and below, the datums, and the

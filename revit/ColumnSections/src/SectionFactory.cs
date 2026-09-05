@@ -115,9 +115,11 @@ namespace ColumnSections
             XYZ towardsViewer = right.CrossProduct(up).Normalize();
             XYZ origin = column.BasePoint;
 
+            // The column itself, and nothing else, decides how wide and how deep
+            // the view is.
             double minR = 0, maxR = 0, minU = 0, maxU = 0, minD = 0, maxD = 0;
             bool first = true;
-            foreach (XYZ p in ExtentPoints(column, _s))
+            foreach (XYZ p in ColumnPoints(column))
             {
                 XYZ v = p - origin;
                 double r = v.DotProduct(right), u = v.DotProduct(up), d = v.DotProduct(towardsViewer);
@@ -130,6 +132,20 @@ namespace ColumnSections
                 if (r < minR) minR = r; else if (r > maxR) maxR = r;
                 if (u < minU) minU = u; else if (u > maxU) maxU = u;
                 if (d < minD) minD = d; else if (d > maxD) maxD = d;
+            }
+
+            // The footing below and the lift above may take the view higher or
+            // lower, and only so much wider. They may not take it deeper at all:
+            // that is what held the far clip out at the size of the raft.
+            double reachLeft = minR - Units.ToFeet(_s.MaxExtraWidthMm);
+            double reachRight = maxR + Units.ToFeet(_s.MaxExtraWidthMm);
+            foreach (XYZ p in NeighbourPoints(column, _s))
+            {
+                XYZ v = p - origin;
+                double r = v.DotProduct(right), u = v.DotProduct(up);
+                if (r < reachLeft) r = reachLeft; else if (r > reachRight) r = reachRight;
+                if (r < minR) minR = r; else if (r > maxR) maxR = r;
+                if (u < minU) minU = u; else if (u > maxU) maxU = u;
             }
 
             minR -= Units.ToFeet(_s.SideClearanceMm);
@@ -274,16 +290,21 @@ namespace ColumnSections
             return lines.ToArray();
         }
 
-        /// <summary>Corners of the column, of the foundation under it, and of the
-        /// first stretch of the columns above and below, so the section frames the
-        /// footing, the beam and any change of size at either end.</summary>
-        private static IEnumerable<XYZ> ExtentPoints(ColumnInfo column, Settings s)
+        /// <summary>The column and nothing else: what the view is sized from.</summary>
+        private static IEnumerable<XYZ> ColumnPoints(ColumnInfo column)
         {
             foreach (XYZ p in Corners(column.Box)) yield return p;
-            if (column.FoundationBox != null)
-                foreach (XYZ p in Corners(column.FoundationBox)) yield return p;
             yield return column.BasePoint;
             yield return column.TopPoint;
+        }
+
+        /// <summary>The foundation under it and the first stretch of the lifts above
+        /// and below, so the section frames the footing and any change of size at
+        /// either end - within the limits the caller puts on them.</summary>
+        private static IEnumerable<XYZ> NeighbourPoints(ColumnInfo column, Settings s)
+        {
+            if (column.FoundationBox != null)
+                foreach (XYZ p in Corners(column.FoundationBox)) yield return p;
 
             if (column.Above != null && column.Above.Box != null)
             {
