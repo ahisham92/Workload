@@ -81,13 +81,9 @@ on the other files: a `using` line, a `namespace` and a `class` cannot go inside
 a method. This one is statements only, with every type written out in full, so it
 does not care what the tool has already imported.
 
-Paste the whole file, then check the one line marked `>>>` near the top — how the
-code gets hold of the document. These tools wrap your code in a method handed a
-`UIApplication`, so the line reads `<that parameter>.ActiveUIDocument.Document`.
-The file uses `uiapp`, which is what most of them call it; if the compiler says
-`uiapp` does not exist, the name is in the method signature its error quotes —
-`RunBody(UIApplication app)` means write `app`. Spare versions are commented
-under it.
+Paste the whole file and run it. DevKit hands the pasted code a `Document`
+called `doc`, which is what the file's first statement reads; in another runner
+that name will be its own, and the alternatives are commented under it.
 
 If it then says not all code paths return a value, add the return the tool wants
 as the last line — the commented lines at the bottom of the file.

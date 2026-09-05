@@ -14,28 +14,20 @@
 //  written out in full for the same reason: it does not care what the tool has
 //  already imported.
 //
-//  ONE LINE MAY NEED CHANGING: the one marked >>> below, which is how this
-//  gets hold of the document. Keep whichever version compiles.
+//  Written for DevKit, which hands the code a Document called doc. In another
+//  tool change the one line under "How this gets hold of the model".
 // ===========================================================================
 
-// >>> THE ONE LINE TO CHECK <<<
+// How this gets hold of the model. DevKit hands the code a Document called doc,
+// which is all it needs:
+Autodesk.Revit.DB.Document theDoc = doc;
 //
-// Your tool wraps this code in a method of its own that is handed a
-// UIApplication - its errors name it, e.g. "RunBody(UIApplication)". This line
-// has to use whatever that parameter is called, and only the tool knows:
-Autodesk.Revit.DB.Document theDoc = app.ActiveUIDocument.Document;
-//
-// If the compiler says app does not exist, put the right name in front of
-// .ActiveUIDocument.Document. To find it, look at the code the tool puts in the
-// box before you paste over it, or at any snippet that has already worked in it:
-// the name is the one it uses to reach the model. These are the usual ones -
-// uiapp and uidoc have already been ruled out in this tool.
-// Autodesk.Revit.DB.Document theDoc = application.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = uiApp.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = revit.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = ui.ActiveUIDocument.Document;
+// In another tool the name will be its own. If the compiler says doc does not
+// exist, use whatever that tool calls the model - one of these usually:
+// Autodesk.Revit.DB.Document theDoc = uidoc.Document;
+// Autodesk.Revit.DB.Document theDoc = uiapp.ActiveUIDocument.Document;
+// Autodesk.Revit.DB.Document theDoc = app.ActiveUIDocument.Document;
 // Autodesk.Revit.DB.Document theDoc = commandData.Application.ActiveUIDocument.Document;
-// Autodesk.Revit.DB.Document theDoc = doc;
 
 // --------------------------------------------------------------- settings --
 // Rounded before anything is compared, so a millimetre out is not a new type.
