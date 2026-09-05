@@ -115,22 +115,22 @@ def between(text, start, end):
     return "\n".join(lines[first + 1:last])
 
 
-def build_table():
-    """The table script: the sections script's settings and analysis, with a
-    tail that draws the table on sections instead of making them. Sharing the
-    analysis is the point - the table has to count what the sections counted."""
+def build_from_parts(head_name, tail_name, out_name, what):
+    """A script made of the sections script's settings and analysis, with a tail
+    of its own on the end. Sharing the analysis is the point: these scripts have
+    to see the columns exactly as the sections did."""
     sections = (HERE / "devkit" / "ColumnSectionsDevKit.cs").read_text(encoding="utf-8")
-    head = (HERE / "devkit" / "parts" / "table-head.cs").read_text(encoding="utf-8")
-    tail = (HERE / "devkit" / "parts" / "table-tail.cs").read_text(encoding="utf-8")
+    head = (HERE / "devkit" / "parts" / head_name).read_text(encoding="utf-8")
+    tail = (HERE / "devkit" / "parts" / tail_name).read_text(encoding="utf-8")
 
-    # The one setting the table script must not inherit: it counts the whole
-    # model, whatever happens to be selected while it runs.
+    # The one setting these must not inherit: they read the whole model,
+    # whatever happens to be selected while they run.
     settings = between(sections, "SHARED SETTINGS START", "SHARED SETTINGS END")
     settings = settings.replace(
         "bool useSelectionWhenAny = true;",
-        "bool useSelectionWhenAny = false;   // the table always counts the whole model")
+        "bool useSelectionWhenAny = false;   // %s always reads the whole model" % what)
 
-    out = HERE / "devkit" / "ColumnTableDevKit.cs"
+    out = HERE / "devkit" / out_name
     out.write_text("\n".join([
         head.rstrip("\n"),
         settings,
@@ -138,6 +138,16 @@ def build_table():
         tail.rstrip("\n") + "\n",
     ]), encoding="utf-8")
     print("wrote %s (%d lines)" % (out, len(out.read_text().splitlines())))
+
+
+def build_table():
+    build_from_parts("table-head.cs", "table-tail.cs",
+                     "ColumnTableDevKit.cs", "the table")
+
+
+def build_break_lines():
+    build_from_parts("breaks-head.cs", "breaks-tail.cs",
+                     "ColumnBreakLinesDevKit.cs", "the break lines")
 
 
 def main():
@@ -156,10 +166,12 @@ def main():
     # or download a .cs, and these are only ever copied out of, never compiled
     # where they sit.
     build_table()
+    build_break_lines()
 
     pasteable = [
         HERE / "devkit" / "ColumnSectionsDevKit.cs",
         HERE / "devkit" / "ColumnTableDevKit.cs",
+        HERE / "devkit" / "ColumnBreakLinesDevKit.cs",
         out,
     ]
     for source in pasteable:
