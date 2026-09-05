@@ -152,8 +152,8 @@ bool useSelectionWhenAny = false;   // the plan tags always reads the whole mode
 // and size on the right, and on the left the bubble with the detail number of
 // the section that column is drawn on. Sizes are ON PAPER.
 double planCutOffsetMm = 1200.0;      // how far above its level the plan cuts
-double planLabelOffsetMm = 12.0;      // right of the column
-double planBubbleOffsetMm = 30.0;     // left of the column
+double planLabelOffsetMm = 8.0;       // right of the column
+double planBubbleOffsetMm = 18.0;     // left of the column - the leader spans it
 double planBubbleRadiusXMm = 9.0;
 double planBubbleRadiusYMm = 5.5;
 double planArrowMm = 2.5;
@@ -1107,13 +1107,6 @@ else
         if (textSizeParam != null && textSizeParam.AsDouble() > 1e-9)
             textSizeFeet = textSizeParam.AsDouble();
 
-        System.Action<Autodesk.Revit.DB.View, Autodesk.Revit.DB.XYZ, Autodesk.Revit.DB.XYZ> drawLine =
-            (v, a, b) =>
-        {
-            if (a.DistanceTo(b) < 1e-7) return;
-            theDoc.Create.NewDetailCurve(v, Autodesk.Revit.DB.Line.CreateBound(a, b));
-        };
-
         System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ,
             Autodesk.Revit.DB.HorizontalTextAlignment> write = (v, text, origin, align) =>
         {
@@ -1148,9 +1141,17 @@ else
                     // being in this plan's plane. Revit refuses the wrong one, so
                     // the candidates are tried on a line that is thrown away.
                     var candidateHeights = new System.Collections.Generic.List<double>();
+                    try
+                    {
+                        // The view's own answer, where it has one.
+                        if (plan.SketchPlane != null && plan.SketchPlane.GetPlane() != null)
+                            candidateHeights.Add(plan.SketchPlane.GetPlane().Origin.Z);
+                    }
+                    catch { /* the view has no sketch plane of its own */ }
                     if (plan.Origin != null) candidateHeights.Add(plan.Origin.Z);
                     candidateHeights.Add(plan.GenLevel.Elevation);
                     candidateHeights.Add(plan.GenLevel.ProjectElevation);
+                    candidateHeights.Add(plan.GenLevel.Elevation + toFeet(planCutOffsetMm));
                     candidateHeights.Add(0.0);
 
                     double planZ = candidateHeights[0];
@@ -1172,10 +1173,40 @@ else
                     }
                     if (!planeFound)
                     {
-                        skipped.Add(plan.Name + ": nothing can be drawn in this view - "
-                            + "it may be locked by a view template");
+                        skipped.Add(plan.Name + ": no line can be drawn in this view at all - "
+                            + "a view template may be holding it");
                         continue;
                     }
+
+                    // Whatever the probe settled on, every line goes down at this
+                    // height, and if Revit still refuses one the rest of the
+                    // candidates are tried on it rather than losing the drawing.
+                    double[] drawAt = new double[] { planZ };
+                    int[] refusedStrokes = new int[] { 0 };
+
+                    // One line of the drawing, put down at whichever height this
+                    // view will take. Revit is the judge, not us.
+                    System.Action<Autodesk.Revit.DB.XYZ, Autodesk.Revit.DB.XYZ> stroke = (a, b) =>
+                    {
+                        if (a.DistanceTo(b) < 1e-7) return;
+                        var tryThese = new System.Collections.Generic.List<double>();
+                        tryThese.Add(drawAt[0]);
+                        tryThese.AddRange(candidateHeights);
+                        foreach (double height in tryThese)
+                        {
+                            try
+                            {
+                                theDoc.Create.NewDetailCurve(plan,
+                                    Autodesk.Revit.DB.Line.CreateBound(
+                                        new Autodesk.Revit.DB.XYZ(a.X, a.Y, height),
+                                        new Autodesk.Revit.DB.XYZ(b.X, b.Y, height)));
+                                drawAt[0] = height;
+                                return;
+                            }
+                            catch { /* not this plane; try the next */ }
+                        }
+                        refusedStrokes[0]++;
+                    };
                     double cutAt = plan.GenLevel.Elevation + toFeet(planCutOffsetMm);
                     Autodesk.Revit.DB.XYZ right = plan.RightDirection;
                     Autodesk.Revit.DB.XYZ up = plan.UpDirection;
@@ -1215,7 +1246,7 @@ else
 
                         Autodesk.Revit.DB.XYZ stands = basePointOf[id];
                         Autodesk.Revit.DB.XYZ point = new Autodesk.Revit.DB.XYZ(
-                            stands.X, stands.Y, planZ);
+                            stands.X, stands.Y, drawAt[0]);
 
                         Autodesk.Revit.DB.XYZ labelAt = point + right * labelOut;
                         if (skipWhereAlreadyTagged)
@@ -1269,17 +1300,17 @@ else
                         catch
                         {
                             // No ellipse to be had: a box will do.
-                            drawLine(plan, centre + right * -radiusX + up * radiusY,
-                                           centre + right * radiusX + up * radiusY);
-                            drawLine(plan, centre + right * -radiusX - up * radiusY,
-                                           centre + right * radiusX - up * radiusY);
-                            drawLine(plan, centre + right * -radiusX - up * radiusY,
-                                           centre + right * -radiusX + up * radiusY);
-                            drawLine(plan, centre + right * radiusX - up * radiusY,
-                                           centre + right * radiusX + up * radiusY);
+                            stroke(centre + right * -radiusX + up * radiusY,
+                                   centre + right * radiusX + up * radiusY);
+                            stroke(centre + right * -radiusX - up * radiusY,
+                                   centre + right * radiusX - up * radiusY);
+                            stroke(centre + right * -radiusX - up * radiusY,
+                                   centre + right * -radiusX + up * radiusY);
+                            stroke(centre + right * radiusX - up * radiusY,
+                                   centre + right * radiusX + up * radiusY);
                         }
 
-                        drawLine(plan, centre - right * radiusX, centre + right * radiusX);
+                        stroke(centre - right * radiusX, centre + right * radiusX);
                         write(plan, tag, centre + up * (textHeight + textHeight / 4.0),
                             Autodesk.Revit.DB.HorizontalTextAlignment.Center);
                         write(plan, detail, centre - up * (textHeight / 4.0),
@@ -1289,7 +1320,7 @@ else
                         double halfSide = toFeet(System.Math.Max(n[N_WIDTH], n[N_DEPTH])) / 2.0;
                         Autodesk.Revit.DB.XYZ tip = point - right * halfSide;
                         Autodesk.Revit.DB.XYZ from = centre + right * radiusX;
-                        drawLine(plan, from, tip);
+                        stroke(from, tip);
 
                         // Its head: two strokes back along the leader.
                         Autodesk.Revit.DB.XYZ along = (tip - from);
@@ -1297,8 +1328,8 @@ else
                         {
                             along = along.Normalize();
                             Autodesk.Revit.DB.XYZ across = up.CrossProduct(along).Normalize();
-                            drawLine(plan, tip, tip - along * arrow + across * (arrow / 3.0));
-                            drawLine(plan, tip, tip - along * arrow - across * (arrow / 3.0));
+                            stroke(tip, tip - along * arrow + across * (arrow / 3.0));
+                            stroke(tip, tip - along * arrow - across * (arrow / 3.0));
                         }
 
                         taggedCount++;
@@ -1310,6 +1341,11 @@ else
                         if (firstComplaint == null) firstComplaint = ex.Message;
                       }
                     }
+
+                    if (refusedStrokes[0] > 0)
+                        skipped.Add(string.Format(inv,
+                            "{0}: {1} line{2} refused by the view; the words are there without them",
+                            plan.Name, refusedStrokes[0], refusedStrokes[0] == 1 ? "" : "s"));
 
                     tagged.Add(string.Format(inv, "{0}  ->  {1} column{2}{3}",
                         plan.Name, onThisPlan, onThisPlan == 1 ? "" : "s",
