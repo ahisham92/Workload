@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Column Sections</Name>
+    <Assembly>ColumnSections\ColumnSections.dll</Assembly>
+    <AddInId>94714090-efac-4ab3-8c21-59cca4ab3299</AddInId>
+    <FullClassName>ColumnSections.App</FullClassName>
+    <VendorId>DAR</VendorId>
+    <VendorDescription>Column type cross sections</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>Column Sections</Name>
+    <Assembly>ColumnSections\ColumnSections.dll</Assembly>
+    <AddInId>2a83ce12-80d6-461c-9c54-e4f10f90dc6f</AddInId>
+    <FullClassName>ColumnSections.CreateColumnSectionsCommand</FullClassName>
+    <Text>Column Sections</Text>
+    <Description>One cross section per column type, with the count noted in it.</Description>
+    <VisibilityMode>NotVisibleInFamily</VisibilityMode>
+    <VendorId>DAR</VendorId>
+  </AddIn>
+  <AddIn Type="Command">
+    <Name>Column Type Report</Name>
+    <Assembly>ColumnSections\ColumnSections.dll</Assembly>
+    <AddInId>1952b096-1852-4656-8bf4-6af34f9b0102</AddInId>
+    <FullClassName>ColumnSections.ReportColumnTypesCommand</FullClassName>
+    <Text>Column Type Report</Text>
+    <Description>Count the column types without changing the model.</Description>
+    <VisibilityMode>NotVisibleInFamily</VisibilityMode>
+    <VendorId>DAR</VendorId>
+  </AddIn>
+</RevitAddIns>

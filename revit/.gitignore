@@ -1,0 +1,3 @@
+# Build output of the Revit add-ins.
+bin/
+obj/
