@@ -61,12 +61,17 @@ is drawn where it happens rather than only written down. It also reaches 1 m
 below the base of the column whatever else it finds, so the footing is in the
 view even where none was found to measure.
 
-The view is cropped to the column itself — 1 m each side of it, 500 mm past its
-face — and everything else in the model is hidden in that view: what stays is
+The section is cut through the **middle** of the column and sees 50 mm behind
+that plane and nothing in front of it, so what it draws is what the plane cuts.
+Grids are hidden. Where a floor, a beam or a foundation runs out of the view, a
+**break line** is drawn at the edge it leaves by.
+
+The view is cropped to the column itself — 1 m each side of it — and everything else in the model is hidden in that view: what stays is
 the column, the foundation under it, the beams framing into it, the lift above
 and below, the levels and grids, and the floors. Floors are kept because the
 slab the column carries is half of what a column section is for; since the view
-sees only 500 mm past the column, what shows of them is the slice at the column.
+sees only 50 mm past the cut plane, what shows of them is the slice at the
+column.
 
 The column alone sizes the view. What stands under it may take the section
 deeper down the page and no wider than `maxExtraWidthMm` — otherwise a raft or a
@@ -108,8 +113,10 @@ own origin in plan — the section was cut on that column, so it is the one with
 out of the view's name instead, and only gives up if neither works. Run it as often as you like: it clears what it
 drew before rather than stacking a second table on the first.
 
-In the sections script, `drawTable` is off for that reason; set it true and the
-table is drawn as each section is made instead.
+The sections script draws the table itself as each section is made, so one run
+does the lot; this script is for redrawing tables on sections that already
+exist, or on sections made by hand. `drawTable = false` in the sections script
+leaves it to this one.
 
 Above the section, drawn in detail lines and text:
 
