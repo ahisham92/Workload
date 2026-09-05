@@ -88,7 +88,7 @@ namespace ColumnSections
 
             double minR = 0, maxR = 0, minU = 0, maxU = 0, minD = 0, maxD = 0;
             bool first = true;
-            foreach (XYZ p in ExtentPoints(column))
+            foreach (XYZ p in ExtentPoints(column, _s))
             {
                 XYZ v = p - origin;
                 double r = v.DotProduct(right), u = v.DotProduct(up), d = v.DotProduct(towardsViewer);
@@ -205,15 +205,29 @@ namespace ColumnSections
             return lines.ToArray();
         }
 
-        /// <summary>Corners of the column, and of the foundation under it, so the
-        /// section frames both.</summary>
-        private static IEnumerable<XYZ> ExtentPoints(ColumnInfo column)
+        /// <summary>Corners of the column, of the foundation under it, and of the
+        /// first stretch of the columns above and below, so the section frames the
+        /// footing, the beam and any change of size at either end.</summary>
+        private static IEnumerable<XYZ> ExtentPoints(ColumnInfo column, Settings s)
         {
             foreach (XYZ p in Corners(column.Box)) yield return p;
             if (column.FoundationBox != null)
                 foreach (XYZ p in Corners(column.FoundationBox)) yield return p;
             yield return column.BasePoint;
             yield return column.TopPoint;
+
+            if (column.Above != null && column.Above.Box != null)
+            {
+                double ceiling = column.TopPoint.Z + Units.ToFeet(s.StackShowAboveMm);
+                foreach (XYZ p in Corners(column.Above.Box))
+                    yield return new XYZ(p.X, p.Y, Math.Min(p.Z, ceiling));
+            }
+            if (column.Below != null && column.Below.Box != null)
+            {
+                double floor = column.BasePoint.Z - Units.ToFeet(s.StackShowBelowMm);
+                foreach (XYZ p in Corners(column.Below.Box))
+                    yield return new XYZ(p.X, p.Y, Math.Max(p.Z, floor));
+            }
         }
 
         private static IEnumerable<XYZ> Corners(BoundingBoxXYZ box)

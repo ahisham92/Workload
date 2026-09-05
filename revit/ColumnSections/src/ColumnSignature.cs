@@ -29,6 +29,14 @@ namespace ColumnSections
         public int BeamCount;
         public bool BeamAtTop;
 
+        // The stack: what sits on the same location above and below
+        public bool HasColumnAbove;
+        public bool HasColumnBelow;
+        public string SizeAboveText = "";
+        public string SizeBelowText = "";
+        public bool SizeChangesAbove;
+        public bool SizeChangesBelow;
+
         // Levels
         public string BaseLevelName = "";
         public string TopLevelName = "";
@@ -75,6 +83,13 @@ namespace ColumnSections
             k.Append('|');
 
             k.Append(string.Format(c, "G:{0:0}", BaseBelowGroundMm));
+
+            if (s.StackChangeIsPartOfType)
+            {
+                k.Append('|');
+                k.Append("A:").Append(HasColumnAbove ? SizeAboveText : "none").Append('|');
+                k.Append("U:").Append(HasColumnBelow ? SizeBelowText : "none");
+            }
 
             Key = k.ToString();
         }
@@ -124,7 +139,53 @@ namespace ColumnSections
             }
         }
 
-        /// <summary>The four criteria, one per line, for the note in the section.</summary>
+        /// <summary>Where this column sits in its stack: bottom lift, a middle one,
+        /// the top, or on its own.</summary>
+        public string StackPosition
+        {
+            get
+            {
+                if (!HasColumnAbove && !HasColumnBelow) return "SINGLE LIFT";
+                if (!HasColumnBelow) return "BOTTOM OF STACK";
+                if (!HasColumnAbove) return "TOP OF STACK";
+                return "MIDDLE OF STACK";
+            }
+        }
+
+        public string AboveText
+        {
+            get
+            {
+                if (!HasColumnAbove) return "NOTHING ABOVE (TOP OF STACK)";
+                return SizeChangesAbove
+                    ? "ABOVE: " + SizeAboveText + " - SIZE CHANGES"
+                    : "ABOVE: " + SizeAboveText + " - SAME SIZE";
+            }
+        }
+
+        public string BelowText
+        {
+            get
+            {
+                if (!HasColumnBelow) return "NOTHING BELOW (COLUMN STARTS HERE)";
+                return SizeChangesBelow
+                    ? "BELOW: " + SizeBelowText + " - SIZE CHANGES"
+                    : "BELOW: " + SizeBelowText + " - SAME SIZE";
+            }
+        }
+
+        /// <summary>One line for a schedule or a dialog: 600 x 900 > 400 x 900.</summary>
+        public string StackText
+        {
+            get
+            {
+                string below = HasColumnBelow ? SizeBelowText : "-";
+                string above = HasColumnAbove ? SizeAboveText : "-";
+                return below + " > " + SizeText + " > " + above;
+            }
+        }
+
+        /// <summary>The five criteria, one per line, for the note in the section.</summary>
         public string[] DescriptionLines()
         {
             var c = CultureInfo.InvariantCulture;
@@ -134,6 +195,8 @@ namespace ColumnSections
                 FoundationText,
                 BeamText,
                 GroundText,
+                BelowText,
+                AboveText,
                 string.Format(c, "BASE {0:0} / TOP {1:0} / HT {2:0}",
                     BaseElevationMm, TopElevationMm, HeightMm)
             };

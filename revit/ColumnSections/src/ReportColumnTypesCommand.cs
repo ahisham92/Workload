@@ -64,18 +64,23 @@ namespace ColumnSections
             var text = new StringBuilder();
             text.AppendLine("Type,Count,Family,Type name,Size,Height mm,Foundation,Foundation top mm," +
                             "Foundation thickness mm,Beams,Beam at top,Base level,Base mm,Top mm," +
-                            "Base below ground mm,Marks");
+                            "Base below ground mm,Size below,Size above,Size changes,Stack position,Marks");
             foreach (ColumnTypeGroup g in groups)
             {
                 ColumnSignature s = g.Signature;
                 var marks = new List<string>();
                 foreach (ColumnInfo m in g.Members) marks.Add(m.Mark);
                 text.AppendFormat(c,
-                    "{0},{1},{2},{3},{4},{5:0},{6},{7:0},{8:0},{9},{10},{11},{12:0},{13:0},{14:0},{15}\n",
+                    "{0},{1},{2},{3},{4},{5:0},{6},{7:0},{8:0},{9},{10},{11},{12:0},{13:0},{14:0}," +
+                    "{15},{16},{17},{18},{19}\n",
                     Csv(g.Code), g.Count, Csv(s.FamilyName), Csv(s.TypeName), Csv(s.SizeText),
                     s.HeightMm, s.HasFoundation ? Csv(s.FoundationTypeName) : "none",
                     s.FoundationTopMm, s.FoundationThicknessMm, s.BeamCount, s.BeamAtTop ? "yes" : "no",
                     Csv(s.BaseLevelName), s.BaseElevationMm, s.TopElevationMm, s.BaseBelowGroundMm,
+                    s.HasColumnBelow ? Csv(s.SizeBelowText) : "none",
+                    s.HasColumnAbove ? Csv(s.SizeAboveText) : "none",
+                    s.SizeChangesBelow || s.SizeChangesAbove ? "yes" : "no",
+                    Csv(s.StackPosition),
                     Csv(string.Join(" ", marks)));
             }
             File.WriteAllText(path, text.ToString(), Encoding.UTF8);

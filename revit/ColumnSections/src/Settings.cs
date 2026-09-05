@@ -31,6 +31,29 @@ namespace ColumnSections
         /// 400x400 columns from different families stay apart. False: size alone.</summary>
         public bool FamilyNameIsPartOfType = true;
 
+        /// <summary>True: what sits on the same location above and below counts. A
+        /// 600x900 with a 400x900 landing on it is not the same type as a 600x900
+        /// carrying its own size on up, nor as one with nothing above it.</summary>
+        public bool StackChangeIsPartOfType = true;
+
+        // ---------------------------------------------------------------
+        // The stack: the columns on the same location, storey over storey
+        // ---------------------------------------------------------------
+
+        /// <summary>Two columns are on the same location when their centres are
+        /// within this, plus half the smaller one's least plan dimension - so a
+        /// column that steps in and is flush on one face is still the same stack.</summary>
+        public double StackSearchToleranceMm = 300.0;
+
+        /// <summary>How far apart the top of one column and the base of the next may
+        /// be and still be one continuous stack (a slab thickness, say).</summary>
+        public double StackVerticalToleranceMm = 600.0;
+
+        /// <summary>How much of the column above, and of the one below, the section
+        /// reaches up and down to take in, so the change of size is drawn.</summary>
+        public double StackShowAboveMm = 900.0;
+        public double StackShowBelowMm = 600.0;
+
         // ---------------------------------------------------------------
         // Finding the things around a column
         // ---------------------------------------------------------------
