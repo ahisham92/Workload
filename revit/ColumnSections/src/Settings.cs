@@ -152,6 +152,23 @@ namespace ColumnSections
         /// view wide. True puts it inside the crop instead.</summary>
         public bool ExpandCropForNote = false;
 
+        /// <summary>The table drawn on each section - column type, how many there
+        /// are, where each stands against the grid, and the detail number taken
+        /// from the type code. Drawn as detail lines and text at these sizes ON
+        /// PAPER.</summary>
+        public bool DrawTable = true;
+        public bool KeepTextNoteAsWell = false;
+        public double TableLabelWidthMm = 32.0;
+        public double TableValueWidthMm = 64.0;
+        public double TableRowHeightMm = 7.0;
+        public int MaxLocationRows = 12;
+
+        /// <summary>A column is ON the axis within this of the grid line, NEAR it
+        /// beyond. The left location cell names the grid running parallel to Y, the
+        /// right one the grid parallel to X; true swaps the two over.</summary>
+        public double OnAxisToleranceMm = 100.0;
+        public bool SwapAxisColumns = false;
+
         /// <summary>Prefix of the created view names, e.g. "COL SECTION - CT-01".</summary>
         public string ViewNamePrefix = "COL SECTION";
 

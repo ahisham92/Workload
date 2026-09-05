@@ -80,6 +80,41 @@ turn each of those off.
 The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
 is one.
 
+## The table on each section
+
+Above the section, drawn in detail lines and text:
+
+```
++----------------+-------------------------------------------+
+| COLUMN TYPE    |            01-C04(600x800)                |
++----------------+-------------------------------------------+
+| NUMBER         |                    2                      |
++----------------+---------------------+---------------------+
+|                |       Y-AXIS        |       X-AXIS        |
+|                +---------------------+---------------------+
+| LOCATION       | ON.AXIS( A07.1 )    | NEAR.AXIS.( B05.I ) |
+|                +---------------------+---------------------+
+|                | ON.AXIS( A07.3 )    | NEAR.AXIS.( B05.I ) |
++----------------+---------------------+---------------------+
+| DETAIL NUMBER  |                    01                     |
++----------------+-------------------------------------------+
+```
+
+* **Column type** is the tag and the size — the tag if there is one, the type
+  code if not.
+* **Number** is how many columns share the type, the same count the note gives.
+* **Location** is one row per column, naming the nearest grid running parallel
+  to Y and the nearest running parallel to X, and saying whether the column is
+  `ON.AXIS` (within `onAxisToleranceMm`, 100 mm) or `NEAR.AXIS.`. Set
+  `swapAxisColumns` if your drawings put them the other way round. The rows stop
+  at `maxLocationRows` and the last one says how many are left.
+* **Detail number** is the number in the type code: `CT-01` gives `01`.
+
+Sizes are millimetres **on paper** — 32 mm for the label column, 64 mm for the
+value column, 7 mm rows — so the table comes out the same size on the sheet
+whatever the view scale is. `drawTable = false` leaves it off; the written note
+is replaced by the table unless `keepTextNoteAsWell` is on.
+
 ## Getting it into Revit
 
 There are three ways in, and **only one file to handle** in each. Do not

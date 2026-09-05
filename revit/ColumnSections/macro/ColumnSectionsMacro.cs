@@ -224,6 +224,23 @@ namespace ColumnSections
         /// view wide. True puts it inside the crop instead.</summary>
         public bool ExpandCropForNote = false;
 
+        /// <summary>The table drawn on each section - column type, how many there
+        /// are, where each stands against the grid, and the detail number taken
+        /// from the type code. Drawn as detail lines and text at these sizes ON
+        /// PAPER.</summary>
+        public bool DrawTable = true;
+        public bool KeepTextNoteAsWell = false;
+        public double TableLabelWidthMm = 32.0;
+        public double TableValueWidthMm = 64.0;
+        public double TableRowHeightMm = 7.0;
+        public int MaxLocationRows = 12;
+
+        /// <summary>A column is ON the axis within this of the grid line, NEAR it
+        /// beyond. The left location cell names the grid running parallel to Y, the
+        /// right one the grid parallel to X; true swaps the two over.</summary>
+        public double OnAxisToleranceMm = 100.0;
+        public bool SwapAxisColumns = false;
+
         /// <summary>Prefix of the created view names, e.g. "COL SECTION - CT-01".</summary>
         public string ViewNamePrefix = "COL SECTION";
 
@@ -596,6 +613,11 @@ namespace ColumnSections
         /// <summary>On the column a section is taken of: every lift of its stack,
         /// bottom first, itself included. Empty on the lifts above.</summary>
         public readonly List<ColumnInfo> Lifts = new List<ColumnInfo>();
+        /// <summary>Where it stands against the grid, one cell each way:
+        /// "ON.AXIS( A07.1 )", "NEAR.AXIS.( B05.I )".</summary>
+        public string LocationY = "";
+        public string LocationX = "";
+
         public ColumnSignature Signature;
 
         /// <summary>The least of the two plan dimensions, in feet. Used to decide how
@@ -640,6 +662,7 @@ namespace ColumnSections
         private readonly List<FoundationRef> _foundations = new List<FoundationRef>();
         private readonly List<BeamRef> _beams = new List<BeamRef>();
         private readonly List<BoundingBoxXYZ> _floors = new List<BoundingBoxXYZ>();
+        private readonly List<GridRef> _grids = new List<GridRef>();
         private double _groundElevation;
 
         public string GroundLevelName { get; private set; }
@@ -771,6 +794,23 @@ namespace ColumnSections
                 _beams.Add(new BeamRef { Element = e, Points = pts, ZMin = zMin, ZMax = zMax });
             }
 
+            // The grids, so each column can be placed against them.
+            foreach (Element e in new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
+            {
+                var grid = e as Grid;
+                if (grid == null || grid.Curve == null) continue;
+                XYZ a = grid.Curve.GetEndPoint(0), b = grid.Curve.GetEndPoint(1);
+                var run = new XYZ(b.X - a.X, b.Y - a.Y, 0);
+                if (run.GetLength() < 1e-6) continue;
+                _grids.Add(new GridRef
+                {
+                    Name = grid.Name,
+                    Start = new XYZ(a.X, a.Y, 0),
+                    Direction = run.Normalize()
+                });
+            }
+
             Level ground = FindGroundLevel();
             _groundElevation = ground != null ? ground.Elevation : 0.0;
             GroundLevelName = ground != null ? ground.Name : "elevation 0";
@@ -858,6 +898,7 @@ namespace ColumnSections
             FindFoundation(info, sig);
             CountBeams(info, sig);
             CountFloors(info, sig);
+            FindOnGrid(info);
             // Rounded here as well as in Build: the lifts of a stack are read
             // into its key before their own signatures are closed.
             sig.FloorThicknessMm = Units.Snap(sig.FloorThicknessMm, _s.LevelToleranceMm);
@@ -1240,6 +1281,38 @@ namespace ColumnSections
             return string.IsNullOrEmpty(value) ? "" : value.Trim();
         }
 
+        /// <summary>Where the column stands against the grid: the nearest grid
+        /// running parallel to Y, the nearest running parallel to X, and whether it
+        /// is on the line or only near it.</summary>
+        private void FindOnGrid(ColumnInfo info)
+        {
+            double onAxis = Units.ToFeet(_s.OnAxisToleranceMm);
+            string nearestY = "", nearestX = "";
+            double bestY = double.MaxValue, bestX = double.MaxValue;
+
+            foreach (GridRef grid in _grids)
+            {
+                double vx = info.BasePoint.X - grid.Start.X;
+                double vy = info.BasePoint.Y - grid.Start.Y;
+                double distance = Math.Abs(vx * grid.Direction.Y - vy * grid.Direction.X);
+                string cell = string.Format("{0}( {1} )",
+                    distance <= onAxis ? "ON.AXIS" : "NEAR.AXIS.", grid.Name);
+
+                if (Math.Abs(grid.Direction.Y) >= Math.Abs(grid.Direction.X))
+                {
+                    if (distance < bestY) { bestY = distance; nearestY = cell; }
+                }
+                else if (distance < bestX)
+                {
+                    bestX = distance;
+                    nearestX = cell;
+                }
+            }
+
+            info.LocationY = _s.SwapAxisColumns ? nearestX : nearestY;
+            info.LocationX = _s.SwapAxisColumns ? nearestY : nearestX;
+        }
+
         /// <summary>The slabs the column meets: any floor whose footprint covers it
         /// and whose thickness falls within its height, and whether one lands on
         /// top of it.</summary>
@@ -1309,6 +1382,13 @@ namespace ColumnSections
             public Element Element;
             public BoundingBoxXYZ Box;
             public string TypeName;
+        }
+
+        private class GridRef
+        {
+            public string Name;
+            public XYZ Start;
+            public XYZ Direction;
         }
 
         private class BeamRef
@@ -1539,21 +1619,152 @@ namespace ColumnSections
             // hidden along with everything else.
             if (_s.ShowOnlyThisColumn) ShowOnly(view, column);
 
-            // Above the crop, unless the crop was widened to hold it, so the
-            // drawing stays the size of the column.
-            XYZ notePoint = _s.ExpandCropForNote
-                ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
-                : centre + right * (-halfWidth) + up * (halfHeight + inset + noteHeight);
-            var options = new TextNoteOptions(_textTypeId)
+            // The table is worked out first, because the note goes above it.
+            List<string> locationY, locationX;
+            LocationRows(group, out locationY, out locationX);
+            double rowHeight = Units.ToFeet(_s.TableRowHeightMm * _s.ViewScale);
+            double tableHeight = _s.DrawTable ? (3 + locationY.Count + 1) * rowHeight : 0.0;
+
+            if (_s.KeepTextNoteAsWell || !_s.DrawTable)
             {
-                HorizontalAlignment = HorizontalTextAlignment.Left,
-                Rotation = 0.0
-            };
-            TextNote.Create(_doc, view.Id, notePoint, string.Join("\n", lines), options);
+                // Above the crop, unless the crop was widened to hold it, so the
+                // drawing stays the size of the column.
+                XYZ notePoint = _s.ExpandCropForNote
+                    ? centre + right * (-halfWidth + inset) + up * (halfHeight - inset)
+                    : centre + right * (-halfWidth)
+                        + up * (halfHeight + inset + tableHeight + noteHeight
+                                + (tableHeight > 0 ? inset : 0.0));
+                var options = new TextNoteOptions(_textTypeId)
+                {
+                    HorizontalAlignment = HorizontalTextAlignment.Left,
+                    Rotation = 0.0
+                };
+                TextNote.Create(_doc, view.Id, notePoint, string.Join("\n", lines), options);
+            }
+
+            if (_s.DrawTable)
+            {
+                XYZ topLeft = centre + right * (-halfWidth) + up * (halfHeight + inset + tableHeight);
+                DrawTable(view, group, locationY, locationX, topLeft, right, up);
+            }
 
             group.ViewId = view.Id;
             group.ViewName = view.Name;
             return view;
+        }
+
+        /// <summary>Where each column of the type stands against the grid, one row
+        /// per column, stopping at the settings' limit.</summary>
+        private void LocationRows(ColumnTypeGroup group, out List<string> down, out List<string> across)
+        {
+            down = new List<string>();
+            across = new List<string>();
+            foreach (ColumnInfo member in group.Members)
+            {
+                if (down.Count >= _s.MaxLocationRows)
+                {
+                    down.Add(string.Format("(+{0} MORE)", group.Count - down.Count));
+                    across.Add("");
+                    break;
+                }
+                down.Add(member.LocationY);
+                across.Add(member.LocationX);
+            }
+            if (down.Count == 0)
+            {
+                down.Add("");
+                across.Add("");
+            }
+        }
+
+        /// <summary>The table on the section: what the column is, how many there
+        /// are, where each one stands, and the detail number. Drawn as detail lines
+        /// and text, sized on paper and scaled up by the view.</summary>
+        private void DrawTable(ViewSection view, ColumnTypeGroup group,
+            List<string> locationY, List<string> locationX, XYZ topLeft, XYZ right, XYZ up)
+        {
+            double labelWidth = Units.ToFeet(_s.TableLabelWidthMm * _s.ViewScale);
+            double valueWidth = Units.ToFeet(_s.TableValueWidthMm * _s.ViewScale);
+            double rowHeight = Units.ToFeet(_s.TableRowHeightMm * _s.ViewScale);
+            double textHeight = _textSizeFeet * _s.ViewScale;
+            double pad = (rowHeight - textHeight) / 2.0;
+
+            int rowCount = 3 + locationY.Count + 1;   // type, number, heading, rows, detail
+            double tableWidth = labelWidth + valueWidth;
+            double tableHeight = rowCount * rowHeight;
+
+            // x runs across the table, y runs down it.
+            Func<double, double, XYZ> at = (x, y) => topLeft + right * x + up * (-y);
+
+            // The frame, the label column, and the row lines. A row line inside the
+            // location block starts at the label column, because LOCATION runs on
+            // down beside them.
+            Draw(view, at(0, 0), at(tableWidth, 0));
+            Draw(view, at(0, tableHeight), at(tableWidth, tableHeight));
+            Draw(view, at(0, 0), at(0, tableHeight));
+            Draw(view, at(tableWidth, 0), at(tableWidth, tableHeight));
+            Draw(view, at(labelWidth, 0), at(labelWidth, tableHeight));
+            for (int r = 1; r < rowCount; r++)
+            {
+                bool insideLocation = r >= 3 && r <= 2 + locationY.Count;
+                Draw(view, at(insideLocation ? labelWidth : 0, r * rowHeight),
+                           at(tableWidth, r * rowHeight));
+            }
+
+            double split = labelWidth + valueWidth / 2.0;
+            Draw(view, at(split, 2 * rowHeight), at(split, (3 + locationY.Count) * rowHeight));
+
+            double labelMid = labelWidth / 2.0;
+            double valueMid = labelWidth + valueWidth / 2.0;
+            double downMid = labelWidth + valueWidth / 4.0;
+            double acrossMid = labelWidth + 3.0 * valueWidth / 4.0;
+
+            ColumnSignature s = group.Signature;
+            string name = s.Tag.Length > 0 ? s.Tag : group.Code;
+            string typeCell = name + "(" + s.SizeText.Replace(" ", "") + ")";
+
+            // The detail number is the number in the type code: CT-01 gives 01.
+            int dash = group.Code.LastIndexOf('-');
+            string detailNumber = dash >= 0 && dash + 1 < group.Code.Length
+                ? group.Code.Substring(dash + 1)
+                : group.Code;
+
+            Write(view, "COLUMN TYPE", at(labelMid, pad));
+            Write(view, typeCell, at(valueMid, pad));
+            Write(view, "NUMBER", at(labelMid, rowHeight + pad));
+            Write(view, group.Count.ToString(CultureInfo.InvariantCulture), at(valueMid, rowHeight + pad));
+
+            // LOCATION sits against the middle of its own block.
+            double locationTop = ((5 + locationY.Count) / 2.0) * rowHeight - textHeight / 2.0;
+            Write(view, "LOCATION", at(labelMid, locationTop));
+            Write(view, "Y-AXIS", at(downMid, 2 * rowHeight + pad));
+            Write(view, "X-AXIS", at(acrossMid, 2 * rowHeight + pad));
+            for (int r = 0; r < locationY.Count; r++)
+            {
+                Write(view, locationY[r], at(downMid, (3 + r) * rowHeight + pad));
+                Write(view, locationX[r], at(acrossMid, (3 + r) * rowHeight + pad));
+            }
+
+            double detailRow = (3 + locationY.Count) * rowHeight + pad;
+            Write(view, "DETAIL NUMBER", at(labelMid, detailRow));
+            Write(view, detailNumber, at(valueMid, detailRow));
+        }
+
+        private void Draw(View view, XYZ a, XYZ b)
+        {
+            if (a.DistanceTo(b) < 1e-7) return;
+            _doc.Create.NewDetailCurve(view, Line.CreateBound(a, b));
+        }
+
+        private void Write(View view, string text, XYZ origin)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            var options = new TextNoteOptions(_textTypeId)
+            {
+                HorizontalAlignment = HorizontalTextAlignment.Center,
+                Rotation = 0.0
+            };
+            TextNote.Create(_doc, view.Id, origin, text, options);
         }
 
         /// <summary>The lifts of the stack, one line each, where there is more than
