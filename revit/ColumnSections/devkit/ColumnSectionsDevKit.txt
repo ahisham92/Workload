@@ -152,6 +152,21 @@ double onAxisToleranceMm = 100.0;
 // this false: it counts the whole model however you leave it here.
 bool useSelectionWhenAny = true;
 
+// Used by the title script: the box drawn under each section. {0} is the tag on
+// the first line, the detail number on the second and on the right of the third,
+// and the view's scale in the middle of it. Sizes are ON PAPER.
+string titleLine1Format = "{0} COLUMNS RFT.";
+string titleLine2Format = "SEC. ELEVATION {0}-{0}";
+string titleScaleFormat = "SCALE   1:{0}";
+string titleDetailFormat = "DETAIL {0}";
+double titleRowHeightMm = 7.0;
+double titleMarginMm = 4.0;
+double titleInnerInsetMm = 1.5;
+double titleGapBelowMm = 8.0;
+bool underlineSecondLine = true;
+bool growCropForTitle = true;
+bool replaceExistingTitle = true;
+
 // Used by the table script only: which sections it draws on, how far above the
 // crop the table hangs, and whether it clears what it drew before.
 bool onlyTheActiveView = false;

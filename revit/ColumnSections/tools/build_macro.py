@@ -150,6 +150,11 @@ def build_break_lines():
                      "ColumnBreakLinesDevKit.cs", "the break lines")
 
 
+def build_titles():
+    build_from_parts("title-head.cs", "title-tail.cs",
+                     "ColumnTitlesDevKit.cs", "the titles")
+
+
 def main():
     parts = [HEADER]
     for name in SHARED:
@@ -167,11 +172,13 @@ def main():
     # where they sit.
     build_table()
     build_break_lines()
+    build_titles()
 
     pasteable = [
         HERE / "devkit" / "ColumnSectionsDevKit.cs",
         HERE / "devkit" / "ColumnTableDevKit.cs",
         HERE / "devkit" / "ColumnBreakLinesDevKit.cs",
+        HERE / "devkit" / "ColumnTitlesDevKit.cs",
         out,
     ]
     for source in pasteable:

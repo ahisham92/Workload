@@ -1,27 +1,25 @@
 // ===========================================================================
-//  COLUMN TABLE - a script of its own, for a paste-in code runner (DevKit)
+//  COLUMN SECTION TITLES - a script of its own, for DevKit
 //  Revit 2021 and later.  GENERATED - do not edit; see tools/build_macro.py.
 // ---------------------------------------------------------------------------
-//  Draws the schedule table on sections that already exist:
+//  Draws the title under each column section:
 //
-//      COLUMN TYPE    |            01-C04(600x800)
-//      NUMBER         |                  3
-//                     |     Y-AXIS       |      X-AXIS
-//      LOCATION       | ON.AXIS( A07.1 ) | NEAR.AXIS.( B05.I )
-//                     | ON.AXIS( A07.3 ) | NEAR.AXIS.( B05.I )
-//      DETAIL NUMBER  |                 01
+//      +-----------------------------------------------+
+//      |  +-----------------------------------------+  |
+//      |  |          01-C04 COLUMNS RFT.            |  |
+//      |  |         SEC. ELEVATION 27-27            |  |
+//      |  +-----------------------------------------+  |
+//      |  SCALE   1:100                   DETAIL 27    |
+//      +-----------------------------------------------+
 //
-//  It sorts the columns into types EXACTLY as the sections script does - the
-//  tag, the size, the foundation, the beams, the floors, the levels, the ground
-//  and the lifts of the stack - because the middle of this file is that script's
-//  own code. So the NUMBER here is the count the section was made for: a type of
-//  3 says 3, whatever else wears the same tag.
+//  The tag comes off the column the section was cut on, the detail number out
+//  of the section's name - CT-27 gives 27 - and the scale off the view itself.
+//  The wording is four format strings in the settings, so a different office's
+//  title is a matter of typing it there.
 //
-//  It finds which type each section belongs to by looking inside its crop, and
-//  the detail number comes from the section's name: COL SECTION - C1 - CT-01
-//  gives 01.
-//
-//  Run it as often as you like: it clears what it drew before.
+//  It knows which column each section is of because the middle of this file is
+//  the sections script's own code. Run it as often as you like: it clears the
+//  title it drew before.
 // ---------------------------------------------------------------------------
 //  THIS FILE IS STATEMENTS ONLY - no using lines, no namespace, no class - so
 //  it can be pasted into a box that wraps your code in a method. Every type is
@@ -152,7 +150,7 @@ double onAxisToleranceMm = 100.0;
 
 // Work on the columns you have selected, where any are. The table script sets
 // this false: it counts the whole model however you leave it here.
-bool useSelectionWhenAny = false;   // the table always reads the whole model
+bool useSelectionWhenAny = false;   // the titles always reads the whole model
 
 // Used by the title script: the box drawn under each section. {0} is the tag on
 // the first line, the detail number on the second and on the right of the third,
@@ -1057,7 +1055,7 @@ else
 
     if (targets.Count == 0 || textType == null)
     {
-        Autodesk.Revit.UI.TaskDialog.Show("Column table", textType == null
+        Autodesk.Revit.UI.TaskDialog.Show("Column section titles", textType == null
             ? "This model has no text type, so nothing can be written."
             : (onlyTheActiveView
                 ? "The active view is not a section."
@@ -1066,10 +1064,15 @@ else
     else
     {
         double textSizeFeet = 0.0082;   // 2.5 mm on paper
+        double textWidthFactor = 1.0;
         Autodesk.Revit.DB.Parameter textSizeParam =
             textType.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.TEXT_SIZE);
         if (textSizeParam != null && textSizeParam.AsDouble() > 1e-9)
             textSizeFeet = textSizeParam.AsDouble();
+        Autodesk.Revit.DB.Parameter widthFactorParam =
+            textType.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.TEXT_WIDTH_SCALE);
+        if (widthFactorParam != null && widthFactorParam.AsDouble() > 1e-9)
+            textWidthFactor = widthFactorParam.AsDouble();
 
         System.Action<Autodesk.Revit.DB.View, Autodesk.Revit.DB.XYZ, Autodesk.Revit.DB.XYZ> drawLine =
             (v, a, b) =>
@@ -1078,20 +1081,20 @@ else
             theDoc.Create.NewDetailCurve(v, Autodesk.Revit.DB.Line.CreateBound(a, b));
         };
 
-        System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ> write =
-            (v, text, origin) =>
+        System.Action<Autodesk.Revit.DB.View, string, Autodesk.Revit.DB.XYZ,
+            Autodesk.Revit.DB.HorizontalTextAlignment> write = (v, text, origin, align) =>
         {
             if (string.IsNullOrEmpty(text)) return;
             var options = new Autodesk.Revit.DB.TextNoteOptions(textType.Id);
-            options.HorizontalAlignment = Autodesk.Revit.DB.HorizontalTextAlignment.Center;
+            options.HorizontalAlignment = align;
             options.Rotation = 0.0;
             Autodesk.Revit.DB.TextNote.Create(theDoc, v.Id, origin, text, options);
         };
 
-        var drawnOn = new System.Collections.Generic.List<string>();
+        var titled = new System.Collections.Generic.List<string>();
         var skipped = new System.Collections.Generic.List<string>();
 
-        using (var transaction = new Autodesk.Revit.DB.Transaction(theDoc, "Column tables"))
+        using (var transaction = new Autodesk.Revit.DB.Transaction(theDoc, "Column section titles"))
         {
             transaction.Start();
 
@@ -1102,14 +1105,14 @@ else
                     Autodesk.Revit.DB.BoundingBoxXYZ crop = view.CropBox;
                     if (crop == null)
                     {
-                        skipped.Add(view.Name + ": no crop to hang the table on");
+                        skipped.Add(view.Name + ": no crop to hang the title under");
                         continue;
                     }
                     Autodesk.Revit.DB.Transform frame = crop.Transform;
+                    Autodesk.Revit.DB.Transform intoCrop = frame.Inverse;
 
-                    // Which column is this section of? The section was cut on the
-                    // column, so the one nearest its origin IN PLAN is the one -
-                    // no depth to get the sign of, and no crop to fall outside.
+                    // Which column is this section of? The one nearest its origin
+                    // in plan - the section was cut on it.
                     Autodesk.Revit.DB.XYZ eye = view.Origin;
                     double reach = toFeet(matchToleranceMm);
                     Autodesk.Revit.DB.ElementId found = null;
@@ -1120,7 +1123,6 @@ else
                         double dx = stands.X - eye.X, dy = stands.Y - eye.Y;
                         double distance = System.Math.Sqrt(dx * dx + dy * dy);
                         if (distance > reach) continue;
-                        // Nearest wins; the lowest lift of it breaks a tie.
                         if (distance < nearest - 1e-6
                             || (System.Math.Abs(distance - nearest) < 1e-6
                                 && found != null && stands.Z < basePointOf[found].Z))
@@ -1130,7 +1132,6 @@ else
                         }
                     }
 
-                    // Failing that, the type code written in the view's own name.
                     string key = null;
                     if (found != null && subjectOf.ContainsKey(found))
                     {
@@ -1148,7 +1149,6 @@ else
                             }
                         }
                     }
-
                     if (key == null)
                     {
                         skipped.Add(view.Name + ": no column of this model stands within "
@@ -1157,13 +1157,11 @@ else
                         continue;
                     }
 
-                    System.Collections.Generic.List<Autodesk.Revit.DB.ElementId> members = membersOf[key];
-                    Autodesk.Revit.DB.ElementId subject = members[0];
+                    Autodesk.Revit.DB.ElementId subject = membersOf[key][0];
                     int index = keys.IndexOf(key);
 
                     // The detail number is the number in the view's name -
-                    // COL SECTION - C1 - CT-01 (3 NOS) gives 01 - and the type's
-                    // own number where the name does not carry one.
+                    // COL SECTION - 01-C04 - CT-27 gives 27.
                     string trimmed = view.Name;
                     int bracket = trimmed.IndexOf('(');
                     if (bracket > 0) trimmed = trimmed.Substring(0, bracket);
@@ -1175,182 +1173,145 @@ else
                         ? code.Substring(dash + 1).Trim()
                         : string.Format(inv, "{0:00}", index + 1);
 
-                    // Clear what was drawn here before, so this can be run again
-                    // without stacking one table on another.
-                    if (clearExistingAnnotation)
+                    string tag = textOf[subject][T_TAG];
+                    if (tag.Length == 0)
+                        tag = string.Format(inv, "{0}-{1:00}", typeCodePrefix, index + 1);
+
+                    int scale = view.Scale > 0 ? view.Scale : viewScale;
+                    string line1 = string.Format(inv, titleLine1Format, tag);
+                    string line2 = string.Format(inv, titleLine2Format, detailNumber);
+                    string scaleText = string.Format(inv, titleScaleFormat, scale);
+                    string detailText = string.Format(inv, titleDetailFormat, detailNumber);
+
+                    // ---- how big the title is ----
+
+                    double rowHeight = toFeet(titleRowHeightMm * scale);
+                    double margin = toFeet(titleMarginMm * scale);
+                    double innerInset = toFeet(titleInnerInsetMm * scale);
+                    double gap = toFeet(titleGapBelowMm * scale);
+                    double textHeight = textSizeFeet * scale;
+                    double pad = (rowHeight - textHeight) / 2.0;
+
+                    int longest = line1.Length;
+                    if (line2.Length > longest) longest = line2.Length;
+                    if (scaleText.Length + detailText.Length + 6 > longest)
+                        longest = scaleText.Length + detailText.Length + 6;
+                    double needed = longest * textSizeFeet * textWidthFactor * 0.62 * scale
+                        + 2 * (margin + innerInset);
+
+                    double cropWidth = crop.Max.X - crop.Min.X;
+                    double titleWidth = System.Math.Max(cropWidth, needed);
+                    double titleHeight = 3 * rowHeight;
+                    double middleX = (crop.Min.X + crop.Max.X) / 2.0;
+
+                    // Hung under the lowest thing the section draws - the footing
+                    // where there is one - so it does not creep down the page on
+                    // every run.
+                    double lowest = double.MaxValue;
+                    foreach (Autodesk.Revit.DB.ElementId lift in chainOf[subject])
                     {
+                        double y = intoCrop.OfPoint(basePointOf[lift]).Y;
+                        if (y < lowest) lowest = y;
+                        if (foundationBoxOf.ContainsKey(lift))
+                        {
+                            foreach (Autodesk.Revit.DB.XYZ corner in cornersOf(foundationBoxOf[lift]))
+                            {
+                                double cy = intoCrop.OfPoint(corner).Y;
+                                if (cy < lowest) lowest = cy;
+                            }
+                        }
+                    }
+                    if (lowest == double.MaxValue) lowest = crop.Min.Y;
+
+                    double titleTop = lowest - gap;
+                    double titleBottom = titleTop - titleHeight;
+                    double titleLeft = middleX - titleWidth / 2.0;
+                    double titleRight = middleX + titleWidth / 2.0;
+
+                    // Clear the title drawn here before - everything below the
+                    // line the title hangs from, and nothing above it.
+                    if (replaceExistingTitle)
+                    {
+                        double cutOff = titleTop + gap / 2.0;
                         var stale = new System.Collections.Generic.List<Autodesk.Revit.DB.ElementId>();
                         foreach (Autodesk.Revit.DB.Element e in
                             new Autodesk.Revit.DB.FilteredElementCollector(theDoc, view.Id))
                         {
                             if (!e.ViewSpecific || e.OwnerViewId != view.Id) continue;
-                            if (e is Autodesk.Revit.DB.TextNote || e is Autodesk.Revit.DB.CurveElement)
-                                stale.Add(e.Id);
+                            var note = e as Autodesk.Revit.DB.TextNote;
+                            var curve = e as Autodesk.Revit.DB.CurveElement;
+                            double where;
+                            if (note != null)
+                            {
+                                where = intoCrop.OfPoint(note.Coord).Y;
+                            }
+                            else if (curve != null && curve.GeometryCurve != null)
+                            {
+                                where = System.Math.Max(
+                                    intoCrop.OfPoint(curve.GeometryCurve.GetEndPoint(0)).Y,
+                                    intoCrop.OfPoint(curve.GeometryCurve.GetEndPoint(1)).Y);
+                            }
+                            else continue;
+                            if (where < cutOff) stale.Add(e.Id);
                         }
                         if (stale.Count > 0) theDoc.Delete(stale);
                     }
 
-                    // ---- the table ----
+                    // ---- the box ----
 
-                    int scale = view.Scale > 0 ? view.Scale : viewScale;
-                    double labelWidth = toFeet(tableLabelWidthMm * scale);
-                    double valueWidth = toFeet(tableValueWidthMm * scale);
-                    double rowHeight = toFeet(tableRowHeightMm * scale);
-                    double gap = toFeet(tableGapAboveViewMm * scale);
-                    double textHeight = textSizeFeet * scale;
-                    double pad = (rowHeight - textHeight) / 2.0;
-
-                    // One location row per column of the type - the columns the
-                    // section stands for, not everything wearing the same tag.
-                    var locationY = new System.Collections.Generic.List<string>();
-                    var locationX = new System.Collections.Generic.List<string>();
-                    foreach (Autodesk.Revit.DB.ElementId member in members)
-                    {
-                        if (locationY.Count >= maxLocationRows)
-                        {
-                            locationY.Add(string.Format(inv, "(+{0} MORE)",
-                                members.Count - locationY.Count));
-                            locationX.Add("");
-                            break;
-                        }
-                        locationY.Add(textOf[member][T_LOCATION_Y]);
-                        locationX.Add(textOf[member][T_LOCATION_X]);
-                    }
-                    if (locationY.Count == 0)
-                    {
-                        locationY.Add("");
-                        locationX.Add("");
-                    }
-
-                    int rowCount = 3 + locationY.Count + 1;  // type, number, heading, rows, detail
-                    double tableWidth = labelWidth + valueWidth;
-                    double tableHeight = rowCount * rowHeight;
-
-                    // Hung off the top of the column itself, at the left edge of
-                    // the crop. Off the column, not off the crop, so that growing
-                    // the crop to fit the table does not push the next run's
-                    // table higher again.
-                    Autodesk.Revit.DB.Transform intoCrop = frame.Inverse;
-                    double columnTop = double.MinValue;
-                    foreach (Autodesk.Revit.DB.ElementId lift in chainOf[subject])
-                    {
-                        double y = intoCrop.OfPoint(topPointOf[lift]).Y;
-                        if (y > columnTop) columnTop = y;
-                    }
-                    if (columnTop == double.MinValue) columnTop = crop.Max.Y;
-
-                    double tableTop = columnTop + gap + tableHeight;
-                    Autodesk.Revit.DB.XYZ right = frame.BasisX;
-                    Autodesk.Revit.DB.XYZ up = frame.BasisY;
-                    Autodesk.Revit.DB.XYZ topLeft = frame.OfPoint(
-                        new Autodesk.Revit.DB.XYZ(crop.Min.X, tableTop, 0));
-
-                    // x runs across the table, y runs down it.
                     System.Func<double, double, Autodesk.Revit.DB.XYZ> at =
-                        (x, y) => topLeft + right * x + up * (-y);
+                        (x, y) => frame.OfPoint(new Autodesk.Revit.DB.XYZ(x, y, 0));
 
-                    // The frame, the label column, and the row lines. A row line
-                    // inside the location block starts at the label column,
-                    // because LOCATION runs on down beside them.
-                    drawLine(view, at(0, 0), at(tableWidth, 0));
-                    drawLine(view, at(0, tableHeight), at(tableWidth, tableHeight));
-                    drawLine(view, at(0, 0), at(0, tableHeight));
-                    drawLine(view, at(tableWidth, 0), at(tableWidth, tableHeight));
-                    drawLine(view, at(labelWidth, 0), at(labelWidth, tableHeight));
-                    for (int r = 1; r < rowCount; r++)
+                    drawLine(view, at(titleLeft, titleTop), at(titleRight, titleTop));
+                    drawLine(view, at(titleLeft, titleBottom), at(titleRight, titleBottom));
+                    drawLine(view, at(titleLeft, titleBottom), at(titleLeft, titleTop));
+                    drawLine(view, at(titleRight, titleBottom), at(titleRight, titleTop));
+
+                    // The inner box, round the two lines of the title.
+                    double innerLeft = titleLeft + innerInset;
+                    double innerRight = titleRight - innerInset;
+                    double innerTop = titleTop - innerInset;
+                    double innerBottom = titleTop - 2 * rowHeight;
+                    drawLine(view, at(innerLeft, innerTop), at(innerRight, innerTop));
+                    drawLine(view, at(innerLeft, innerBottom), at(innerRight, innerBottom));
+                    drawLine(view, at(innerLeft, innerBottom), at(innerLeft, innerTop));
+                    drawLine(view, at(innerRight, innerBottom), at(innerRight, innerTop));
+
+                    // ---- the words ----
+
+                    write(view, line1, at(middleX, titleTop - pad - innerInset),
+                        Autodesk.Revit.DB.HorizontalTextAlignment.Center);
+                    write(view, line2, at(middleX, titleTop - rowHeight - pad),
+                        Autodesk.Revit.DB.HorizontalTextAlignment.Center);
+
+                    if (underlineSecondLine)
                     {
-                        bool insideLocation = r >= 3 && r <= 2 + locationY.Count;
-                        drawLine(view, at(insideLocation ? labelWidth : 0, r * rowHeight),
-                                       at(tableWidth, r * rowHeight));
+                        double half = line2.Length * textSizeFeet * textWidthFactor * 0.62 * scale / 2.0;
+                        double under = titleTop - 2 * rowHeight + pad / 2.0;
+                        drawLine(view, at(middleX - half, under), at(middleX + half, under));
                     }
 
-                    double split = labelWidth + valueWidth / 2.0;
-                    drawLine(view, at(split, 2 * rowHeight),
-                                   at(split, (3 + locationY.Count) * rowHeight));
+                    write(view, scaleText, at(titleLeft + margin, titleBottom + rowHeight - pad),
+                        Autodesk.Revit.DB.HorizontalTextAlignment.Left);
+                    write(view, detailText, at(titleRight - margin, titleBottom + rowHeight - pad),
+                        Autodesk.Revit.DB.HorizontalTextAlignment.Right);
 
-                    double labelMid = labelWidth / 2.0;
-                    double valueMid = labelWidth + valueWidth / 2.0;
-                    double downMid = labelWidth + valueWidth / 4.0;
-                    double acrossMid = labelWidth + 3.0 * valueWidth / 4.0;
-
-                    string tag = textOf[subject][T_TAG];
-                    string typeCell = (tag.Length > 0
-                            ? tag
-                            : string.Format(inv, "{0}-{1:00}", typeCodePrefix, index + 1))
-                        + "(" + sizeTextOf(numberOf[subject]).Replace(" ", "") + ")";
-
-                    write(view, "COLUMN TYPE", at(labelMid, pad));
-                    write(view, typeCell, at(valueMid, pad));
-                    write(view, "NUMBER", at(labelMid, rowHeight + pad));
-                    write(view, members.Count.ToString(inv), at(valueMid, rowHeight + pad));
-
-                    // LOCATION sits against the middle of its own block.
-                    double locationTop = ((5 + locationY.Count) / 2.0) * rowHeight - textHeight / 2.0;
-                    write(view, "LOCATION", at(labelMid, locationTop));
-                    write(view, "Y-AXIS", at(downMid, 2 * rowHeight + pad));
-                    write(view, "X-AXIS", at(acrossMid, 2 * rowHeight + pad));
-                    for (int r = 0; r < locationY.Count; r++)
+                    // The crop cuts detail lines, so it has to take the title in.
+                    if (growCropForTitle)
                     {
-                        write(view, locationY[r], at(downMid, (3 + r) * rowHeight + pad));
-                        write(view, locationX[r], at(acrossMid, (3 + r) * rowHeight + pad));
-                    }
-
-                    double detailRow = (3 + locationY.Count) * rowHeight + pad;
-                    write(view, "DETAIL NUMBER", at(labelMid, detailRow));
-                    write(view, detailNumber, at(valueMid, detailRow));
-
-                    if (expandCropToFitTable)
-                    {
-                        // The crop crops detail lines; the table has to be inside it.
                         Autodesk.Revit.DB.BoundingBoxXYZ grown = view.CropBox;
+                        grown.Min = new Autodesk.Revit.DB.XYZ(
+                            System.Math.Min(grown.Min.X, titleLeft - margin),
+                            System.Math.Min(grown.Min.Y, titleBottom - margin),
+                            grown.Min.Z);
                         grown.Max = new Autodesk.Revit.DB.XYZ(
-                            System.Math.Max(grown.Max.X, grown.Min.X + tableWidth + gap),
-                            System.Math.Max(grown.Max.Y, tableTop + gap),
-                            grown.Max.Z);
+                            System.Math.Max(grown.Max.X, titleRight + margin),
+                            grown.Max.Y, grown.Max.Z);
                         view.CropBox = grown;
                     }
 
-                    // The count in the name is what the sections script found when
-                    // it made the view. Where the criteria have moved on since,
-                    // say so rather than leaving two numbers disagreeing.
-                    int said = -1;
-                    int nos = view.Name.IndexOf(" NO", System.StringComparison.OrdinalIgnoreCase);
-                    int open = view.Name.LastIndexOf('(');
-                    if (nos > 0 && open >= 0 && open < nos)
-                    {
-                        string digits = view.Name.Substring(open + 1, nos - open - 1).Trim();
-                        int parsed;
-                        if (int.TryParse(digits, out parsed)) said = parsed;
-                    }
-                    if (said >= 0 && said != members.Count)
-                    {
-                        skipped.Add(string.Format(inv,
-                            "{0}: its name says {1}, the criteria now give {2} - "
-                            + "the section was made by an older run", view.Name, said, members.Count));
-                    }
-
-                    if (renameSectionsToMatch && said >= 0 && said != members.Count)
-                    {
-                        try
-                        {
-                            view.Name = view.Name.Substring(0, open).TrimEnd()
-                                + string.Format(inv, " ({0} NO{1})",
-                                    members.Count, members.Count == 1 ? "" : "S");
-                        }
-                        catch { /* another view already has that name */ }
-                    }
-
-                    // The marks as well, so a count that surprises you can be
-                    // read back to the columns it counted.
-                    var counted = new System.Text.StringBuilder();
-                    foreach (Autodesk.Revit.DB.ElementId member in members)
-                    {
-                        if (counted.Length > 0) counted.Append(", ");
-                        counted.Append(textOf[member][T_MARK]);
-                    }
-                    drawnOn.Add(string.Format(inv, "{0}  ->  {1} column{2}, detail {3}  [{4}]",
-                        view.Name, members.Count, members.Count == 1 ? "" : "s",
-                        detailNumber, counted.ToString()));
+                    titled.Add(string.Format(inv, "{0}  ->  {1}, detail {2}, 1:{3}",
+                        view.Name, tag, detailNumber, scale));
                 }
                 catch (System.Exception ex)
                 {
@@ -1361,15 +1322,14 @@ else
             transaction.Commit();
         }
 
-        var done = new Autodesk.Revit.UI.TaskDialog("Column table");
-        done.MainInstruction = string.Format(inv, "{0} table{1} drawn.",
-            drawnOn.Count, drawnOn.Count == 1 ? "" : "s");
+        var done = new Autodesk.Revit.UI.TaskDialog("Column section titles");
+        done.MainInstruction = string.Format(inv, "{0} title{1} drawn.",
+            titled.Count, titled.Count == 1 ? "" : "s");
         done.MainContent = skipped.Count == 0
-            ? string.Format(inv, "{0} columns in {1} types.", subjects.Count, keys.Count)
-            : string.Format(inv, "{0} columns in {1} types.\n\n{2} section{3} to look at:\n{4}",
-                subjects.Count, keys.Count, skipped.Count,
+            ? "One under each section."
+            : string.Format(inv, "{0} section{1} to look at:\n{2}", skipped.Count,
                 skipped.Count == 1 ? "" : "s", string.Join("\n", skipped.ToArray()));
-        done.ExpandedContent = string.Join("\n", drawnOn.ToArray());
+        done.ExpandedContent = string.Join("\n", titled.ToArray());
         done.Show();
     }
 }

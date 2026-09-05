@@ -85,6 +85,37 @@ turn each of those off.
 The view is named `COL SECTION - C1 - CT-01 (7 NOS)`, taking the tag when there
 is one.
 
+## The title under each section
+
+[`devkit/ColumnTitlesDevKit.cs`](devkit/ColumnTitlesDevKit.cs) draws the title
+box under each section:
+
+```
++-----------------------------------------------+
+|  +-----------------------------------------+  |
+|  |          01-C04 COLUMNS RFT.            |  |
+|  |         SEC. ELEVATION 27-27            |  |
+|  +-----------------------------------------+  |
+|  SCALE   1:100                   DETAIL 27    |
++-----------------------------------------------+
+```
+
+The tag comes off the column the section was cut on, the detail number out of
+the section's name — `CT-27` gives 27 — and the scale off the view. The wording
+is four format strings in the settings:
+
+```csharp
+string titleLine1Format = "{0} COLUMNS RFT.";
+string titleLine2Format = "SEC. ELEVATION {0}-{0}";
+string titleScaleFormat = "SCALE   1:{0}";
+string titleDetailFormat = "DETAIL {0}";
+```
+
+It hangs off the lowest thing the section draws — the footing where there is one
+— rather than off the crop, so it stays put when the crop grows to take it in,
+and it is as wide as the section or as wide as its own longest line, whichever
+is more. Re-running clears the title before drawing it again.
+
 ## The break lines, as a script of its own
 
 [`devkit/ColumnBreakLinesDevKit.cs`](devkit/ColumnBreakLinesDevKit.cs) places
@@ -242,6 +273,17 @@ Needs Visual Studio or the .NET SDK on a machine with Revit installed; see
 That is `C:\Users\<you>\AppData\Roaming\Autodesk\Revit\Addins\2025`. Start
 Revit and the buttons are under **Structure Tools ▸ Column Sections**.
 `-p:DeployAddin=true` on the build does that copying for you.
+
+## The four scripts, in order
+
+1. **`ColumnSectionsDevKit`** — cuts the sections and draws the table on each.
+2. **`ColumnBreakLinesDevKit`** — places the break line family on them.
+3. **`ColumnTitlesDevKit`** — draws the title under each one.
+4. **`ColumnTableDevKit`** — only for redrawing tables on sections that already
+   exist; the sections script does the table itself.
+
+All four are built from the same settings and the same analysis, so they see the
+columns identically, and each can be re-run without doubling up on its own work.
 
 ## Using it
 
