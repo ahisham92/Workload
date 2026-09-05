@@ -83,11 +83,18 @@ is one.
 ## The table, as a script of its own
 
 [`devkit/ColumnTableDevKit.cs`](devkit/ColumnTableDevKit.cs) draws the table on
-sections that already exist. Run the sections script first, then this one — or
-this one on its own, over sections made by hand. It works out which column each
-section is of by looking inside the crop, takes that column's tag, and lists
-every column in the model wearing the same tag. Run it as often as you like: it
-clears what it drew before rather than stacking a second table on the first.
+sections that already exist. Run the sections script first, then this one.
+
+**It counts what the sections counted.** The middle of the file *is* the sections
+script — its settings and its whole analysis, put there by
+`tools/build_macro.py`, which builds this script from that one. So a type of 3
+stacks says 3, not the 25 columns that happen to wear the same tag: the tag is
+one criterion of eight, not the grouping. Change a tolerance in
+`ColumnSectionsDevKit.cs`, run the build script, and this one changes with it.
+
+It finds which type each section belongs to by looking inside its crop for the
+column the section was cut on. Run it as often as you like: it clears what it
+drew before rather than stacking a second table on the first.
 
 In the sections script, `drawTable` is off for that reason; set it true and the
 table is drawn as each section is made instead.
@@ -112,7 +119,8 @@ Above the section, drawn in detail lines and text:
 
 * **Column type** is the tag and the size — the tag if there is one, the type
   code if not.
-* **Number** is how many columns share the type, the same count the note gives.
+* **Number** is how many columns share the type — stacks, counted as the
+  sections count them, so it matches the `(3 NOS)` in the section's name.
 * **Location** is one row per column, naming the nearest grid running parallel
   to Y and the nearest running parallel to X, and saying whether the column is
   `ON.AXIS` (within `onAxisToleranceMm`, 100 mm) or `NEAR.AXIS.`. Set
