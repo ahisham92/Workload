@@ -163,7 +163,7 @@ namespace ColumnSections
         /// <summary>Empty space left around the column in the section. Kept tight;
         /// raise it to bring more of the frame around the column into the view.</summary>
         public double SideClearanceMm = 300.0;
-        public double TopClearanceMm = 450.0;
+        public double TopClearanceMm = 600.0;
         public double BottomClearanceMm = 300.0;
 
         /// <summary>How far past the column the section sees. Small, so the model
@@ -171,8 +171,19 @@ namespace ColumnSections
         public double ViewDepthClearanceMm = 150.0;
 
         /// <summary>Hide everything in the section but this column, its foundation,
-        /// the beams framing into it, the lift above and below, and the datums.</summary>
+        /// the beams framing into it, the lift above and below, the datums, and the
+        /// categories below.</summary>
         public bool ShowOnlyThisColumn = true;
+
+        /// <summary>Kept visible even so - the floors the column carries, first of
+        /// all. The view sees only 150 mm past the column, so what shows of them is
+        /// the slice at the column. Add OST_Walls, OST_Roofs, OST_StructuralFraming
+        /// or anything else you want left in.</summary>
+        public BuiltInCategory[] AlwaysVisibleCategories =
+        {
+            BuiltInCategory.OST_Floors,
+            BuiltInCategory.OST_StructuralFoundation
+        };
 
         /// <summary>The note sits above the crop, so a long line cannot force the
         /// view wide. True puts it inside the crop instead.</summary>
@@ -1094,7 +1105,7 @@ namespace ColumnSections
 
         private ElementId _sectionTypeId = ElementId.InvalidElementId;
         private ElementId _textTypeId = ElementId.InvalidElementId;
-        private readonly List<ElementId> _datumIds = new List<ElementId>();
+        private readonly List<ElementId> _alwaysVisibleIds = new List<ElementId>();
         private double _textSizeFeet = 0.0082;   // 2.5 mm on paper
         private double _textWidthFactor = 1.0;
 
@@ -1157,15 +1168,24 @@ namespace ColumnSections
                 if (view != null) _usedNames.Add(view.Name);
             }
 
-            // Levels and grids stay visible when the rest of the model is hidden.
+            // What every section keeps, whatever column it is of: the datums, and
+            // the categories the settings name - the floors above, above all.
             foreach (Element e in new FilteredElementCollector(_doc).OfClass(typeof(Level)))
             {
-                _datumIds.Add(e.Id);
+                _alwaysVisibleIds.Add(e.Id);
             }
             foreach (Element e in new FilteredElementCollector(_doc)
                 .OfCategory(BuiltInCategory.OST_Grids).WhereElementIsNotElementType())
             {
-                _datumIds.Add(e.Id);
+                _alwaysVisibleIds.Add(e.Id);
+            }
+            foreach (BuiltInCategory bic in _s.AlwaysVisibleCategories)
+            {
+                foreach (Element e in new FilteredElementCollector(_doc)
+                    .OfCategory(bic).WhereElementIsNotElementType())
+                {
+                    _alwaysVisibleIds.Add(e.Id);
+                }
             }
             return true;
         }
@@ -1296,7 +1316,7 @@ namespace ColumnSections
                 keep.AddRange(column.BeamIds);
                 if (column.Above != null) keep.Add(column.Above.Instance.Id);
                 if (column.Below != null) keep.Add(column.Below.Instance.Id);
-                keep.AddRange(_datumIds);
+                keep.AddRange(_alwaysVisibleIds);
 
                 view.IsolateElementsTemporary(keep);
                 view.ConvertTemporaryHideIsolateToPermanent();

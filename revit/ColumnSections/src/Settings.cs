@@ -1,3 +1,5 @@
+using Autodesk.Revit.DB;
+
 namespace ColumnSections
 {
     /// <summary>
@@ -89,7 +91,7 @@ namespace ColumnSections
         /// <summary>Empty space left around the column in the section. Kept tight;
         /// raise it to bring more of the frame around the column into the view.</summary>
         public double SideClearanceMm = 300.0;
-        public double TopClearanceMm = 450.0;
+        public double TopClearanceMm = 600.0;
         public double BottomClearanceMm = 300.0;
 
         /// <summary>How far past the column the section sees. Small, so the model
@@ -97,8 +99,19 @@ namespace ColumnSections
         public double ViewDepthClearanceMm = 150.0;
 
         /// <summary>Hide everything in the section but this column, its foundation,
-        /// the beams framing into it, the lift above and below, and the datums.</summary>
+        /// the beams framing into it, the lift above and below, the datums, and the
+        /// categories below.</summary>
         public bool ShowOnlyThisColumn = true;
+
+        /// <summary>Kept visible even so - the floors the column carries, first of
+        /// all. The view sees only 150 mm past the column, so what shows of them is
+        /// the slice at the column. Add OST_Walls, OST_Roofs, OST_StructuralFraming
+        /// or anything else you want left in.</summary>
+        public BuiltInCategory[] AlwaysVisibleCategories =
+        {
+            BuiltInCategory.OST_Floors,
+            BuiltInCategory.OST_StructuralFoundation
+        };
 
         /// <summary>The note sits above the crop, so a long line cannot force the
         /// view wide. True puts it inside the crop instead.</summary>
