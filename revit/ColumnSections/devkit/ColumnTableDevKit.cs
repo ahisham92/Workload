@@ -142,6 +142,16 @@ double tableGapAboveViewMm = 4.0;
 // the table script gives up on it and reads the view's name instead.
 double matchToleranceMm = 2000.0;
 
+// The crop region cuts detail lines - text it leaves alone - so a table drawn
+// above the crop comes out as words with no box around them. This grows the
+// crop to take the table in. The table is hung off the top of the column, not
+// off the crop, so running the script again puts it in the same place.
+bool expandCropToFitTable = true;
+
+// Sections made by an older run of the sections script carry the count of that
+// run in their names. True renames them to what the criteria give now.
+bool renameSectionsToMatch = false;
+
 // The left location cell names the grid running parallel to Y, the right one
 // the grid running parallel to X. True swaps the two columns over.
 bool swapAxisColumns = false;
@@ -1169,16 +1179,24 @@ else
                     double tableWidth = labelWidth + valueWidth;
                     double tableHeight = rowCount * rowHeight;
 
-                    // Hung above the crop, aligned with its left edge.
-                    double halfWidth = (crop.Max.X - crop.Min.X) / 2.0;
-                    double halfHeight = (crop.Max.Y - crop.Min.Y) / 2.0;
-                    Autodesk.Revit.DB.XYZ centre = frame.OfPoint(new Autodesk.Revit.DB.XYZ(
-                        (crop.Min.X + crop.Max.X) / 2.0, (crop.Min.Y + crop.Max.Y) / 2.0, 0));
+                    // Hung off the top of the column itself, at the left edge of
+                    // the crop. Off the column, not off the crop, so that growing
+                    // the crop to fit the table does not push the next run's
+                    // table higher again.
+                    Autodesk.Revit.DB.Transform intoCrop = frame.Inverse;
+                    double columnTop = double.MinValue;
+                    foreach (Autodesk.Revit.DB.ElementId lift in chainOf[subject])
+                    {
+                        double y = intoCrop.OfPoint(topPointOf[lift]).Y;
+                        if (y > columnTop) columnTop = y;
+                    }
+                    if (columnTop == double.MinValue) columnTop = crop.Max.Y;
+
+                    double tableTop = columnTop + gap + tableHeight;
                     Autodesk.Revit.DB.XYZ right = frame.BasisX;
                     Autodesk.Revit.DB.XYZ up = frame.BasisY;
-                    Autodesk.Revit.DB.XYZ topLeft = centre
-                        + right * (-halfWidth)
-                        + up * (halfHeight + gap + tableHeight);
+                    Autodesk.Revit.DB.XYZ topLeft = frame.OfPoint(
+                        new Autodesk.Revit.DB.XYZ(crop.Min.X, tableTop, 0));
 
                     // x runs across the table, y runs down it.
                     System.Func<double, double, Autodesk.Revit.DB.XYZ> at =
@@ -1234,8 +1252,58 @@ else
                     write(view, "DETAIL NUMBER", at(labelMid, detailRow));
                     write(view, detailNumber, at(valueMid, detailRow));
 
-                    drawnOn.Add(string.Format(inv, "{0}  ->  {1} column{2}, detail {3}",
-                        view.Name, members.Count, members.Count == 1 ? "" : "s", detailNumber));
+                    if (expandCropToFitTable)
+                    {
+                        // The crop crops detail lines; the table has to be inside it.
+                        Autodesk.Revit.DB.BoundingBoxXYZ grown = view.CropBox;
+                        grown.Max = new Autodesk.Revit.DB.XYZ(
+                            System.Math.Max(grown.Max.X, grown.Min.X + tableWidth + gap),
+                            System.Math.Max(grown.Max.Y, tableTop + gap),
+                            grown.Max.Z);
+                        view.CropBox = grown;
+                    }
+
+                    // The count in the name is what the sections script found when
+                    // it made the view. Where the criteria have moved on since,
+                    // say so rather than leaving two numbers disagreeing.
+                    int said = -1;
+                    int nos = view.Name.IndexOf(" NO", System.StringComparison.OrdinalIgnoreCase);
+                    int open = view.Name.LastIndexOf('(');
+                    if (nos > 0 && open >= 0 && open < nos)
+                    {
+                        string digits = view.Name.Substring(open + 1, nos - open - 1).Trim();
+                        int parsed;
+                        if (int.TryParse(digits, out parsed)) said = parsed;
+                    }
+                    if (said >= 0 && said != members.Count)
+                    {
+                        skipped.Add(string.Format(inv,
+                            "{0}: its name says {1}, the criteria now give {2} - "
+                            + "the section was made by an older run", view.Name, said, members.Count));
+                    }
+
+                    if (renameSectionsToMatch && said >= 0 && said != members.Count)
+                    {
+                        try
+                        {
+                            view.Name = view.Name.Substring(0, open).TrimEnd()
+                                + string.Format(inv, " ({0} NO{1})",
+                                    members.Count, members.Count == 1 ? "" : "S");
+                        }
+                        catch { /* another view already has that name */ }
+                    }
+
+                    // The marks as well, so a count that surprises you can be
+                    // read back to the columns it counted.
+                    var counted = new System.Text.StringBuilder();
+                    foreach (Autodesk.Revit.DB.ElementId member in members)
+                    {
+                        if (counted.Length > 0) counted.Append(", ");
+                        counted.Append(textOf[member][T_MARK]);
+                    }
+                    drawnOn.Add(string.Format(inv, "{0}  ->  {1} column{2}, detail {3}  [{4}]",
+                        view.Name, members.Count, members.Count == 1 ? "" : "s",
+                        detailNumber, counted.ToString()));
                 }
                 catch (System.Exception ex)
                 {
@@ -1250,9 +1318,9 @@ else
         done.MainInstruction = string.Format(inv, "{0} table{1} drawn.",
             drawnOn.Count, drawnOn.Count == 1 ? "" : "s");
         done.MainContent = skipped.Count == 0
-            ? string.Format(inv, "{0} columns in {1} types, counted as the sections were made.",
-                subjects.Count, keys.Count)
-            : string.Format(inv, "{0} section{1} skipped:\n{2}", skipped.Count,
+            ? string.Format(inv, "{0} columns in {1} types.", subjects.Count, keys.Count)
+            : string.Format(inv, "{0} columns in {1} types.\n\n{2} section{3} to look at:\n{4}",
+                subjects.Count, keys.Count, skipped.Count,
                 skipped.Count == 1 ? "" : "s", string.Join("\n", skipped.ToArray()));
         done.ExpandedContent = string.Join("\n", drawnOn.ToArray());
         done.Show();

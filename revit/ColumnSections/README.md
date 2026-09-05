@@ -92,6 +92,16 @@ stacks says 3, not the 25 columns that happen to wear the same tag: the tag is
 one criterion of eight, not the grouping. Change a tolerance in
 `ColumnSectionsDevKit.cs`, run the build script, and this one changes with it.
 
+The table is hung off the top of the column, and the view's crop is grown to take
+it in — the crop cuts detail lines, though not text, so a table outside it comes
+out as words with no box round them. Hanging it off the column rather than off
+the crop is what stops it climbing higher on every run.
+
+Where a section's name says one count and the criteria now give another, the
+section was made by an older run: the script says so rather than leaving two
+numbers disagreeing, and `renameSectionsToMatch` renames it. Re-running the
+sections script is the real fix.
+
 It finds which type each section belongs to by the column nearest the section's
 own origin in plan — the section was cut on that column, so it is the one within
 `matchToleranceMm` (2 m). Where no column is that close, it reads the type code
