@@ -1059,14 +1059,14 @@ else
                     double nearest = double.MaxValue;
                     foreach (Autodesk.Revit.DB.ElementId id in ids)
                     {
-                        Autodesk.Revit.DB.XYZ at = basePointOf[id];
-                        double dx = at.X - eye.X, dy = at.Y - eye.Y;
+                        Autodesk.Revit.DB.XYZ stands = basePointOf[id];
+                        double dx = stands.X - eye.X, dy = stands.Y - eye.Y;
                         double distance = System.Math.Sqrt(dx * dx + dy * dy);
                         if (distance > reach) continue;
                         // Nearest wins; the lowest lift of it breaks a tie.
                         if (distance < nearest - 1e-6
                             || (System.Math.Abs(distance - nearest) < 1e-6
-                                && found != null && at.Z < basePointOf[found].Z))
+                                && found != null && stands.Z < basePointOf[found].Z))
                         {
                             nearest = distance;
                             found = id;
