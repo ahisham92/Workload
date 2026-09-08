@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import accounts as accounts_module, storage
+from . import accounts as accounts_module, deployment, storage
 from .accounts import AccountError, Accounts
 
 
@@ -60,11 +60,19 @@ def build_parser() -> argparse.ArgumentParser:
     adopt.add_argument("workbook", type=Path)
     adopt.add_argument("--name", default="", help="the unit's name")
 
+    checker = sub.add_parser(
+        "check", help="is this installation ready to serve, and what should "
+                      "the host's WSGI file say?")
+    checker.add_argument("--wsgi-only", action="store_true",
+                         help="print just the WSGI file, to redirect to it")
+
     return parser
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "check":
+        return _check(None, None, args)
     db = _accounts(args.data_dir)
     data_dir = db.path.parent
     try:
@@ -162,6 +170,16 @@ def _import(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _check(db, data_dir, args) -> int:
+    """The one command to run on a host before -- and after -- a reload."""
+    if getattr(args, "wsgi_only", False):
+        print(deployment.wsgi_file(data_dir=args.data_dir))
+        return 0
+    report = deployment.check(args.data_dir)
+    print(deployment.render(report))
+    return 0 if report.ok else 1
+
+
 def _ask_password() -> Optional[str]:
     """Ask twice, or return None to have one generated."""
     if not sys.stdin.isatty():
@@ -181,6 +199,7 @@ COMMANDS = {
     "password": _password,
     "remove": _remove,
     "import": _import,
+    "check": _check,
 }
 
 
