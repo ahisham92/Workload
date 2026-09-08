@@ -330,6 +330,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/server.py` | The local HTTP transport |
 | `workload_app/wsgi.py` | The transport a host uses (PythonAnywhere) |
 | `workload_app/admin.py` | Making accounts from a console |
+| `workload_app/deployment.py` | The deployment check, and the host's WSGI file |
 | `tools/build_template.py` | Building the blank workbook that ships with the app |
 | `workload_app/static/` | The single-page front end (no build step) |
 
@@ -358,7 +359,13 @@ python -m workload_app.admin list
 python -m workload_app.admin password <username>
 python -m workload_app.admin remove <username>
 python -m workload_app.admin import <username> <workbook.xlsx> [--name NAME]
+python -m workload_app.admin check [--wsgi-only]
 ```
+
+`check` is the one to run on a host: it says whether this installation can
+serve, whether the data directory is somewhere a deploy would overwrite, and
+prints the WSGI file and static mappings with this checkout's real paths in
+them.
 
 Accounts and workbooks live in `$WORKLOAD_DATA_DIR`, or `./instance` if that is
 not set. The local server binds to `127.0.0.1`, so it is reachable only from
