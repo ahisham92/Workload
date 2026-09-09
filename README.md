@@ -125,6 +125,41 @@ Everything is measured against booked hours over the last three months. One
 month is a holiday or a deadline; three is a pattern. Booked hours are history,
 not a forecast, and the tab says so where the findings are.
 
+### The map
+
+The **Map** subtab is the same unit drawn rather than tabulated.
+
+Every **circle is a project**, and its area is the effort still to spend to
+finish it — the forecast cost to complete, which on an overrunning project is
+more than the budget ever was. So the big circles are the work ahead and the
+finished ones shrink away, which is the right way round for a picture whose
+job is to say where to put people.
+
+Its **colour** is resourcing, not efficiency: a project taking a fifth of the
+team's recent hours while holding a twentieth of the work left is **crowded**;
+the other way round is **starved**. A project with budget left and nobody
+charging to it is starved too — the one nobody has noticed, which is the whole
+reason to draw this.
+
+Every **dot is a person**, coloured by their team, sitting at the centre of
+gravity of the projects they charge to. Projects that share people pull
+towards each other, so their circles overlap and anyone on both ends up in the
+overlap, where set theory says they belong. Somebody on more than one project
+is ringed, because that is the thing worth spotting.
+
+Membership is who **charged time**, not who was assigned: the timesheet is
+evidence, an assignment is an intention.
+
+Drag any circle or person and the layout rearranges around it live. Clicking
+one opens its figures underneath. The layout is deterministic — the same
+portfolio comes out looking the same way twice, so it can be recognised
+between visits. Everything you change updates the picture at once; a change
+somebody *else* makes needs a refresh.
+
+There is no charting library behind it. The force layout is about forty lines
+of Verlet integration in `static/map.js`, for the same reason as the rest of
+the front end: this app loads nothing from a CDN.
+
 ### The Admin tab
 
 An administrator gets an eighth tab that nobody else does: every account, what

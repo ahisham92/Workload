@@ -249,3 +249,83 @@ class TestSmallTeams:
         staff(store, ("Ahmed", "quay", "senior"))
         book(store, "Ahmed", [6, 7, 8], 190)                 # 103%
         assert ppl.balance(store, monthly_capacity=CAPACITY)["findings"] == []
+
+
+class TestThePortfolioMap:
+    """Circles for projects, threads for the people who charge to them."""
+
+    def project(self, number, remaining, budget=None, status="Active"):
+        return {"number": number, "name": f"Project {number}", "status": status,
+                "budget_mm": budget if budget is not None else remaining,
+                "remaining_mm": remaining, "progress": 0.5}
+
+    def test_a_circle_carries_what_it_needs_to_be_drawn(self, store):
+        staff(store, ("Ahmed", "quay", "senior"))
+        book(store, "Ahmed", [6, 7, 8], 100, job="20-1")
+        circle = ppl.portfolio_map(
+            store, [self.project("20-1", 8.0)])["projects"][0]
+        assert circle["remaining_mm"] == 8.0
+        assert circle["recent_hours"] == 300.0
+        assert [m["name"] for m in circle["members"]] == ["Ahmed"]
+
+    def test_membership_is_who_charged_not_who_was_told_to(self, store):
+        """The timesheet is the evidence; an assignment is an intention."""
+        staff(store, ("Ahmed", "quay", "senior"), ("Osama", "quay", "engineer"))
+        book(store, "Ahmed", [6], 40, job="20-1")
+        circle = ppl.portfolio_map(
+            store, [self.project("20-1", 5.0)])["projects"][0]
+        assert [m["name"] for m in circle["members"]] == ["Ahmed"]
+
+    def test_somebody_on_two_projects_is_marked_shared(self, store):
+        staff(store, ("Ahmed", "quay", "senior"))
+        book(store, "Ahmed", [6], 40, job="20-1")
+        book(store, "Ahmed", [6], 40, job="20-2")
+        person = ppl.portfolio_map(
+            store, [self.project("20-1", 5.0), self.project("20-2", 5.0)]
+        )["people"][0]
+        assert person["shared"] is True
+        assert sorted(person["projects"]) == ["20-1", "20-2"]
+
+    def test_a_project_taking_more_than_its_share_is_crowded(self, store):
+        staff(store, ("Ahmed", "quay", "senior"), ("Osama", "quay", "engineer"))
+        book(store, "Ahmed", [6, 7, 8], 300, job="20-1")   # most of the effort
+        book(store, "Osama", [6, 7, 8], 20, job="20-2")
+        circles = {c["number"]: c for c in ppl.portfolio_map(
+            store, [self.project("20-1", 2.0), self.project("20-2", 40.0)]
+        )["projects"]}
+        assert circles["20-1"]["state"] == "crowded"
+        assert circles["20-2"]["state"] == "starved"
+
+    def test_budget_left_and_nobody_on_it_is_starved(self, store):
+        """The project nobody has noticed, which is the one worth showing."""
+        circle = ppl.portfolio_map(
+            store, [self.project("20-9", 30.0)])["projects"][0]
+        assert circle["recent_hours"] == 0
+        assert circle["state"] == "starved"
+
+    def test_nothing_left_to_spend_is_finished(self, store):
+        staff(store, ("Ahmed", "quay", "senior"))
+        book(store, "Ahmed", [6], 10, job="20-1")
+        circle = ppl.portfolio_map(
+            store, [self.project("20-1", 0.0, budget=12.0)])["projects"][0]
+        assert circle["state"] == "finished"
+
+    def test_the_biggest_circle_is_the_most_work_left(self, store):
+        numbers = [c["number"] for c in ppl.portfolio_map(store, [
+            self.project("small", 1.0), self.project("huge", 90.0),
+            self.project("middling", 20.0)])["projects"]]
+        assert numbers == ["huge", "middling", "small"]
+
+    def test_teams_carry_their_members(self, store):
+        staff(store, ("Ahmed", "quay", "senior"), ("Kirolos", "jetty", "junior"))
+        book(store, "Ahmed", [6], 10, job="20-1")
+        teams = {t["name"]: t for t in ppl.portfolio_map(
+            store, [self.project("20-1", 5.0)])["teams"]}
+        assert teams["Quay"]["members"] == ["Ahmed"]
+        assert teams["Jetty"]["members"] == ["Kirolos"]
+
+    def test_somebody_with_no_team_is_still_on_the_map(self, store):
+        book(store, "Mina", [6], 20, job="20-1")
+        data = ppl.portfolio_map(store, [self.project("20-1", 5.0)])
+        assert [p["name"] for p in data["people"]] == ["Mina"]
+        assert any(t["id"] == ppl.UNASSIGNED for t in data["teams"])

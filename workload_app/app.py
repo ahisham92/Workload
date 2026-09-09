@@ -733,6 +733,8 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.move_people(b), "manager"),
             ("GET", "/api/resourcing",
              lambda ctx, q, b: ctx.service.resourcing(_year(q)), "manager"),
+            ("GET", "/api/portfolio-map",
+             lambda ctx, q, b: ctx.service.portfolio_map(_year(q)), "manager"),
             ("POST", "/api/teams", lambda ctx, q, b: ctx.service.add_team(b), "manager"),
             ("PUT", "/api/teams/{}",
              lambda ctx, q, b, team_id: ctx.service.update_team(team_id, b), "manager"),

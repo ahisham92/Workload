@@ -536,6 +536,16 @@ class WorkloadService:
                 wb, self._index(wb))
             return data
 
+    def portfolio_map(self, year: Optional[int] = None) -> Dict[str, Any]:
+        """The picture: circles for projects, threads for the people on them."""
+        with self._lock:
+            wb = self.workbook
+            index = self._index(wb)
+            data = people_module.portfolio_map(
+                self.store, metrics.project_rows(wb, index), year=year)
+            data["available_years"] = metrics.available_years(wb, index)
+            return data
+
     def add_team(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             name = " ".join(str(body.get("name") or "").split())

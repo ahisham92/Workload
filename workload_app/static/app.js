@@ -20,6 +20,8 @@ const state = {
   units: [],
   resourcing: null,      // teams, people and the balance between them
   resourcingYear: undefined,
+  resourcingView: 'balance',
+  map: null,             // the same unit as circles and threads
   admin: null,           // the account list, on the Admin tab
   passwords: null,       // null until an administrator asks to see them
 };
@@ -397,10 +399,26 @@ function openAccountModal() {
 
 const GRADE_ORDER = ['senior', 'engineer', 'junior', 'bim'];
 
+const RESOURCING_VIEWS = [['balance', 'Balance'], ['map', 'Map']];
+
 async function loadResourcing() {
   const year = state.resourcingYear === undefined ? state.year : state.resourcingYear;
-  state.resourcing = await api(`/api/resourcing${year ? `?year=${year}` : ''}`);
+  const suffix = year ? `?year=${year}` : '';
+  if (state.resourcingView === 'map') {
+    state.map = await api(`/api/portfolio-map${suffix}`);
+  } else {
+    state.resourcing = await api(`/api/resourcing${suffix}`);
+  }
   renderResourcing();
+}
+
+function renderSubtabs() {
+  setChildren($('#resourcing-subtabs'), ...RESOURCING_VIEWS.map(([key, label]) =>
+    el('button', {
+      class: `subtab ${state.resourcingView === key ? 'is-active' : ''}`,
+      type: 'button',
+      onclick: () => { state.resourcingView = key; loadResourcing(); },
+    }, label)));
 }
 
 function utilisationPill(value) {
@@ -412,6 +430,12 @@ function utilisationPill(value) {
 }
 
 function renderResourcing() {
+  renderSubtabs();
+  const onMap = state.resourcingView === 'map';
+  $('#resourcing-body').hidden = onMap;
+  $('#map-body').hidden = !onMap;
+  if (onMap) { renderMap(); return; }
+
   const data = state.resourcing;
   if (!data) return;
 
@@ -425,6 +449,105 @@ function renderResourcing() {
   setChildren($('#resourcing-body'),
     renderFindings(data), renderTeams(data), renderTeamTrend(data),
     renderPeople(data), renderProjectSpread(data));
+}
+
+/* -- the picture -------------------------------------------------------- */
+
+function renderMap() {
+  const data = state.map;
+  if (!data) return;
+
+  const years = data.available_years || [];
+  setChildren($('#resourcing-year'),
+    el('option', { value: '' }, 'All years'),
+    ...years.map((y) => el('option', {
+      value: String(y), selected: String(y) === String(data.year) }, String(y))));
+
+  const colours = portfolioMap.teamColours(data.teams || []);
+  const canvas = el('div', { class: 'map-canvas' });
+
+  setChildren($('#map-body'),
+    el('div', { class: 'panel' },
+      el('p', { class: 'muted' },
+        'Every circle is a project and its area is the effort still to spend '
+        + 'to finish it, so the big ones are the work ahead and the finished '
+        + 'ones shrink away. Its colour is whether the effort going in matches '
+        + 'the work left. A person sits between the projects they charge to, '
+        + 'and '
+        + 'projects that share people pull together — so somebody on two of '
+        + 'them ends up in the overlap. Drag anything to rearrange it.'),
+      el('div', { class: 'map-legend' },
+        el('span', { class: 'map-key map-bad' }, 'crowded'),
+        el('span', { class: 'map-key map-ok' }, 'steady'),
+        el('span', { class: 'map-key map-warn' }, 'starved'),
+        el('span', { class: 'map-key map-done' }, 'finished'),
+        el('span', { class: 'map-sep' }, ''),
+        ...(data.teams || []).map((team) => el('span', { class: 'map-team' },
+          el('span', { class: 'swatch', style: `background:${colours[team.id]}` }),
+          `${team.name} (${team.members.length})`))),
+      canvas,
+      el('p', { class: 'muted' },
+        `Effort is the last ${data.thresholds.window} month(s)`
+        + (data.recent_months.length ? ` — ${data.recent_months.join(', ')}.` : '.')
+        + ' A project with budget left and nobody charging to it reads as '
+        + 'starved, which is the point: it is the one nobody has noticed.')),
+    el('div', { class: 'panel', id: 'map-detail' },
+      el('p', { class: 'muted' }, 'Click a circle or a person for the detail.')));
+
+  portfolioMap.render(canvas, data, { onPick: (node) => showMapDetail(node, data) });
+}
+
+function showMapDetail(node, data) {
+  const host = $('#map-detail');
+  if (node.kind === 'project') {
+    const p = node.data;
+    setChildren(host,
+      el('h3', {}, `${p.number} — ${p.name}`),
+      el('div', { class: 'cards cards-3' },
+        ...[['Budget left', `${fmt.mm(p.remaining_mm)} MM`,
+             `of ${fmt.mm(p.budget_mm)} · ${p.status}`],
+            ['Recent effort', `${fmt.hours(p.recent_hours)} h`,
+             `${fmt.pct0(p.effort_share)} of the team's hours`],
+            ['Share of work left', fmt.pct0(p.need_share),
+             p.load === null ? '—' : `effort is ${Number(p.load).toFixed(2)}× that`],
+        ].map(([label, value, sub]) => el('div', { class: 'card' },
+          el('div', { class: 'label' }, label),
+          el('div', { class: 'value' }, value),
+          el('div', { class: 'sub' }, sub)))),
+      el('p', { class: `msg msg-${p.state === 'crowded' ? 'bad'
+        : p.state === 'starved' ? 'warn' : 'ok'}` },
+        portfolioMap.STATE_WORD[p.state] || ''),
+      el('div', { class: 'table-wrap' }, el('table', {},
+        el('thead', {}, el('tr', {},
+          ['Who', 'Grade', 'Team', 'Hours'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, p.members.map((m) => {
+          const person = (data.people || []).find((x) => x.name === m.name) || {};
+          return el('tr', {},
+            el('td', {}, el('b', {}, m.name)),
+            el('td', {}, person.grade_label || ''),
+            el('td', {}, person.team_name || '—'),
+            el('td', { class: 'num' }, fmt.hours(m.hours)));
+        })))));
+    return;
+  }
+  const person = node.data;
+  setChildren(host,
+    el('h3', {}, `${person.name} — ${person.grade_label}`),
+    el('p', { class: 'muted' },
+      person.team_name ? `In ${person.team_name}.` : 'Not in a team.'),
+    el('div', { class: 'row-actions' },
+      ...person.projects.map((number) => {
+        const project = (data.projects || []).find((p) => p.number === number);
+        return el('span', {
+          class: `pill ${project && project.state === 'crowded' ? 'pill-bad'
+            : project && project.state === 'starved' ? 'pill-warn' : 'pill-ok'}`,
+        }, number);
+      })),
+    person.shared
+      ? el('p', { class: 'muted' },
+          `On ${person.projects.length} projects at once — which is why they sit `
+          + 'between those circles.')
+      : null);
 }
 
 function renderFindings(data) {
