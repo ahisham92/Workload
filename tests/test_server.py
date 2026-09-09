@@ -554,9 +554,18 @@ class TestCapacityEndpoint:
         assert body["capacity"]["headroom"] == 315
         assert body["capacity"]["low_headroom"] is True
 
-    def test_the_data_check_carries_the_warning(self, server):
+    def test_a_full_sheet_is_no_longer_a_warning_about_the_data(self, server):
+        """The rows are in the store; the sheet's fullness is not about them.
+
+        The workbook's caps still describe its own sheets, and still matter on
+        the way out -- the capacity report is still there and still says the
+        headroom is low. What is gone is the warning, because a full sheet no
+        longer means a row of anybody's timesheet is unreachable.
+        """
         _status, body = call(server, "/api/timesheets")
-        assert any("rows left" in w["message"] for w in body["capacity_warnings"])
+        assert body["source"] == "database"
+        assert body["capacity"]["low_headroom"] is True
+        assert body["capacity_warnings"] == []
 
     def test_the_limit_can_be_raised(self, server):
         status, body = call(server, "/api/timesheets/capacity", "POST",
@@ -1102,8 +1111,15 @@ class TestAnImportNeverLosesRows:
         book.save(buffer)
         return base64.b64encode(buffer.getvalue()).decode()
 
-    def test_an_import_past_the_limit_raises_it_and_keeps_every_row(
+    def test_an_import_past_the_workbooks_limit_keeps_every_row(
             self, server, readonly_wb):
+        """The limit that used to lose rows is not in the path any more.
+
+        The workbook's consolidated sheet had a fixed last row, and an import
+        bigger than the room left dropped the overflow silently. Rows now go
+        to the unit's database, which has no such row, so a 2,000-row import
+        into a workbook with under 1,000 rows of headroom simply lands.
+        """
         _status, before = call(server, "/api/timesheets")
         assert before["capacity"]["headroom"] < 1000, "the fixture is nearly full"
 
@@ -1115,16 +1131,13 @@ class TestAnImportNeverLosesRows:
                                {"token": staged["token"], "mode": "replace"})
         assert status == 200, (staged.get("errors"), applied)
         assert applied["rows"] == 2000
-
-        raised = applied["capacity_raised"]
-        assert raised and raised["raised"] is True
-        assert raised["entries_from"] == 7997
-        assert raised["entries"] > raised["entries_from"]
+        assert applied["rows_written"] == 2000
+        # Nothing had to be widened, because nothing was written to a sheet.
+        assert applied["capacity_raised"] is None
 
         _status, after = call(server, "/api/timesheets")
-        capacity = after["capacity"]
-        assert capacity["over_capacity"] is False
-        assert capacity["rows_used"] <= capacity["total_capacity"]
-        assert after["capacity_warnings"] == []
-        # Every row of the import is inside what the workbook reads.
+        assert after["source"] == "database"
         assert after["per_engineer"]["Kirolos"]["all_time_rows"] == 2000
+        # The workbook's own caps still describe its sheets; they are no
+        # longer warnings about the data, because the data is not there.
+        assert after["capacity_warnings"] == []

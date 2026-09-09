@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from . import config as cfg, library, metrics, reports, timesheets
+from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .workbook import WorkloadWorkbook, iso
 
@@ -75,6 +76,8 @@ class WorkloadService:
         self._unlocked = False
         self._stack_raised_to: Optional[int] = None
         self._file_stamp = None
+        #: The unit's timesheet rows, which no longer live in the workbook.
+        self._store: Optional[TimesheetStore] = None
         #: A member's view of somebody else's workbook never writes to it.
         self.read_only = False
         if path is not None:
@@ -114,9 +117,42 @@ class WorkloadService:
             self.read_only = read_only
             self._staged.clear()
             self._unlocked = False
+            self._store = TimesheetStore(resolved.with_suffix(".timesheets.db"))
+            if not read_only:
+                self._adopt_workbook_rows()
             self._stack_raised_to = None if read_only else self._widen_stack()
             self._stamp()
             return self.status()
+
+    def _index(self, wb: WorkloadWorkbook) -> "metrics.TimesheetIndex":
+        return metrics.TimesheetIndex(wb, self._store)
+
+    @property
+    def store(self) -> "TimesheetStore":
+        """The unit's timesheet rows.  Opening a workbook always makes one."""
+        if self._store is None:
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "No workbook is open. Choose your Workload file first.")
+        return self._store
+
+    def _adopt_workbook_rows(self) -> int:
+        """Move a workbook's own rows into the store, once, on first open.
+
+        A unit that was built before the store existed has its history on the
+        TS sheets. Reading it there still works, but nothing new should be
+        written there, so the rows come across the first time the unit is
+        opened and the sheets are left exactly as they are -- if this turns out
+        to be wrong, the workbook is still the record.
+        """
+        store = self._store
+        wb = self._wb
+        if store is None or wb is None or not store.is_empty():
+            return 0
+        moved = 0
+        for person, rows in _group_by_person(
+                metrics.TimesheetIndex.from_workbook(wb)).items():
+            moved += store.replace(person, rows, source="the workbook")
+        return moved
 
     def close(self) -> Dict[str, Any]:
         with self._lock:
@@ -125,6 +161,7 @@ class WorkloadService:
             self._wb = None
             self.path = None
             self.unit = None
+            self._store = None
             self.read_only = False
             self._unlocked = False
             self._stack_raised_to = None
@@ -234,15 +271,15 @@ class WorkloadService:
     def overview(self, year: Optional[int]) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
-            data = metrics.overview(wb, year)
+            index = self._index(wb)
+            data = metrics.overview(wb, year, self._store)
             data["available_years"] = metrics.available_years(wb, index)
             return data
 
     def projects(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
+            index = self._index(wb)
             return {
                 "projects": [p.to_dict() for p in wb.projects()],
                 "metrics": metrics.project_rows(wb, index),
@@ -251,7 +288,7 @@ class WorkloadService:
     def deliverables(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
+            index = self._index(wb)
             return {
                 "deliverables": [d.to_dict() for d in wb.deliverables()],
                 "metrics": metrics.deliverable_rows(wb, index),
@@ -292,7 +329,7 @@ class WorkloadService:
         """Every report figure for one period, computed in a single pass."""
         with self._lock:
             wb = self.workbook
-            index = metrics.TimesheetIndex(wb)
+            index = self._index(wb)
             data = reports.build(wb, kind, year, quarter, index=index).to_dict()
             data["periods"] = self._periods(wb)
             data["unit"] = self.unit
@@ -300,7 +337,8 @@ class WorkloadService:
             data["definitions"] = wb.definitions()
             period = data["period"]
             data["data_check"] = wb.data_check(
-                period["year"] if period["kind"] == "year" else None)
+                period["year"] if period["kind"] == "year" else None,
+                store=self._store)
             return data
 
     def _periods(self, wb) -> Dict[str, Any]:
@@ -315,7 +353,7 @@ class WorkloadService:
 
     def timesheet_status(self) -> Dict[str, Any]:
         with self._lock:
-            return self.workbook.data_check()
+            return self.workbook.data_check(store=self._store)
 
     # -- writes ----------------------------------------------------------
     def add_project(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -360,7 +398,7 @@ class WorkloadService:
             if project is None:
                 raise ApiError(HTTPStatus.NOT_FOUND,
                                f"No project numbered {number!r}.")
-            index = metrics.TimesheetIndex(wb)
+            index = self._index(wb)
             rows = {m["row"]: m for m in metrics.deliverable_rows(wb, index)}
             attached = [d for d in wb.deliverables()
                         if d.project_number == project.number]
@@ -447,24 +485,32 @@ class WorkloadService:
                     "The export still has errors that must be fixed first.",
                     parsed.errors,
                 )
-            if mode == "append":
-                rows = self._existing_rows(parsed.engineer) + list(parsed.rows)
-            elif mode == "replace":
-                rows = list(parsed.rows)
-            else:
+            if mode not in {"append", "replace"}:
                 raise ApiError(
                     HTTPStatus.BAD_REQUEST,
                     "Mode must be 'replace' (the monthly routine) or 'append'.",
                 )
             wb = self.workbook
-            # Make room before writing: a row past the limit is on the sheet
-            # but reaches nothing, and that is the one failure nobody sees.
-            room = wb.ensure_room_for(parsed.engineer, len(rows))
-            result = wb.replace_timesheet(parsed.engineer, rows)
-            result["mode"] = mode
-            result["capacity_raised"] = room if room.get("raised") else None
+            records = parsed.records()
+            store = self.store
+            # No room to make and no limit to raise: the rows go to the store,
+            # which has neither.
+            written = (store.append(parsed.engineer, records)
+                       if mode == "append"
+                       else store.replace(parsed.engineer, records))
+            result = {
+                "engineer": parsed.engineer,
+                # "rows" is what this person now holds, which is what the
+                # sheet-based import used to report.
+                "rows": store.counts().get(parsed.engineer, 0),
+                "rows_written": written,
+                "rows_held": store.counts().get(parsed.engineer, 0),
+                "rows_in_unit": store.count(),
+                "mode": mode,
+                "capacity_raised": None,
+            }
             result["save"] = self._commit()
-            result["data_check"] = wb.data_check()
+            result["data_check"] = wb.data_check(store=store)
             return result
 
     # -- reference tables ------------------------------------------------
@@ -638,3 +684,11 @@ def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+
+
+def _group_by_person(rows) -> Dict[str, List[Dict[str, Any]]]:
+    """Split a flat list of timesheet rows by whose they are."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["engineer"], []).append(row)
+    return grouped

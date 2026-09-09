@@ -509,7 +509,8 @@ class WorkloadApp:
         kind = (query.get("period") or ["year"])[0]
         data = member_view.build(
             service.workbook, row["engineer"], kind=kind, year=_year(query),
-            quarter=(query.get("quarter") or [None])[0])
+            quarter=(query.get("quarter") or [None])[0],
+            store=service._store)                      # noqa: SLF001 - same app
         data["unit"] = {"id": row["unit_id"], "name": row["unit_name"],
                         "manager": row.get("owner_name") or ""}
         data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
