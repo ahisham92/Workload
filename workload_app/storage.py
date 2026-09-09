@@ -10,10 +10,11 @@ the account's own folder.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from . import config as cfg, library
 
@@ -71,19 +72,65 @@ def save_upload(data_dir: Path, user_id: int, unit_id: str, data: bytes) -> Path
     return target
 
 
+def replace_unit_file(data_dir: Path, user_id: int, unit_id: str,
+                      data: bytes) -> Dict[str, Any]:
+    """Put a workbook into a unit that already exists.
+
+    This is how a unit is restored from a copy: the file it had is kept as a
+    backup first, so a restore is never the thing that loses the last version,
+    and the new file is only kept if it really is a Workload workbook.
+
+    The unit's timesheet database goes with the old workbook. Its rows came
+    from the file being replaced, so keeping them would leave the unit showing
+    one workbook's projects against another's hours; cleared, the rows on the
+    incoming file are adopted on the next open, exactly as for a new unit.
+    """
+    target = _target(data_dir, user_id, unit_id)
+    previous = target.read_bytes() if target.is_file() else None
+    kept = keep_a_copy(data_dir, user_id, target) if previous else None
+    target.write_bytes(data)
+    try:
+        library.validate(target)
+    except Exception:
+        # Put back exactly what was there; a refused upload changes nothing.
+        if previous is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(previous)
+        raise
+    forget_timesheets(target)
+    return {"path": target, "backup": kept}
+
+
+def forget_timesheets(workbook: Path) -> None:
+    """Drop a unit's timesheet database, so the workbook is the record again."""
+    store = Path(workbook).with_suffix(".timesheets.db")
+    for companion in (store, Path(str(store) + "-wal"), Path(str(store) + "-shm")):
+        companion.unlink(missing_ok=True)
+
+
 def remove_unit_file(data_dir: Path, user_id: int, filename: str) -> None:
     path = unit_path(data_dir, user_id, filename)
     path.unlink(missing_ok=True)
     Path(str(path) + ".lock").unlink(missing_ok=True)
-    # The unit's timesheet rows, and SQLite's own two companion files.
-    store = path.with_suffix(".timesheets.db")
-    for companion in (store, Path(str(store) + "-wal"), Path(str(store) + "-shm")):
-        companion.unlink(missing_ok=True)
+    forget_timesheets(path)
 
 
 def remove_user_files(data_dir: Path, user_id: int) -> None:
     """Everything an account had, including its backups."""
     shutil.rmtree(user_dir(data_dir, user_id), ignore_errors=True)
+
+
+def keep_a_copy(data_dir: Path, user_id: int, workbook: Path) -> Optional[Path]:
+    """A timestamped copy of a workbook, beside the account's other backups."""
+    if not Path(workbook).is_file():
+        return None
+    folder = backups_dir(data_dir, user_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = folder / f"{Path(workbook).stem}-{stamp}{Path(workbook).suffix}"
+    shutil.copy2(workbook, dest)
+    return dest
 
 
 def backups_dir(data_dir: Path, user_id: int) -> Path:

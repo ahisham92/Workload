@@ -204,6 +204,11 @@ async function renderChooser() {
           }, '⭳'),
           el('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
+            title: 'Put a workbook into this unit, keeping its name and access',
+            onclick: () => replaceUnit(unit),
+          }, '⭱'),
+          el('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button',
             title: 'Delete this unit and its workbook',
             onclick: () => deleteUnit(unit),
           }, '✕')))))
@@ -266,6 +271,36 @@ async function uploadUnit() {
   } finally {
     button.disabled = false;
   }
+}
+
+/** Restore a unit from a copy of its workbook, keeping the unit itself. */
+async function replaceUnit(unit) {
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.accept = '.xlsx,.xlsm';
+  picker.onchange = async () => {
+    const file = picker.files[0];
+    if (!file) return;
+    if (!window.confirm(
+      `Put "${file.name}" into the unit "${unit.name}"?\n\n`
+      + 'Everything the unit shows comes from the new file. What is there now '
+      + 'is kept as a backup first, so this can be undone.')) return;
+    chooserError([]);
+    try {
+      const base64 = await readFileBase64(file);
+      const result = await api(`/api/units/${unit.id}/replace`, {
+        method: 'POST',
+        body: { filename: file.name, content_base64: base64 },
+      });
+      const kept = (result.replaced || {}).previous_kept_as;
+      toast(`"${unit.name}" now holds ${file.name}.`
+        + (kept ? ` The old file is kept as ${kept}.` : ''), 'ok');
+      await enterApp();
+    } catch (error) {
+      chooserError(error.errors || [error.message]);
+    }
+  };
+  picker.click();
 }
 
 async function renameUnit(unit) {
@@ -819,7 +854,8 @@ function renderDataCheck(check) {
     el('dl', { class: 'kv' },
       el('dt', {}, `Rows ${scope}`),
       el('dd', {}, fmt.int(check.rows)
-        + (year ? ` · of ${fmt.int(check.all_time_rows)} on the sheets` : '')),
+        + (year ? ` · of ${fmt.int(check.all_time_rows)} ${check.source === 'database'
+          ? 'in this unit' : 'on the sheets'}` : '')),
       el('dt', {}, `Hours ${scope}`),
       el('dd', {}, fmt.hours(check.hours)
         + (year ? ` · of ${fmt.hours(check.all_time_hours)} all time` : '')),

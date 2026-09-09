@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     adopt.add_argument("workbook", type=Path)
     adopt.add_argument("--name", default="", help="the unit's name")
 
+    restore = sub.add_parser(
+        "restore", help="put a workbook into a unit that already exists")
+    restore.add_argument("username")
+    restore.add_argument("unit", help="the unit's name, or its id")
+    restore.add_argument("workbook", type=Path)
+
     units = sub.add_parser(
         "units", help="what each unit actually holds: rows, hours, projects")
     units.add_argument("username", nargs="?", default=None,
@@ -175,6 +181,47 @@ def _import(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _restore(db: Accounts, data_dir: Path, args) -> int:
+    """The console half of the app's ⭱ button, for a file already on the host."""
+    from . import library
+
+    user = next((u for u in db.users() if u["username"] == args.username), None)
+    if user is None:
+        print(f"error: no account called {args.username}", file=sys.stderr)
+        return 2
+    wanted = str(args.unit).strip().lower()
+    units = db.units(user["id"])
+    unit = next((u for u in units
+                 if u["id"] == args.unit or u["name"].strip().lower() == wanted), None)
+    if unit is None:
+        print(f"error: {args.username} has no unit called {args.unit!r}. "
+              f"They have: {', '.join(repr(u['name']) for u in units) or 'none'}",
+              file=sys.stderr)
+        return 2
+
+    source = Path(args.workbook).expanduser()
+    if not source.is_file():
+        print(f"error: {source} is not there", file=sys.stderr)
+        return 2
+    try:
+        library.validate(source)
+    except library.NotAWorkbook as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    result = storage.replace_unit_file(data_dir, user["id"], unit["id"],
+                                       source.read_bytes())
+    with db._connect() as connection:                  # noqa: SLF001 - same package
+        connection.execute("UPDATE units SET filename = ? WHERE id = ?",
+                           (result["path"].name, unit["id"]))
+    print(f"{unit['name']!r} now holds {source.name} "
+          f"({source.stat().st_size / 1_048_576:.1f} MB).")
+    if result["backup"]:
+        print(f"  the file it had is kept as {result['backup'].name}")
+    print("  its timesheet rows are read from the new workbook on the next open")
+    return 0
+
+
 def _units(db: Accounts, data_dir: Path, args) -> int:
     """Say what is in each unit, straight from the files, for when the app
     looks empty and the question is whether the data is gone or unreachable."""
@@ -253,6 +300,7 @@ COMMANDS = {
     "import": _import,
     "check": _check,
     "units": _units,
+    "restore": _restore,
 }
 
 
