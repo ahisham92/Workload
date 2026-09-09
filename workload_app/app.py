@@ -30,6 +30,7 @@ from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
+from .people import PeopleError
 from .tasks import TaskError
 from .timesheets import ImportError_
 from .workbook import ValidationError
@@ -132,7 +133,7 @@ class WorkloadApp:
         except ApiError as exc:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
-        except (ValidationError, TaskError) as exc:
+        except (ValidationError, TaskError, PeopleError) as exc:
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -722,6 +723,22 @@ class WorkloadApp:
              "manager"),
             ("DELETE", "/api/deliverables/{}",
              lambda ctx, q, b, row: ctx.service.delete_deliverable(_int(row)), "manager"),
+            # -- the establishment: teams, grades, and where to move people
+            ("GET", "/api/people", lambda ctx, q, b: ctx.service.roster(), "manager"),
+            ("PUT", "/api/people/{}",
+             lambda ctx, q, b, name: ctx.service.save_person(name, b), "manager"),
+            ("DELETE", "/api/people/{}",
+             lambda ctx, q, b, name: ctx.service.remove_person(name), "manager"),
+            ("POST", "/api/people/move",
+             lambda ctx, q, b: ctx.service.move_people(b), "manager"),
+            ("GET", "/api/resourcing",
+             lambda ctx, q, b: ctx.service.resourcing(_year(q)), "manager"),
+            ("POST", "/api/teams", lambda ctx, q, b: ctx.service.add_team(b), "manager"),
+            ("PUT", "/api/teams/{}",
+             lambda ctx, q, b, team_id: ctx.service.update_team(team_id, b), "manager"),
+            ("DELETE", "/api/teams/{}",
+             lambda ctx, q, b, team_id: ctx.service.remove_team(team_id), "manager"),
+
             ("GET", "/api/team", lambda ctx, q, b: ctx.service.team(), "manager"),
             ("GET", "/api/team/access", self.team_access, "manager"),
             ("POST", "/api/team/access", self.grant_access, "manager"),

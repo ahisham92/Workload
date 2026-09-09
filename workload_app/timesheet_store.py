@@ -53,11 +53,35 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- The organisation under a head of department. Not in the workbook, because
+-- the workbook has room for twelve people and one flat list of them.
+CREATE TABLE IF NOT EXISTS teams (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    lead       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS people (
+    name       TEXT PRIMARY KEY,     -- the same name the timesheet rows carry
+    team_id    TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    grade      TEXT NOT NULL DEFAULT 'engineer',
+    capacity_hours REAL,             -- a month of this person, if not the default
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS people_team ON people(team_id);
 """
 
 #: The columns a row is made of, in the order ``add`` expects them.
 FIELDS = ("person", "job_type", "job_number", "job_name", "full_name", "day",
           "phase", "regular_hours", "overtime_hours", "hours", "source")
+
+
+#: "leave this column alone", so a save can change one field without being
+#: handed the others and getting them wrong.
+_KEEP = object()
 
 
 def now() -> str:
@@ -187,7 +211,8 @@ class TimesheetStore:
             return {row["person"]: row["n"] for row in db.execute(
                 "SELECT person, COUNT(*) AS n FROM rows GROUP BY person")}
 
-    def people(self) -> List[str]:
+    def people_with_rows(self) -> List[str]:
+        """Everybody the timesheets know about, team or no team."""
         with self._connect() as db:
             return [row["person"] for row in db.execute(
                 "SELECT DISTINCT person FROM rows ORDER BY person")]
@@ -229,6 +254,77 @@ class TimesheetStore:
             "first_day": row["first_day"],
             "last_day": row["last_day"],
         } for row in rows]
+
+    # -- who is who ------------------------------------------------------
+    def teams(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM teams ORDER BY name")]
+
+    def add_team(self, team_id: str, name: str, lead: str = "") -> Dict[str, Any]:
+        with self._connect() as db:
+            db.execute("INSERT INTO teams (id, name, lead, created_at) "
+                       "VALUES (?, ?, ?, ?)", (team_id, name, lead, now()))
+        return {"id": team_id, "name": name, "lead": lead}
+
+    def update_team(self, team_id: str, *, name: Optional[str] = None,
+                    lead: Optional[str] = None) -> None:
+        with self._connect() as db:
+            if name is not None:
+                db.execute("UPDATE teams SET name = ? WHERE id = ?", (name, team_id))
+            if lead is not None:
+                db.execute("UPDATE teams SET lead = ? WHERE id = ?", (lead, team_id))
+
+    def remove_team(self, team_id: str) -> None:
+        """The team goes; its people stay, without a team."""
+        with self._connect() as db:
+            db.execute("UPDATE people SET team_id = NULL WHERE team_id = ?",
+                       (team_id,))
+            db.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+
+    def people(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM people ORDER BY name")]
+
+    def save_person(self, name: str, *, team_id: Any = _KEEP,
+                    grade: Any = _KEEP, capacity_hours: Any = _KEEP,
+                    active: Any = _KEEP) -> None:
+        """Add or change one person. Anything not passed is left as it was."""
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO people (name, created_at) VALUES (?, ?) "
+                "ON CONFLICT(name) DO NOTHING", (name, now()))
+            for column, value in (("team_id", team_id), ("grade", grade),
+                                  ("capacity_hours", capacity_hours),
+                                  ("active", active)):
+                if value is not _KEEP:
+                    db.execute(f"UPDATE people SET {column} = ? WHERE name = ?",
+                               (value, name))
+
+    def move_people(self, names: Sequence[str], team_id: Optional[str]) -> int:
+        """Put several people in a team at once, which is the whole point."""
+        moved = 0
+        with self._connect() as db:
+            for name in names:
+                db.execute(
+                    "INSERT INTO people (name, created_at) VALUES (?, ?) "
+                    "ON CONFLICT(name) DO NOTHING", (name, now()))
+                moved += db.execute(
+                    "UPDATE people SET team_id = ? WHERE name = ?",
+                    (team_id, name)).rowcount
+        return moved
+
+    def remove_person(self, name: str) -> None:
+        """Forget who they were. Their timesheet rows are not theirs to delete."""
+        with self._connect() as db:
+            db.execute("DELETE FROM people WHERE name = ?", (name,))
+
+    def rename_person_everywhere(self, old: str, new: str) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE OR REPLACE people SET name = ? WHERE name = ?",
+                       (new, old))
+            db.execute("UPDATE rows SET person = ? WHERE person = ?", (new, old))
 
     # -- settings --------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:

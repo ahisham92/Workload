@@ -43,6 +43,40 @@ read route into the rest of the unit either. It is not a hidden button, it is a
 missing route, and `tests/test_roles.py` is a list of the things a member
 account is refused.
 
+## Resourcing
+
+A head of department has teams under him, and the workbook has room for twelve
+engineers in one flat list. So the establishment lives in the unit's own
+database instead: a person has a **grade** — Senior, Engineer, Junior, BIM
+modeller — and a team; a team has a lead; and moving somebody is one row
+changing. Nobody is invisible for want of being set up: anyone the timesheets
+know about is on the roster whether or not they have been given a team.
+
+The **Resourcing** tab puts that beside the hours. Timesheets say where the
+work went, the establishment says where the people are, and the difference is
+the answer:
+
+- **Which team is over its capacity, and since which month** — not "at some
+  point": the run of over-capacity months that is still going, so a spike last
+  spring does not masquerade as today's problem.
+- **Who to move, and from where** — but only from a team that can lose a whole
+  person and stay inside its own capacity. A move that overloads the lender has
+  solved nothing, and the tab says so instead, naming the team it considered
+  and the number it would have left them at.
+- **Who to move** is the least loaded, never the lead, and on a tie the least
+  senior — seniority holds a team's work together and costs the lender more
+  than the hours say. It is a suggestion with a button beside it.
+- **Who is carrying more than the people beside them** — only when they are
+  meaningfully worse off than their own team, because when a whole team is
+  over, saying it once is the finding and saying it per member buries the
+  person who is genuinely drowning.
+- **Which teams carry which project**, since a project already split across
+  teams is where a move costs least.
+
+Everything is measured against booked hours over the last three months. One
+month is a holiday or a deadline; three is a pattern. Booked hours are history,
+not a forecast, and the tab says so where the findings are.
+
 ### The Admin tab
 
 An administrator gets an eighth tab that nobody else does: every account, what
@@ -351,6 +385,8 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
 | `workload_app/member.py` | What one engineer is allowed to see of their unit |
+| `workload_app/people.py` | Teams, grades, and where the work is not where the people are |
+| `workload_app/timesheet_store.py` | A unit's timesheet rows and its establishment |
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/server.py` | The local HTTP transport |
