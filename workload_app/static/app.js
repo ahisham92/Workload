@@ -18,6 +18,8 @@ const state = {
   access: null,          // who on the team has a read-only account
   me: null,              // the signed-in account
   units: [],
+  admin: null,           // the account list, on the Admin tab
+  passwords: null,       // null until an administrator asks to see them
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -161,6 +163,9 @@ function markSaved(save) {
 function showShell(open) {
   $('#chooser').hidden = open;
   for (const id of ['topbar', 'tabs', 'main']) $(`#${id}`).hidden = !open;
+  // The Admin tab is an administrator's; the routes behind it refuse anyone
+  // else in any case, so this is about not showing a door that will not open.
+  $('#tab-admin').hidden = !(state.me || {}).is_admin;
 }
 
 async function renderChooser() {
@@ -329,7 +334,8 @@ function openAccountModal() {
     { name: 'current_password', label: 'Current password', type: 'password',
       full: true },
     { name: 'new_password', label: 'New password', type: 'password', full: true,
-      hint: 'at least 10 characters' },
+      hint: 'at least 10 characters — and one an administrator of this app may '
+        + 'read, so never a password you use anywhere else' },
     { name: 'again', label: 'New password again', type: 'password', full: true },
   ], async () => {
     const body = modalValues();
@@ -343,18 +349,71 @@ function openAccountModal() {
   }, {});
 }
 
-/* -- administration ---------------------------------------------------- */
+/* -- administration ------------------------------------------------------
 
-async function openAdmin() {
-  const data = await api('/api/admin/users');
-  const body = el('div', {},
+   The Admin tab. Only an administrator has it: the tab button is hidden for
+   everybody else, and the routes behind it refuse anyone else regardless, so
+   the hiding is tidiness rather than the lock.
+*/
+
+async function loadAdmin() {
+  state.admin = await api('/api/admin/users');
+  renderAdmin();
+}
+
+/** Fetch every password, or put them away again. */
+async function togglePasswords() {
+  if (state.passwords) {
+    state.passwords = null;
+  } else {
+    state.passwords = (await api('/api/admin/passwords')).passwords || {};
+  }
+  renderAdmin();
+}
+
+function passwordCell(user) {
+  if (!state.passwords) {
+    return el('span', { class: 'muted' }, user.password_stored ? '••••••••' : '—');
+  }
+  const password = state.passwords[String(user.id)];
+  if (!password) {
+    return el('span', { class: 'muted',
+      title: 'Made before passwords were kept readable, or sealed under a '
+        + 'different key. Reset it and the new one shows here.' }, 'not stored');
+  }
+  return el('span', { class: 'row-actions' },
+    el('code', { class: 'password-cell' }, password),
+    el('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: 'Copy',
+      onclick: async (event) => {
+        try {
+          await navigator.clipboard.writeText(password);
+          toast(`Password for ${user.username} copied.`, 'ok');
+        } catch (error) {
+          // No clipboard (an insecure origin, or the browser said no):
+          // select it instead so it can be copied by hand.
+          const node = event.target.parentNode.querySelector('code');
+          window.getSelection().selectAllChildren(node);
+        }
+      },
+    }, '⧉'));
+}
+
+function renderAdmin() {
+  const data = state.admin;
+  if (!data) return;
+  const showing = Boolean(state.passwords);
+  $('#btn-show-passwords').textContent = showing ? 'Hide passwords' : 'Show passwords';
+  $('#btn-show-passwords').classList.toggle('btn-primary', showing);
+
+  setChildren($('#admin-body'), el('div', {},
     el('p', { class: 'muted' },
       'Accounts can only be made here — there is no public sign-up. A new '
       + 'account starts with no units and sees nothing of anyone else\'s.'),
-    el('table', {},
+    el('div', { class: 'table-wrap' }, el('table', { class: 'admin-table' },
       el('thead', {}, el('tr', {},
-        ['Username', 'Name', 'Kind', 'Units', 'Last seen', 'Role', ''].map(
-          (h) => el('th', {}, h)))),
+        ['Username', 'Name', 'Kind', 'Password', 'Units', 'Last seen', 'Role', '']
+          .map((h) => el('th', {}, h)))),
       el('tbody', {}, data.users.map((user) => el('tr', {},
         el('td', {}, el('b', {}, user.username)),
         el('td', {}, user.display_name),
@@ -364,6 +423,7 @@ async function openAdmin() {
             ? 'Sees one person\'s own figures, read-only'
             : 'Owns units and edits them',
         }, user.role === 'member' ? 'team member' : 'manager')),
+        el('td', {}, passwordCell(user)),
         el('td', { class: 'num' }, fmt.int(user.units || 0)),
         el('td', {}, user.last_seen ? String(user.last_seen).slice(0, 10) : 'never'),
         el('td', {}, user.is_admin
@@ -377,12 +437,13 @@ async function openAdmin() {
               onclick: () => toggleAdmin(user) }, user.is_admin ? '↓' : '↑'),
           user.id === (state.me || {}).id ? null
             : el('button', { class: 'btn btn-sm btn-danger', type: 'button',
-              onclick: () => deleteAccount(user) }, '✕')))))),
-    el('div', { class: 'row-actions', style: 'margin-top:14px' },
-      el('button', { class: 'btn btn-primary', type: 'button',
-        onclick: () => newAccount() }, 'Add an account')));
-
-  openPanel('Accounts', body);
+              onclick: () => deleteAccount(user) }, '✕'))))))),
+    el('p', { class: 'muted note' },
+      'Passwords are kept so you can read them back here. They are sealed '
+      + 'under a key file that sits beside the database and never inside it, '
+      + 'and only an administrator can ask for them. Tell your team that you '
+      + 'can see the password on their account, so nobody reuses a personal '
+      + 'one.')));
 }
 
 async function newAccount() {
@@ -404,14 +465,8 @@ async function newAccount() {
     body.is_admin = (body.is_admin || []).length > 0 && body.role !== 'member';
     const result = await api('/api/admin/users', { method: 'POST', body });
     closeModal();
-    if (result.password) {
-      window.alert(`Account ${result.user.username} created.\n\n`
-        + `Password: ${result.password}\n\n`
-        + 'Write it down now — it cannot be read back.');
-    } else {
-      toast(`Account ${result.user.username} created.`, 'ok');
-    }
-    await openAdmin();
+    toast(`Account ${result.user.username} created.`, 'ok');
+    await loadAdmin();
   }, { role: 'manager' });
 }
 
@@ -423,13 +478,8 @@ async function resetPassword(user) {
     const result = await api(`/api/admin/users/${user.id}/password`,
       { method: 'POST', body: modalValues() });
     closeModal();
-    if (result.password) {
-      window.alert(`Password for ${user.username}:\n\n${result.password}\n\n`
-        + 'Write it down now — it cannot be read back.');
-    } else {
-      toast(`Password changed for ${user.username}.`, 'ok');
-    }
-    await openAdmin();
+    toast(`Password changed for ${user.username}.`, 'ok');
+    await loadAdmin();
   }, {});
 }
 
@@ -437,7 +487,7 @@ async function toggleAdmin(user) {
   try {
     await api(`/api/admin/users/${user.id}/admin`,
       { method: 'POST', body: { is_admin: !user.is_admin } });
-    await openAdmin();
+    await loadAdmin();
   } catch (error) {
     toast((error.errors || [error.message]).join(' '), 'bad');
   }
@@ -450,7 +500,7 @@ async function deleteAccount(user) {
   try {
     await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
     toast(`${user.username} deleted.`, 'ok');
-    await openAdmin();
+    await loadAdmin();
   } catch (error) {
     toast((error.errors || [error.message]).join(' '), 'bad');
   }
@@ -547,8 +597,8 @@ function openAccountPanel() {
       el('button', { class: 'btn', type: 'button', onclick: openAccountModal },
         'Change password'),
       me.is_admin
-        ? el('button', { class: 'btn', type: 'button', onclick: openAdmin },
-            'Accounts')
+        ? el('button', { class: 'btn', type: 'button',
+          onclick: () => { closeModal(); switchView('admin'); } }, 'Accounts')
         : null,
       el('button', { class: 'btn btn-danger', type: 'button', onclick: signOut },
         'Sign out'))));
@@ -1785,6 +1835,7 @@ async function setupReports() {
 function switchView(view) {
   if (view === 'team' && !state.team) loadTeam();
   if (view === 'tasks' && !state.tasks) loadTasks();
+  if (view === 'admin') loadAdmin();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
@@ -1830,6 +1881,8 @@ function wire() {
   $('#btn-new-unit').addEventListener('click', newUnit);
   $('#btn-upload-unit').addEventListener('click', uploadUnit);
   $('#btn-signout-chooser').addEventListener('click', signOut);
+  $('#btn-show-passwords').addEventListener('click', () => togglePasswords());
+  $('#btn-new-account').addEventListener('click', () => newAccount());
   $('#btn-account-chooser').addEventListener('click', openAccountPanel);
   $('#btn-account').addEventListener('click', openAccountPanel);
   $('#unit-name').addEventListener('keydown', (e) => {

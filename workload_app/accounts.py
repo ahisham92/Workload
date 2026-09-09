@@ -23,6 +23,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import secretbox
+
 #: Cost of a password check.  About a tenth of a second on a small server, which
 #: is slow enough to make guessing expensive and fast enough not to be felt.
 ITERATIONS = 240_000
@@ -60,6 +62,11 @@ CREATE TABLE IF NOT EXISTS users (
     iterations    INTEGER NOT NULL,
     is_admin      INTEGER NOT NULL DEFAULT 0,
     role          TEXT NOT NULL DEFAULT 'manager',
+    -- The password again, sealed under the key file beside this database, so
+    -- an administrator can read out the one they issued.  Never consulted to
+    -- sign anybody in; see secretbox.py.
+    password_seal TEXT,
+    password_at   TEXT,
     created_at    TEXT NOT NULL,
     last_seen     TEXT
 );
@@ -104,9 +111,11 @@ def now() -> str:
 class Accounts:
     """The account database.  Cheap to construct; a connection per operation."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, secret_key: Optional[bytes] = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._key = secret_key if secret_key is not None \
+            else secretbox.load_key(self.path.parent)
         with self._connect() as db:
             db.executescript(SCHEMA)
             self._migrate(db)
@@ -120,6 +129,13 @@ class Accounts:
             # they were the only kind there was.
             db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL "
                        "DEFAULT 'manager'")
+        # Accounts made before the Admin tab have no readable copy of their
+        # password, and nothing can conjure one out of a PBKDF2 hash.  They
+        # show as "not stored" until somebody resets them.
+        if "password_seal" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN password_seal TEXT")
+        if "password_at" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN password_at TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
@@ -163,10 +179,12 @@ class Accounts:
             with self._connect() as db:
                 cursor = db.execute(
                     "INSERT INTO users (username, display_name, password_hash, "
-                    "salt, iterations, is_admin, role, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "salt, iterations, is_admin, role, created_at, "
+                    "password_seal, password_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (username, (display_name or "").strip(), digest, salt,
-                     ITERATIONS, 1 if is_admin else 0, role, now()),
+                     ITERATIONS, 1 if is_admin else 0, role, now(),
+                     secretbox.seal(self._key, password), now()),
                 )
                 user_id = cursor.lastrowid
         except sqlite3.IntegrityError:
@@ -182,13 +200,31 @@ class Accounts:
             check_password(password, row["username"])
             salt = secrets.token_bytes(SALT_BYTES)
             db.execute(
-                "UPDATE users SET password_hash = ?, salt = ?, iterations = ? "
-                "WHERE id = ?",
-                (_hash(password, salt, ITERATIONS), salt, ITERATIONS, user_id),
+                "UPDATE users SET password_hash = ?, salt = ?, iterations = ?, "
+                "password_seal = ?, password_at = ? WHERE id = ?",
+                (_hash(password, salt, ITERATIONS), salt, ITERATIONS,
+                 secretbox.seal(self._key, password), now(), user_id),
             )
             # A password change ends every session but the one changing it;
             # the caller re-issues its own.
             db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+    def passwords(self) -> Dict[int, Optional[str]]:
+        """Every account's password as last set, for the Admin tab.
+
+        ``None`` where there is nothing to show: an account made before the
+        sealed copy existed, or one whose seal this key cannot open.
+        """
+        with self._connect() as db:
+            rows = db.execute("SELECT id, password_seal FROM users").fetchall()
+        return {row["id"]: secretbox.unseal(self._key, row["password_seal"])
+                for row in rows}
+
+    def password_of(self, user_id: int) -> Optional[str]:
+        with self._connect() as db:
+            row = db.execute("SELECT password_seal FROM users WHERE id = ?",
+                             (user_id,)).fetchone()
+        return secretbox.unseal(self._key, row["password_seal"]) if row else None
 
     def set_admin(self, user_id: int, is_admin: bool) -> None:
         with self._connect() as db:
@@ -450,6 +486,10 @@ def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "last_seen": row["last_seen"],
         "units": row["units"] if "units" in row.keys() else None,
+        # Whether the Admin tab has a password to show for this account.
+        "password_stored": bool("password_seal" in row.keys()
+                                and row["password_seal"]),
+        "password_at": row["password_at"] if "password_at" in row.keys() else None,
     }
 
 

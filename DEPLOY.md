@@ -203,7 +203,11 @@ safe for one person working in one place at a time, which is how this is used.
 Two people editing the *same unit* at the same second is not something to
 attempt.
 
-**Back it up.** The whole application state is one folder:
+**Back it up.** The whole application state is one folder — and that includes
+`secret.key`, without which the Admin tab can no longer read passwords back
+(everyone can still sign in; the passwords just stop being visible). Keep the
+archive somewhere private: it holds the key *and* the database, which together
+are the readable passwords.
 
 ```bash
 tar czf ~/workload-backup-$(date +%F).tar.gz ~/workload-data

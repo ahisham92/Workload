@@ -283,6 +283,15 @@ class WorkloadApp:
         return {"users": self.accounts.users(),
                 "min_password": accounts_module.MIN_PASSWORD}
 
+    def list_passwords(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """Every account's password, for an administrator who asked to see.
+
+        A separate request from the account list on purpose: passwords cross
+        the wire only when somebody presses the button, not on every load.
+        """
+        return {"passwords": {str(user_id): password for user_id, password
+                              in self.accounts.passwords().items()}}
+
     def create_user(self, ctx: Context, query, body) -> Dict[str, Any]:
         password = (body.get("password") or "").strip()
         generated = not password
@@ -293,9 +302,9 @@ class WorkloadApp:
             display_name=body.get("display_name", ""),
             is_admin=bool(body.get("is_admin")),
             role=body.get("role") or ROLE_MANAGER)
-        # The password is shown once, here, because nobody can read it back.
-        return {"user": user,
-                "password": password if generated else None}
+        # Shown here whether generated or typed; the Admin tab can show it
+        # again later, which is what the sealed copy is for.
+        return {"user": user, "password": password}
 
     def reset_password(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
         target = int(user_id)
@@ -624,6 +633,7 @@ class WorkloadApp:
 
             # -- administration
             ("GET", "/api/admin/users", self.list_users, "admin"),
+            ("GET", "/api/admin/passwords", self.list_passwords, "admin"),
             ("POST", "/api/admin/users", self.create_user, "admin"),
             ("POST", "/api/admin/users/{}/password", self.reset_password, "admin"),
             ("POST", "/api/admin/users/{}/admin", self.set_admin, "admin"),

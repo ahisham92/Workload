@@ -130,7 +130,9 @@ main { padding: 20px; max-width: 1500px; margin: 0 auto; }
 }
 .btn:hover { background: var(--surface-2); }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-primary:hover { filter: brightness(1.08); }
+/* Restate the background: .btn:hover is a class plus a pseudo-class, so it
+   outranks .btn-primary and would leave white text on a pale grey. */
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
 .btn-ghost { background: none; }
 .btn-danger { color: var(--bad); border-color: var(--border); }
 .btn-sm { padding: 4px 9px; font-size: 12.5px; }
@@ -624,3 +626,22 @@ tr.row-done .task-name { text-decoration: line-through; }
   padding-top: 16px; }
 .unit-tools { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
 .account-panel .row-actions { margin-top: 14px; gap: 8px; }
+
+/* -- Admin tab ---------------------------------------------------------- */
+
+.admin-table td { vertical-align: middle; }
+
+/* A password has to be readable at a glance and unmistakable when read out,
+   so: monospace, and enough contrast to copy from a screen across a desk. */
+.password-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  user-select: all;
+}
+
+.note { margin-top: 14px; max-width: 70ch; }

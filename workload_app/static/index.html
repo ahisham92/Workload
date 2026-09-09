@@ -80,6 +80,7 @@
   <button class="tab" data-view="tasks" role="tab">Tasks</button>
   <button class="tab" data-view="team" role="tab">Team</button>
   <button class="tab" data-view="reference" role="tab">Reference</button>
+  <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden>Admin</button>
 </nav>
 
 <main id="main" hidden>
@@ -272,6 +273,21 @@
       <div id="reference-lock"></div>
     </div>
     <div id="reference-body"></div>
+  </section>
+
+  <!-- ---------------------------------------------------------- admin -->
+  <section class="view" id="view-admin">
+    <div class="view-head">
+      <div>
+        <h2>Accounts</h2>
+        <p class="muted">Everyone who can sign in. Only an administrator sees this tab.</p>
+      </div>
+      <div class="row-actions">
+        <button class="btn" id="btn-show-passwords" type="button">Show passwords</button>
+        <button class="btn btn-primary" id="btn-new-account" type="button">Add an account</button>
+      </div>
+    </div>
+    <div id="admin-body"></div>
   </section>
 
 </main>
