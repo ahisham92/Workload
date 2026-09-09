@@ -423,3 +423,134 @@ def _who_to_move(team: Dict[str, Any],
         round(m["recent_utilisation"] or 0.0, 2),
         -GRADE_KEYS.index(m["grade"]) if m["grade"] in GRADE_KEYS else 0,
         m["name"]))
+
+
+# --------------------------------------------------------------------------
+# the picture: teams, projects, and who is in more than one of them
+# --------------------------------------------------------------------------
+
+#: A project getting this much more effort than its share of the work left.
+CROWDED = 1.25
+#: ...and this much less.  Between the two it is being carried about right.
+STARVED = 0.75
+
+
+def portfolio_map(store, projects: Sequence[Dict[str, Any]], *,
+                  year: Optional[int] = None) -> Dict[str, Any]:
+    """Projects as circles, people as the threads between them.
+
+    A circle's **size** is the effort still to spend to finish -- the forecast
+    cost to complete, which on an overrunning project is more than the budget
+    ever was. The big ones are the work ahead and the finished ones shrink to
+    nothing, which is the right way round for a picture whose job is to say
+    where to put people.
+
+    A circle's **colour** is whether the effort going in matches the work left.
+    Not efficiency and not overspend -- resourcing. A project taking a fifth of
+    the team's recent hours while holding a twentieth of the work left is
+    crowded; the other way round is starved. Both are worth seeing, and only
+    the second is usually noticed.
+
+    A person belongs to a project because they charged time to it, not because
+    somebody said so, and a person on several is on all of them -- which is
+    what puts them between the circles.
+    """
+    rows = [row for row in store.all_rows()
+            if year is None or (row["date"] and row["date"].year == year)]
+    months = sorted({month_of(row["date"]) for row in rows if row["date"]})
+    recent = set(months[-WINDOW:])
+
+    establishment = {p["name"]: p for p in roster(store)["people"]}
+    teams = {team["id"]: dict(team) for team in store.teams()}
+
+    hours: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for row in rows:
+        if not row["job_number"]:
+            continue
+        if month_of(row["date"]) in recent:
+            hours[row["job_number"]][row["engineer"]] += row["hours"]
+
+    live = [p for p in projects if (p.get("remaining_mm") or 0) > 0
+            or hours.get(p["number"])]
+    total_remaining = sum(max(0.0, p.get("remaining_mm") or 0.0) for p in live)
+    total_hours = sum(sum(people.values()) for people in hours.values()) or 0.0
+
+    circles = []
+    for project in live:
+        number = project["number"]
+        booked = hours.get(number, {})
+        effort = sum(booked.values())
+        remaining = max(0.0, project.get("remaining_mm") or 0.0)
+        need_share = remaining / total_remaining if total_remaining else 0.0
+        effort_share = effort / total_hours if total_hours else 0.0
+        load = (effort_share / need_share) if need_share else None
+        circles.append({
+            "number": number,
+            "name": project.get("name") or number,
+            "status": project.get("status") or "",
+            "budget_mm": round(project.get("budget_mm") or 0.0, 2),
+            "remaining_mm": round(remaining, 2),
+            "progress": project.get("progress"),
+            "recent_hours": round(effort, 1),
+            "need_share": round(need_share, 4),
+            "effort_share": round(effort_share, 4),
+            "load": round(load, 3) if load is not None else None,
+            "state": _project_state(load, remaining),
+            "members": sorted(
+                ({"name": name,
+                  "hours": round(value, 1),
+                  "team_id": (establishment.get(name) or {}).get("team_id"),
+                  "grade": (establishment.get(name) or {}).get("grade",
+                                                               DEFAULT_GRADE)}
+                 for name, value in booked.items()),
+                key=lambda item: -item["hours"]),
+        })
+    circles.sort(key=lambda item: -item["remaining_mm"])
+
+    on = defaultdict(list)
+    for circle in circles:
+        for member in circle["members"]:
+            on[member["name"]].append(circle["number"])
+
+    folk = []
+    for name, person in sorted(establishment.items()):
+        if not person.get("active", True) and name not in on:
+            continue
+        folk.append({
+            "name": name,
+            "team_id": person.get("team_id"),
+            "team_name": person.get("team_name", ""),
+            "grade": person.get("grade", DEFAULT_GRADE),
+            "grade_label": grade_label(person.get("grade", DEFAULT_GRADE)),
+            "projects": on.get(name, []),
+            "shared": len(on.get(name, [])) > 1,
+        })
+
+    return {
+        "year": year,
+        "months": months,
+        "recent_months": sorted(recent),
+        "teams": [{"id": team["id"], "name": team["name"], "lead": team["lead"],
+                   "members": [f["name"] for f in folk
+                               if f["team_id"] == team["id"]]}
+                  for team in teams.values()]
+        + ([{"id": UNASSIGNED, "name": "Not in a team", "lead": "",
+             "members": [f["name"] for f in folk if not f["team_id"]]}]
+           if any(not f["team_id"] for f in folk) else []),
+        "projects": circles,
+        "people": folk,
+        "thresholds": {"crowded": CROWDED, "starved": STARVED, "window": WINDOW},
+    }
+
+
+def _project_state(load: Optional[float], remaining: float) -> str:
+    """What the circle's colour says."""
+    if remaining <= 0:
+        return "finished"
+    if load is None or load == 0:
+        return "starved"
+    if load > CROWDED:
+        return "crowded"
+    if load < STARVED:
+        return "starved"
+    return "steady"

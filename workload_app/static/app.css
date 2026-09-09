@@ -686,3 +686,58 @@ tr.row-done .task-name { text-decoration: line-through; }
 .progress-cell .meter.ok > span { background: var(--ok); }
 .progress-cell .meter.warn > span { background: var(--warn); }
 .progress-cell .tag { margin-left: 5px; }
+
+/* -- the portfolio map --------------------------------------------------- */
+
+.map-canvas { margin: 10px 0 4px; }
+.portfolio-map { width: 100%; height: auto; display: block; touch-action: none; }
+.portfolio-map.is-dragging { cursor: grabbing; }
+
+/* Translucent, because two circles overlapping is the whole point: where they
+   meet is where somebody works on both. */
+.map-disc { fill-opacity: .17; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.map-project { cursor: grab; }
+.map-project:focus { outline: none; }
+.map-project:focus .map-disc, .map-project:hover .map-disc { fill-opacity: .3; }
+.map-ok .map-disc { fill: var(--ok); stroke: var(--ok); }
+.map-warn .map-disc { fill: var(--warn); stroke: var(--warn); }
+.map-bad .map-disc { fill: var(--bad); stroke: var(--bad); }
+.map-done .map-disc { fill: var(--muted); stroke: var(--muted); stroke-dasharray: 3 3; }
+
+/* The fit is a scale on the drawing, so type and strokes divide it back out
+   and stay the size they were drawn at. */
+.map-code {
+  text-anchor: middle; font-weight: 600; fill: var(--text);
+  pointer-events: none; font-family: var(--mono);
+  font-size: calc(11px / var(--map-k, 1));
+}
+.map-thread { stroke: var(--border); stroke-width: 1.5;
+  vector-effect: non-scaling-stroke; }
+.map-dot { stroke: var(--surface); stroke-width: 2;
+  vector-effect: non-scaling-stroke; }
+/* Somebody on more than one project is the reason to look at this at all. */
+.map-person.is-shared .map-dot { stroke: var(--text); stroke-width: 2.5; }
+.map-who {
+  text-anchor: middle; fill: var(--muted); pointer-events: none;
+  font-size: calc(10.5px / var(--map-k, 1));
+}
+.map-person { cursor: grab; }
+.map-person:focus { outline: none; }
+.map-person:focus .map-dot, .map-person:hover .map-dot { stroke: var(--accent); }
+
+.map-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  font-size: 12px; color: var(--muted); margin-top: 8px;
+}
+.map-key::before {
+  content: ""; display: inline-block; width: 11px; height: 11px;
+  border-radius: 50%; margin-right: 5px; vertical-align: -1px;
+  border: 2px solid currentColor; background: currentColor;
+  opacity: .55;
+}
+.map-legend .map-ok { color: var(--ok); }
+.map-legend .map-warn { color: var(--warn); }
+.map-legend .map-bad { color: var(--bad); }
+.map-legend .map-done { color: var(--muted); }
+.map-sep { border-left: 1px solid var(--border); height: 14px; }
+.map-team { display: inline-flex; align-items: center; gap: 5px; }
