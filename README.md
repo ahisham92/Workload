@@ -25,8 +25,8 @@ app with Ctrl+C.
 ## Accounts
 
 Every visitor signs in, and an account sees only its own work. There is no
-public sign-up: an administrator makes each account, from the **Accounts**
-panel in the app or with `python -m workload_app.admin add`.
+public sign-up: an administrator makes each account, from the **Admin** tab in
+the app or with `python -m workload_app.admin add`.
 
 There are two kinds:
 
@@ -42,6 +42,31 @@ page to press: a member account has no write route anywhere in the app, and no
 read route into the rest of the unit either. It is not a hidden button, it is a
 missing route, and `tests/test_roles.py` is a list of the things a member
 account is refused.
+
+### The Admin tab
+
+An administrator gets an eighth tab that nobody else does: every account, what
+kind it is, how many units it has, when it was last seen — and its password.
+
+**Passwords are readable there, deliberately.** *Show passwords* fetches them;
+the account list itself never carries them, so they cross the wire only when
+somebody presses the button, and every route behind the tab refuses an account
+that is not an administrator. Sign-in still goes through PBKDF2 as it always
+did — the readable copy is never consulted to let anyone in.
+
+What makes it readable is a second, sealed copy of the password, written
+whenever one is set. It is sealed under `secret.key`, a 32-byte file created
+mode 0600 beside `accounts.db` and never stored inside it, so a stray copy of
+the database — a backup that went astray, a downloaded data folder — is not a
+list of everyone's passwords. Whoever holds both files can read them, which is
+the point of the tab.
+
+Two things follow, and the app says both where they matter:
+
+- Tell your team the administrator can see the password on their account, so
+  nobody reuses a personal one. The *Change password* dialog says so too.
+- Accounts made before this existed show **not stored** — nothing can recover a
+  password from a PBKDF2 hash. Reset one and it shows from then on.
 
 A manager gives someone that access from the **Team** tab: *Give access* beside
 an engineer creates their sign-in (with a password shown once) and points it at
@@ -313,6 +338,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | --- | --- |
 | `workload_app/xlsx_io.py` | Reads and writes cells directly in the spreadsheet XML |
 | `workload_app/accounts.py` | Accounts, passwords, sessions and each account's units |
+| `workload_app/secretbox.py` | The sealed copy of a password the Admin tab reads back |
 | `workload_app/storage.py` | Where an account's workbooks live, and the template |
 | `workload_app/app.py` | The application: routes, access, and who is asking |
 | `workload_app/service.py` | One open workbook, and every change that can be made |
