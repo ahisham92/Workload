@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
     adopt.add_argument("workbook", type=Path)
     adopt.add_argument("--name", default="", help="the unit's name")
 
+    units = sub.add_parser(
+        "units", help="what each unit actually holds: rows, hours, projects")
+    units.add_argument("username", nargs="?", default=None,
+                       help="omit for every account")
+
     checker = sub.add_parser(
         "check", help="is this installation ready to serve, and what should "
                       "the host's WSGI file say?")
@@ -170,6 +175,53 @@ def _import(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _units(db: Accounts, data_dir: Path, args) -> int:
+    """Say what is in each unit, straight from the files, for when the app
+    looks empty and the question is whether the data is gone or unreachable."""
+    from . import metrics, storage
+    from .timesheet_store import TimesheetStore
+    from .workbook import WorkloadWorkbook
+
+    users = db.users()
+    if args.username:
+        users = [u for u in users if u["username"] == args.username]
+        if not users:
+            print(f"error: no account called {args.username}", file=sys.stderr)
+            return 2
+
+    for user in users:
+        print(f"{user['username']}:")
+        for unit in db.units(user["id"]):
+            path = storage.unit_path(data_dir, user["id"], unit["filename"])
+            print(f"  {unit['name']!r}  ({unit['filename']})")
+            if not path.is_file():
+                print("    THE FILE IS MISSING")
+                continue
+            print(f"    {path}  {path.stat().st_size / 1_048_576:.1f} MB")
+            try:
+                wb = WorkloadWorkbook(path)
+            except Exception as exc:
+                print(f"    cannot be opened: {exc}")
+                continue
+            store = TimesheetStore(path.with_suffix(".timesheets.db"))
+            on_sheets = metrics.TimesheetIndex.from_workbook(wb)
+            print(f"    projects {len(wb.projects())}, "
+                  f"deliverables {len(wb.deliverables())}, "
+                  f"engineers {', '.join(wb.ts_sheets()) or 'none'}")
+            print(f"    timesheet rows: {len(on_sheets):,} on the sheets, "
+                  f"{store.count():,} in the database")
+            if store.count():
+                print(f"      per person: {store.counts()}")
+                low, high = store.date_range()
+                print(f"      {low} to {high}, "
+                      f"{sum(r['hours'] for r in store.all_rows()):,.1f} hours")
+        backups = storage.backups_dir(data_dir, user["id"])
+        kept = sorted(backups.glob("*.xlsx")) if backups.is_dir() else []
+        print(f"  backups: {len(kept)}"
+              + (f", newest {kept[-1].name}" if kept else ""))
+    return 0
+
+
 def _check(db, data_dir, args) -> int:
     """The one command to run on a host before -- and after -- a reload."""
     if getattr(args, "wsgi_only", False):
@@ -200,6 +252,7 @@ COMMANDS = {
     "remove": _remove,
     "import": _import,
     "check": _check,
+    "units": _units,
 }
 
 
