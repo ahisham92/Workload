@@ -2451,6 +2451,17 @@ function renderEngineerKpis(data) {
     ['Remaining on hand', 'remaining_mm', num, null],
     ['Projects worked', 'projects_worked', (v) => fmt.int(v), null],
     ['Average MM per project', 'average_mm_per_project', num, null],
+    // Hours never show how much of the work had to be done again.
+    ['Submissions made', 'submissions', (v) => fmt.int(v), null],
+    ['Resubmissions to finalise', 'revisions', (v) => fmt.int(v), null],
+    ['Resubmissions per submission', 'revisions_per_submission',
+      (v) => (v === null || v === undefined ? '—' : Number(v).toFixed(2)),
+      // Fewer is better, so the usual "under target is bad" tone is inverted.
+      (v) => (v === null || v === undefined ? '' : v <= 0.5 ? 'ok'
+        : v <= 1.5 ? 'warn' : 'bad')],
+    ['Right first time', 'first_time_right', fmt.pct,
+      (v) => (v === null || v === undefined ? '' : v >= 0.7 ? 'ok'
+        : v >= 0.4 ? 'warn' : 'bad')],
   ];
 
   const worked = {};
@@ -2550,6 +2561,18 @@ function teamValue(data, key) {
   if (key === 'average_mm_per_project') {
     const projects = new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
     return projects ? sum('actual_mm') / projects : null;
+  }
+  // Rates, not totals: adding "0.5 each" across three people is meaningless.
+  // A shared submission counts once per person on it, which is what weighting
+  // the team rate by who was actually involved amounts to.
+  if (key === 'revisions_per_submission') {
+    return sum('submissions') ? sum('revisions') / sum('submissions') : null;
+  }
+  if (key === 'first_time_right') {
+    if (!sum('submissions')) return null;
+    const right = names.reduce(
+      (a, n) => a + (per[n].first_time_right || 0) * (per[n].submissions || 0), 0);
+    return right / sum('submissions');
   }
   return sum(key);
 }
@@ -3056,11 +3079,11 @@ function renderTaskTable(data) {
       + (f.showDone || !hidden ? '' : ` · ${fmt.int(hidden)} done and hidden`)),
     el('table', { class: 'tasks-table' },
       el('thead', {}, el('tr', {},
-        ['Task', 'For', 'Assigned to', 'Required (h)', 'Actual (h)', 'Due',
-          'Status', '']
+        ['Task', 'For', 'Assigned to', 'Required (h)', 'Actual (h)', 'Progress',
+          'Due', 'Status', '']
           .map((h, i) => el('th', { class: i >= 3 && i <= 4 ? 'num' : '' }, h)))),
       el('tbody', {}, rows.length === 0
-        ? el('tr', {}, el('td', { colspan: 8 },
+        ? el('tr', {}, el('td', { colspan: 9 },
             el('div', { class: 'empty' },
               data.tasks.length ? 'No task matches these filters.'
                 : 'No tasks yet. Add one, or let a deliverable date fill in its week.')))
@@ -3099,6 +3122,7 @@ function renderTaskTable(data) {
                 (v) => (v > 0.01 ? 'bad' : 'ok'),
                 () => fmt.hours(task.actual_hours))
               : fmt.hours(task.actual_hours))),
+          el('td', {}, progressCell(task)),
           el('td', {}, dueCell(task)),
           el('td', {}, el('span', { class: `pill ${statusPillFor(task.status)}` },
             task.status)),
@@ -3132,6 +3156,28 @@ function dueCell(task) {
 
 /* -- editing ----------------------------------------------------------- */
 
+/** How far along, and -- on hover -- why that is the number. */
+function progressCell(task) {
+  const value = task.progress || 0;
+  const tone = value >= 1 ? 'ok' : value >= 0.8 ? 'warn' : '';
+  return el('div', { class: 'progress-cell', title: task.progress_why || '' },
+    el('div', { class: `meter ${tone}` },
+      el('span', { style: `width:${Math.round(value * 100)}%` })),
+    el('div', { class: 'muted small' },
+      `${Math.round(value * 100)}%`,
+      task.progress_mode === 'workflow'
+        ? ` · ${task.stage_label || ''}` : ' · pro rata',
+      task.review_code
+        ? el('span', { class: `pill tag ${task.review_code === 'C' ? 'pill-bad'
+            : task.review_code === 'B' ? 'pill-warn' : 'pill-ok'}` },
+          `Code ${task.review_code}`)
+        : null,
+      task.revisions
+        ? el('span', { class: 'pill tag pill-info' },
+          `${task.revisions} resub${task.revisions === 1 ? '' : 's'}`)
+        : null));
+}
+
 function taskFields(data, task) {
   const deliverables = data.deliverables.map((d) => ({
     value: String(d.row),
@@ -3157,6 +3203,20 @@ function taskFields(data, task) {
     { name: 'due', label: 'Due', type: 'date' },
     { name: 'status', label: 'Status', type: 'select', options: data.statuses },
     { name: 'kind', label: 'Kind', type: 'select', options: data.kinds },
+    { name: 'progress_mode', label: 'Measured', type: 'select', full: true,
+      options: (data.progress_modes || []).map(([value, label]) => ({ value, label })),
+      hint: 'workflow is by the stage reached; pro rata is by the effort done' },
+    { name: 'pro_rata', label: 'Progress %', type: 'number', step: '1',
+      min: '0', max: '100', hint: 'pro-rata tasks only' },
+    { name: 'stage', label: 'Stage reached', type: 'select',
+      options: (data.stages || []).map((st) => ({
+        value: st.key, label: `${st.label} — ${Math.round(st.value * 100)}%` })),
+      hint: 'workflow tasks only' },
+    { name: 'review_code', label: 'Review code', type: 'select',
+      options: (data.review_codes || []).map((c) => ({ value: c.key, label: c.label })),
+      hint: 'once submitted: A finishes it, B goes to 90%, C stays at 80%' },
+    { name: 'revisions', label: 'Resubmissions', type: 'number', step: '1',
+      min: '0', hint: 'each one adds 1%, capped at 89% for C and 99% for B' },
     { name: 'notes', label: 'Notes', type: 'textarea', full: true },
   ];
 }
@@ -3167,7 +3227,12 @@ function openTaskModal(task) {
     ...task,
     deliverable_row: task.deliverable_row === null ? '' : String(task.deliverable_row),
     project_number: task.project_number || '',
-  } : { status: data.statuses[0], kind: data.kinds[0] };
+  } : { status: data.statuses[0], kind: data.kinds[0],
+        progress_mode: 'pro_rata', stage: 'not_started', review_code: '' };
+  if (task && task.pro_rata !== null && task.pro_rata !== undefined) {
+    // Held as a fraction, typed as a percentage.
+    values.pro_rata = Math.round(task.pro_rata * 100);
+  }
 
   openModal(task ? `Task ${task.id}` : 'New task', taskFields(data, task),
     async () => {

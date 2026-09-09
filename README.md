@@ -43,6 +43,54 @@ read route into the rest of the unit either. It is not a hidden button, it is a
 missing route, and `tests/test_roles.py` is a list of the things a member
 account is refused.
 
+## How far along a task is
+
+A task is measured one of two ways, and which one says something real about
+the work.
+
+**Pro rata** — the fraction of the effort that is done. Right for work with no
+gate in it: a study, a calculation, a model to build.
+
+**Workflow** — the stage the deliverable has reached, which is what a client
+and a project manager both recognise:
+
+| Stage | |
+| --- | ---: |
+| Design started | 10% |
+| IDC sent | 40% |
+| Internal comments addressed | 60% |
+| Submitted | 80% |
+
+The last twenty points are not withheld to be pessimistic. They are the
+review: until the comments come back, a submitted deliverable is not finished
+work, it is work waiting to find out. What comes back decides where it lands:
+
+| Code | | |
+| --- | --- | --- |
+| **A** | approved | 100% |
+| **B** | approved with comments | 90%, then +1% a resubmission, to 99% |
+| **C** | revise and resubmit | 80%, then +1% a resubmission, to 89% |
+
+The 1% is deliberately small. Nothing new is being designed on a
+resubmission — but a deliverable on its fourth is not in the same place as one
+that has just come back, and a number that never moves hides that. The caps
+are asymptotes, not milestones: a resubmission can never be worth as much as
+an approval.
+
+Marking a task **Done** beats all of it. Whoever pressed the button knows
+something the stage does not.
+
+### Rework in the KPIs
+
+Hours say how much was done. They never say how much of it had to be done
+again, and a deliverable that came back Code C three times cost the same hours
+as one approved first time. So the engineer KPIs carry **submissions made**,
+**resubmissions to finalise**, **resubmissions per submission** and **right
+first time**. A shared submission counts for everyone on it — they submitted
+it together and the rework is a cost they carry together — and somebody who
+has submitted nothing scores `—` rather than perfect, because the absence of
+rework is not the same as the absence of submitting.
+
 ## Resourcing
 
 A head of department has teams under him, and the workbook has room for twelve
@@ -386,6 +434,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
 | `workload_app/member.py` | What one engineer is allowed to see of their unit |
 | `workload_app/people.py` | Teams, grades, and where the work is not where the people are |
+| `workload_app/progress.py` | Pro rata or workflow, review codes, and what rework costs |
 | `workload_app/timesheet_store.py` | A unit's timesheet rows and its establishment |
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
