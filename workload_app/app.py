@@ -391,6 +391,45 @@ class WorkloadApp:
         """A new unit from a workbook the account already has."""
         user_id = ctx.user["id"]
         self._check_room(user_id)
+        data = self._uploaded_bytes(body)
+        name = body.get("name") or Path(body.get("filename", "workbook")).stem
+        unit = self.accounts.create_unit(user_id, name, "")
+        try:
+            path = storage.save_upload(self.data_dir, user_id, unit["id"], data)
+            self.accounts_update_filename(user_id, unit["id"], path.name)
+        except Exception:
+            self.accounts.delete_unit(user_id, unit["id"])
+            raise
+        return self.open_unit(ctx, query, body, unit["id"])
+
+    def replace_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
+        """Put a workbook into a unit that already exists.
+
+        Uploading has always made a *new* unit, which is no use when what you
+        want is the unit you already have -- with its name, and the accounts
+        your team already reach it through -- holding the file you have in
+        your hand. The old file is kept as a backup first.
+        """
+        user_id = ctx.user["id"]
+        unit = self.accounts.unit(user_id, unit_id)
+        if unit is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        data = self._uploaded_bytes(body)
+        # Let go of it before it is overwritten underneath us.
+        if ctx.service and ctx.service.unit \
+                and ctx.service.unit.get("id") == unit_id:
+            ctx.service.close()
+        result = storage.replace_unit_file(self.data_dir, user_id, unit_id, data)
+        self.accounts_update_filename(user_id, unit_id, result["path"].name)
+        opened = self.open_unit(ctx, query, body, unit_id)
+        opened["replaced"] = {
+            "unit": unit["name"],
+            "megabytes": round(len(data) / 1_048_576, 2),
+            "previous_kept_as": result["backup"].name if result["backup"] else None,
+        }
+        return opened
+
+    def _uploaded_bytes(self, body: Dict[str, Any]) -> bytes:
         content = body.get("content_base64")
         if not content:
             raise ApiError(HTTPStatus.BAD_REQUEST, "No file was uploaded.")
@@ -402,15 +441,7 @@ class WorkloadApp:
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                            f"That file is larger than the "
                            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.")
-        name = body.get("name") or Path(body.get("filename", "workbook")).stem
-        unit = self.accounts.create_unit(user_id, name, "")
-        try:
-            path = storage.save_upload(self.data_dir, user_id, unit["id"], data)
-            self.accounts_update_filename(user_id, unit["id"], path.name)
-        except Exception:
-            self.accounts.delete_unit(user_id, unit["id"])
-            raise
-        return self.open_unit(ctx, query, body, unit["id"])
+        return data
 
     def accounts_update_filename(self, user_id: int, unit_id: str,
                                  filename: str) -> None:
@@ -647,6 +678,7 @@ class WorkloadApp:
             ("GET", "/api/units", self.units, "user"),
             ("POST", "/api/units", self.create_unit, "manager"),
             ("POST", "/api/units/upload", self.upload_unit, "manager"),
+            ("POST", "/api/units/{}/replace", self.replace_unit, "manager"),
             ("POST", "/api/units/{}/open", self.open_unit, "manager"),
             ("PUT", "/api/units/{}", self.rename_unit, "manager"),
             ("DELETE", "/api/units/{}", self.delete_unit, "manager"),

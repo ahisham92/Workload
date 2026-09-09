@@ -8,6 +8,7 @@ its own -- without the key file beside it -- does not give them up.
 
 import json
 import sqlite3
+from pathlib import Path
 import threading
 import urllib.error
 import urllib.request
@@ -169,3 +170,65 @@ class TestWhoMaySee:
         site.app.accounts.set_password(site.ids["osama"], "reset-from-console")
         data = site.sign_in("ahmed").get("/api/admin/passwords")
         assert data["passwords"][str(site.ids["osama"])] == "reset-from-console"
+
+
+class TestRestoringAUnit:
+    """Putting a workbook into a unit that already exists.
+
+    Uploading has always made a *new* unit, which is no use when what you want
+    back is the unit you already have -- its name, and the access your team
+    already reach it through -- holding a file you have a copy of.
+    """
+
+    def test_the_unit_keeps_its_name_and_gains_the_workbook(self, tmp_path):
+        from workload_app import storage
+        data = tmp_path / "instance"
+        made = storage.new_from_template(data, 1, "unitA")
+        before = made.stat().st_size
+        result = storage.replace_unit_file(
+            data, 1, "unitA", Path("data/Workload.xlsx").read_bytes())
+        assert result["path"] == made
+        assert made.stat().st_size != before
+
+    def test_what_was_there_is_kept_as_a_backup(self, tmp_path):
+        from workload_app import storage
+        data = tmp_path / "instance"
+        storage.new_from_template(data, 1, "unitA")
+        result = storage.replace_unit_file(
+            data, 1, "unitA", Path("data/Workload.xlsx").read_bytes())
+        assert result["backup"] is not None and result["backup"].is_file()
+
+    def test_a_file_that_is_not_a_workbook_changes_nothing(self, tmp_path):
+        from workload_app import library, storage
+        data = tmp_path / "instance"
+        made = storage.new_from_template(data, 1, "unitA")
+        kept = made.read_bytes()
+        with pytest.raises(library.NotAWorkbook):
+            storage.replace_unit_file(data, 1, "unitA", b"not a workbook at all")
+        assert made.read_bytes() == kept
+
+    def test_the_old_timesheet_rows_do_not_follow(self, tmp_path):
+        """Otherwise the unit shows one workbook's projects against another's hours."""
+        from workload_app import storage
+        from workload_app.timesheet_store import TimesheetStore
+        data = tmp_path / "instance"
+        made = storage.new_from_template(data, 1, "unitA")
+        store_path = made.with_suffix(".timesheets.db")
+        TimesheetStore(store_path).replace("Ahmed", [{"job_number": "1", "hours": 8}])
+        assert TimesheetStore(store_path).count() == 1
+
+        storage.replace_unit_file(data, 1, "unitA",
+                                  Path("data/Workload.xlsx").read_bytes())
+        assert not store_path.exists()
+
+    def test_and_the_new_workbooks_rows_are_read_on_the_next_open(self, tmp_path):
+        from workload_app import storage
+        from workload_app.service import WorkloadService
+        data = tmp_path / "instance"
+        made = storage.new_from_template(data, 1, "unitA")
+        storage.replace_unit_file(data, 1, "unitA",
+                                  Path("data/Workload.xlsx").read_bytes())
+        service = WorkloadService(autosave=False)
+        service.open(made)
+        assert service.store.count() == 7682
+        assert len(service.workbook.projects()) == 40
