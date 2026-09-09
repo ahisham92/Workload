@@ -75,6 +75,45 @@ class ParsedTimesheet:
             out.append(record)
         return out
 
+    def records(self) -> List[Dict[str, Any]]:
+        """The parsed rows as the timesheet store keeps them.
+
+        The rows themselves are in the TS sheet's column order, because that
+        is what the workbook wanted; the store wants them named, and this is
+        the one place that knows which column is which.
+        """
+        index = {_normalise(h): i for i, h in enumerate(self.headers) if h}
+
+        def value(row, key, default=None):
+            position = index.get(_normalise(cfg.TS_KEY_FIELDS[key]))
+            return row[position] if position is not None and position < len(row) \
+                else default
+
+        # Their export has no job-name column, but if one ever appears under
+        # any of these names it is worth keeping: it saves typing the name of
+        # every project the batch turns up.
+        name_at = next((index[key] for key in
+                        ("jobname", "jobdescription", "projectname", "jobtitle")
+                        if key in index), None)
+
+        out: List[Dict[str, Any]] = []
+        for row in self.rows:
+            phase = value(row, "phase")
+            out.append({
+                "job_type": str(value(row, "job_type") or ""),
+                "job_number": str(value(row, "job_number") or "").strip(),
+                "job_name": str(row[name_at] or "") if name_at is not None
+                            and name_at < len(row) else "",
+                "full_name": str(value(row, "full_name") or ""),
+                "date": value(row, "date"),
+                "phase": int(phase) if isinstance(phase, (int, float)) else None,
+                "regular_hours": float(value(row, "regular_hours") or 0.0),
+                "overtime_hours": float(value(row, "overtime_hours") or 0.0),
+                "hours": float(value(row, "total_hours") or 0.0),
+                "source": self.source_name,
+            })
+        return out
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "engineer": self.engineer,

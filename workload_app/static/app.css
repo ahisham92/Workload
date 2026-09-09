@@ -91,11 +91,16 @@ p { margin: 0 0 10px; }
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.mark {
-  display: grid; place-items: center; width: 32px; height: 32px; flex: none;
-  border-radius: var(--radius); background: var(--accent); color: #fff;
-  font-weight: 700;
-}
+/* The mark: three months of effort under the line that is the capacity, which
+   is the one picture this whole app draws. Inline SVG so it is sharp at any
+   size and takes its two colours from the theme. */
+.mark { display: block; width: 32px; height: 32px; flex: none; }
+.mark svg { display: block; width: 100%; height: 100%; }
+.mark-bg { fill: var(--accent); }
+/* The surface colour, so the bars read light on blue in daylight and dark on
+   blue at night -- either way against the accent, never against the page. */
+.mark-bar { fill: var(--surface); }
+.mark-rule { fill: var(--surface); opacity: .55; }
 .brand p { margin: 0; max-width: 46vw; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -336,7 +341,7 @@ textarea { resize: vertical; min-height: 56px; }
 .meter.bad > span { background: var(--bad); }
 
 /* -- units --------------------------------------------------------------- */
-.mark-lg { width: 44px; height: 44px; font-size: 20px; border-radius: 10px; }
+.mark-lg { width: 44px; height: 44px; }
 .chooser-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
 .chooser-head h1 { font-size: 22px; }
 .chooser-head p { margin: 2px 0 0; }

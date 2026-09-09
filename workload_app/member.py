@@ -23,9 +23,10 @@ from .workbook import WorkloadWorkbook
 
 def build(wb: WorkloadWorkbook, engineer: str, *, kind: str = "year",
           year: Optional[int] = None, quarter: Optional[str] = None,
-          index: Optional[TimesheetIndex] = None) -> Dict[str, Any]:
+          index: Optional[TimesheetIndex] = None,
+          store: Any = None) -> Dict[str, Any]:
     """One engineer's own page, for one period."""
-    index = index or TimesheetIndex(wb)
+    index = index or TimesheetIndex(wb, store)
     report = reports.build(wb, kind, year, quarter, index=index)
     if engineer not in report.engineers:
         # The team changed under the permission: say so plainly rather than
@@ -55,7 +56,7 @@ def build(wb: WorkloadWorkbook, engineer: str, *, kind: str = "year",
         "hours_per_man_month": report.hours_per_mm,
         "me": mine,
         "projects": _my_projects(report, engineer),
-        "timesheet": _my_timesheet(wb, engineer, report.period),
+        "timesheet": _my_timesheet(wb, engineer, report.period, store),
         "months": _my_months(report, engineer),
         "tasks": _my_tasks(wb, engineer),
         "definitions": wb.definitions(),
@@ -111,10 +112,11 @@ def _times(value: Optional[float], share: float) -> Optional[float]:
     return None if value is None else round(value * share, 3)
 
 
-def _my_timesheet(wb: WorkloadWorkbook, engineer: str, period) -> Dict[str, Any]:
+def _my_timesheet(wb: WorkloadWorkbook, engineer: str, period,
+                  store: Any = None) -> Dict[str, Any]:
     """This person's own rows: how many, how many hours, and when."""
     year = period.year if period.kind == "year" else None
-    check = wb.data_check(year)
+    check = wb.data_check(year, store=store)
     entry = dict(check["per_engineer"].get(engineer) or {})
     entry.pop("rows_not_matching_pattern", None)
     entry["year"] = year

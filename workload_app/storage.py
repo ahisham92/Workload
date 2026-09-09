@@ -75,6 +75,10 @@ def remove_unit_file(data_dir: Path, user_id: int, filename: str) -> None:
     path = unit_path(data_dir, user_id, filename)
     path.unlink(missing_ok=True)
     Path(str(path) + ".lock").unlink(missing_ok=True)
+    # The unit's timesheet rows, and SQLite's own two companion files.
+    store = path.with_suffix(".timesheets.db")
+    for companion in (store, Path(str(store) + "-wal"), Path(str(store) + "-shm")):
+        companion.unlink(missing_ok=True)
 
 
 def remove_user_files(data_dir: Path, user_id: int) -> None:

@@ -36,19 +36,41 @@ def _round(value: Optional[float], places: int = 2) -> Optional[float]:
 
 
 class TimesheetIndex:
-    """Every timesheet row from the three TS sheets, indexed for lookups."""
+    """Every timesheet row for a unit, indexed for lookups.
 
-    def __init__(self, wb: WorkloadWorkbook):
-        self.rows: List[Dict[str, Any]] = []
+    They come from the unit's own store, or -- for a unit that has not been
+    moved yet -- from the TS sheets, which is where they used to live.
+    """
+
+    def __init__(self, wb: WorkloadWorkbook, store: Any = None):
+        """Rows from the unit's store if it has one, else from the sheets.
+
+        The store is where they live once a unit has been moved off the
+        workbook's own consolidated sheet; everything below this constructor
+        works off ``self.rows`` and cannot tell the difference.
+        """
+        self.rows: List[Dict[str, Any]] = (
+            store.all_rows() if store is not None and not store.is_empty()
+            else self.from_workbook(wb))
+
+        self.by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for row in self.rows:
+            self.by_job[row["job_number"]].append(row)
+
+    @staticmethod
+    def from_workbook(wb: WorkloadWorkbook) -> List[Dict[str, Any]]:
+        """The rows as the TS sheets hold them."""
+        rows: List[Dict[str, Any]] = []
         for engineer in wb.ts_sheets():
             for raw in wb.timesheet_rows(engineer, ["A", "B", "C", "J", "K", "L", "M", "P"]):
                 date = raw.get("L")
                 hours = raw.get("P")
                 phase = raw.get("M")
-                self.rows.append({
+                rows.append({
                     "engineer": engineer,
                     "job_type": as_text(raw.get("A")),
                     "job_number": as_text(raw.get("B")).strip(),
+                    "job_name": "",
                     "full_name": as_text(raw.get("C")),
                     "regular_hours": float(raw.get("J") or 0.0),
                     "overtime_hours": float(raw.get("K") or 0.0),
@@ -56,10 +78,7 @@ class TimesheetIndex:
                     "phase": int(phase) if isinstance(phase, (int, float)) else None,
                     "hours": float(hours) if isinstance(hours, (int, float)) else 0.0,
                 })
-
-        self.by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        for row in self.rows:
-            self.by_job[row["job_number"]].append(row)
+        return rows
 
     def hours_for_job(self, job_number: str, *, phase: Optional[int] = None,
                       engineer: Optional[str] = None) -> float:
@@ -377,9 +396,10 @@ def engineer_workload(wb: WorkloadWorkbook, index: TimesheetIndex,
 # portfolio
 # --------------------------------------------------------------------------
 
-def overview(wb: WorkloadWorkbook, year: Optional[int] = None) -> Dict[str, Any]:
+def overview(wb: WorkloadWorkbook, year: Optional[int] = None,
+             store: Any = None) -> Dict[str, Any]:
     """Everything the app's front page shows."""
-    index = TimesheetIndex(wb)
+    index = TimesheetIndex(wb, store)
     projects = project_rows(wb, index)
     hours_per_mm = wb.hours_per_man_month()
 
@@ -411,7 +431,7 @@ def overview(wb: WorkloadWorkbook, year: Optional[int] = None) -> Dict[str, Any]
                 all_earned / all_actual if all_actual else None, 3),
         },
         "engineers": workload,
-        "data_check": wb.data_check(year),
+        "data_check": wb.data_check(year, store=store),
         "issues": wb.register_issues(),
     }
 

@@ -1667,15 +1667,34 @@ class WorkloadWorkbook:
         return result
 
     # -- health ----------------------------------------------------------
-    def data_check(self, year: Optional[int] = None) -> Dict[str, Any]:
+    def _rows_for_check(self, store: Any = None) -> "OrderedDict[str, List[Dict[str, Any]]]":
+        """Every person's rows, from the store if there is one, else the sheets."""
+        from .metrics import TimesheetIndex
+
+        held: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict(
+            (name, []) for name in self.ts_sheets())
+        rows = (store.all_rows() if store is not None and not store.is_empty()
+                else TimesheetIndex.from_workbook(self))
+        for row in rows:
+            held.setdefault(row["engineer"], []).append(row)
+        return held
+
+    def data_check(self, year: Optional[int] = None, *,
+                   store: Any = None) -> Dict[str, Any]:
         """The equivalent of the Work Calendar DATA CHECK block, computed live.
 
         ``year`` narrows the counts to one year, the way the Overview does with
         everything else on the page.  The row counts the capacity report needs
         stay whole, because the sheets hold every year at once whichever one is
         being looked at.
+
+        ``store`` is the unit's timesheet database. When there is one the rows
+        come from it and the sheets are not read at all -- and the count is no
+        longer bounded by what the sheets can hold, which is the point.
         """
         engineers = {e.short_name: e for e in self.engineers()}
+        stored = store is not None and not store.is_empty()
+        held = self._rows_for_check(store)
         per_engineer: Dict[str, Any] = {}
         total_rows = 0
         total_hours = 0.0
@@ -1685,8 +1704,9 @@ class WorkloadWorkbook:
         last_date: Optional[_dt.date] = None
         unmatched = 0
 
-        for short_name, sheet in self.ts_sheets().items():
-            rows = self.timesheet_rows(short_name, ["B", "C", "L", "P"])
+        sheets = self.ts_sheets()
+        for short_name in held:
+            rows = held[short_name]
             hours = 0.0
             in_year_rows = 0
             in_year_hours = 0.0
@@ -1695,18 +1715,15 @@ class WorkloadWorkbook:
             pattern = engineers.get(short_name)
             regex = _pattern_to_regex(pattern.pattern if pattern else f"*{short_name}*")
             for row in rows:
-                value = row.get("P")
-                booked = float(value) if isinstance(value, (int, float)) else 0.0
+                booked = row["hours"]
                 hours += booked
-                serial = row.get("L")
-                date = (from_serial(float(serial))
-                        if isinstance(serial, (int, float)) and serial > 0 else None)
+                date = row["date"]
                 if date:
                     dates.append(date)
                 if year is not None and date and date.year == year:
                     in_year_rows += 1
                     in_year_hours += booked
-                name = row.get("C")
+                name = row["full_name"]
                 if not (isinstance(name, str) and regex.match(name)):
                     bad_names += 1
             total_rows += len(rows)
@@ -1719,7 +1736,7 @@ class WorkloadWorkbook:
                 first_date = low if first_date is None else min(first_date, low)
                 last_date = high if last_date is None else max(last_date, high)
             per_engineer[short_name] = {
-                "sheet": sheet,
+                "sheet": sheets.get(short_name, ""),
                 "rows": in_year_rows if year is not None else len(rows),
                 "hours": round(in_year_hours if year is not None else hours, 2),
                 "all_time_rows": len(rows),
@@ -1731,17 +1748,14 @@ class WorkloadWorkbook:
 
         known = {p.number for p in self.projects()} | set(self.non_project_codes())
         unknown_codes: Dict[str, int] = {}
-        for short_name in self.ts_sheets():
-            for row in self.timesheet_rows(short_name, ["B", "L"]):
-                code = as_text(row.get("B"))
+        for rows in held.values():
+            for row in rows:
+                code = row["job_number"]
                 if not code or code in known:
                     continue
-                serial = row.get("L")
-                if year is not None:
-                    if not isinstance(serial, (int, float)) or serial <= 0:
-                        continue
-                    if from_serial(float(serial)).year != year:
-                        continue
+                if year is not None and (row["date"] is None
+                                         or row["date"].year != year):
+                    continue
                 unknown_codes[code] = unknown_codes.get(code, 0) + 1
 
         if total_rows == 0:
@@ -1756,11 +1770,18 @@ class WorkloadWorkbook:
 
         capacity_report = self.timesheet_capacity()
         capacity_warnings = capacity.messages(capacity_report)
-        if any(w["level"] == "error" for w in capacity_warnings):
+        if stored:
+            # The rows are in the unit's database, which has no row limit. The
+            # workbook's own caps still describe its sheets, and still matter
+            # when the workbook is exported, but they no longer describe the
+            # data -- so they are not warnings about it.
+            capacity_warnings = []
+        elif any(w["level"] == "error" for w in capacity_warnings):
             verdict = capacity_warnings[0]["message"]
 
         return {
             "year": year,
+            "source": "database" if stored else "workbook",
             "rows": year_rows if year is not None else total_rows,
             "hours": round(year_hours if year is not None else total_hours, 2),
             "all_time_rows": total_rows,
