@@ -81,6 +81,7 @@
   <button class="tab" data-view="tasks" role="tab">Tasks</button>
   <button class="tab" data-view="team" role="tab">Team</button>
   <button class="tab" data-view="reference" role="tab">Reference</button>
+  <button class="tab" data-view="resourcing" role="tab">Resourcing</button>
   <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden>Admin</button>
 </nav>
 
@@ -274,6 +275,24 @@
       <div id="reference-lock"></div>
     </div>
     <div id="reference-body"></div>
+  </section>
+
+  <!-- ----------------------------------------------------- resourcing -->
+  <section class="view" id="view-resourcing">
+    <div class="view-head">
+      <div>
+        <h2>Resourcing</h2>
+        <p class="muted">Who is in which team, and where the work is not where the people are.</p>
+      </div>
+      <div class="row-actions">
+        <label class="field inline">
+          <span>Year</span>
+          <select id="resourcing-year"></select>
+        </label>
+        <button class="btn" id="btn-add-team" type="button">Add team</button>
+      </div>
+    </div>
+    <div id="resourcing-body"></div>
   </section>
 
   <!-- ---------------------------------------------------------- admin -->

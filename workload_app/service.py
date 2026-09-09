@@ -17,7 +17,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import config as cfg, library, metrics, reports, timesheets
+from . import config as cfg, library, metrics, people as people_module, reports, timesheets
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .workbook import WorkloadWorkbook, iso
@@ -512,6 +512,96 @@ class WorkloadService:
             result["save"] = self._commit()
             result["data_check"] = wb.data_check(store=store)
             return result
+
+    # -- teams and people ------------------------------------------------
+    #
+    # The establishment lives in the unit's database, not the workbook: a head
+    # of department has more people than the workbook's twelve slots, and they
+    # move between teams far more often than a workbook wants to be rewritten.
+
+    def roster(self) -> Dict[str, Any]:
+        with self._lock:
+            return people_module.roster(self.store,
+                                        known=self.workbook.ts_sheets())
+
+    def resourcing(self, year: Optional[int] = None) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            data = people_module.balance(
+                self.store, monthly_capacity=wb.hours_per_man_month(), year=year)
+            data["roster"] = people_module.roster(self.store,
+                                                  known=wb.ts_sheets())
+            data["available_years"] = metrics.available_years(
+                wb, self._index(wb))
+            return data
+
+    def add_team(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            name = " ".join(str(body.get("name") or "").split())
+            if not name:
+                raise people_module.PeopleError("A team needs a name.")
+            if any(t["name"].lower() == name.lower() for t in self.store.teams()):
+                raise people_module.PeopleError(
+                    f"There is already a team called {name}.")
+            team = self.store.add_team(uuid.uuid4().hex[:12], name,
+                                       str(body.get("lead") or "").strip())
+            return {"team": team}
+
+    def update_team(self, team_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            if not any(t["id"] == team_id for t in self.store.teams()):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+            name = body.get("name")
+            self.store.update_team(
+                team_id,
+                name=" ".join(str(name).split()) if name is not None else None,
+                lead=str(body["lead"]).strip() if "lead" in body else None)
+            return {"team_id": team_id}
+
+    def remove_team(self, team_id: str) -> Dict[str, Any]:
+        with self._lock:
+            self.store.remove_team(team_id)
+            return {"removed": team_id}
+
+    def save_person(self, name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            person = people_module.clean_name(name)
+            fields: Dict[str, Any] = {}
+            if "grade" in body:
+                fields["grade"] = people_module.clean_grade(body["grade"])
+            if "team_id" in body:
+                team_id = body["team_id"] or None
+                if team_id and not any(t["id"] == team_id
+                                       for t in self.store.teams()):
+                    raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+                fields["team_id"] = team_id
+            if "capacity_hours" in body:
+                value = body["capacity_hours"]
+                fields["capacity_hours"] = float(value) if value not in (None, "") \
+                    else None
+            if "active" in body:
+                fields["active"] = 1 if body["active"] else 0
+            self.store.save_person(person, **fields)
+            return {"person": person, "changed": sorted(fields)}
+
+    def move_people(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Several people into one team at once, which is how it is really done."""
+        with self._lock:
+            names = [people_module.clean_name(n) for n in (body.get("names") or [])]
+            if not names:
+                raise people_module.PeopleError("Choose somebody to move first.")
+            team_id = body.get("team_id") or None
+            if team_id and not any(t["id"] == team_id for t in self.store.teams()):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+            moved = self.store.move_people(names, team_id)
+            team = next((t for t in self.store.teams() if t["id"] == team_id), None)
+            return {"moved": moved, "names": names,
+                    "team": team["name"] if team else None}
+
+    def remove_person(self, name: str) -> Dict[str, Any]:
+        with self._lock:
+            self.store.remove_person(people_module.clean_name(name))
+            return {"removed": name}
 
     # -- reference tables ------------------------------------------------
     def unlock(self, password: str) -> Dict[str, Any]:

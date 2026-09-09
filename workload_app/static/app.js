@@ -18,6 +18,8 @@ const state = {
   access: null,          // who on the team has a read-only account
   me: null,              // the signed-in account
   units: [],
+  resourcing: null,      // teams, people and the balance between them
+  resourcingYear: undefined,
   admin: null,           // the account list, on the Admin tab
   passwords: null,       // null until an administrator asks to see them
 };
@@ -382,6 +384,272 @@ function openAccountModal() {
     closeModal();
     toast('Password changed. Every other session was signed out.', 'ok');
   }, {});
+}
+
+
+/* -- resourcing ----------------------------------------------------------
+
+   Timesheets say where the hours went; the establishment says where the
+   people are. This tab is the two put together: the findings first, because
+   they are the answer, and the tables underneath because somebody will want
+   to disagree with them and needs the numbers to do it.
+*/
+
+const GRADE_ORDER = ['senior', 'engineer', 'junior', 'bim'];
+
+async function loadResourcing() {
+  const year = state.resourcingYear === undefined ? state.year : state.resourcingYear;
+  state.resourcing = await api(`/api/resourcing${year ? `?year=${year}` : ''}`);
+  renderResourcing();
+}
+
+function utilisationPill(value) {
+  if (value === null || value === undefined) {
+    return el('span', { class: 'muted' }, '—');
+  }
+  const tone = value > 1 ? 'pill-bad' : value < 0.75 ? 'pill-info' : 'pill-ok';
+  return el('span', { class: `pill ${tone}` }, fmt.pct0(value));
+}
+
+function renderResourcing() {
+  const data = state.resourcing;
+  if (!data) return;
+
+  const years = data.available_years || [];
+  const chosen = data.year;
+  setChildren($('#resourcing-year'),
+    el('option', { value: '' }, 'All years'),
+    ...years.map((y) => el('option', {
+      value: String(y), selected: String(y) === String(chosen) }, String(y))));
+
+  setChildren($('#resourcing-body'),
+    renderFindings(data), renderTeams(data), renderTeamTrend(data),
+    renderPeople(data), renderProjectSpread(data));
+}
+
+function renderFindings(data) {
+  const findings = data.findings || [];
+  return el('div', { class: 'panel' },
+    el('h3', {}, 'What to do about it'),
+    el('p', { class: 'muted' },
+      `Judged on the last ${data.thresholds.window} month(s) of booked hours`
+      + (data.recent_months.length
+        ? ` — ${data.recent_months.join(', ')}. ` : '. ')
+      + 'Booked hours are history, not a forecast: this says what has been '
+      + 'happening, and the decision stays yours.'),
+    findings.length
+      ? el('div', { class: 'findings' }, findings.map((f) => el('div', {
+          class: `finding finding-${f.level}`,
+        },
+        el('b', {}, f.headline),
+        el('p', { class: 'muted' }, f.detail),
+        f.kind === 'move' && f.person
+          ? el('button', {
+              class: 'btn btn-sm', type: 'button',
+              onclick: () => moveToTeamNamed(f.person, f.team),
+            }, `Move ${f.person} now`)
+          : null)))
+      : el('p', { class: 'muted' },
+          'Nothing to flag: no team is over its capacity, and nobody is '
+          + 'carrying much more than the people beside them.'));
+}
+
+function renderTeams(data) {
+  return el('div', { class: 'panel' },
+    el('h3', {}, 'Teams'),
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ['Team', 'Lead', 'People', 'Senior', 'Engineer',
+        'Junior', 'BIM', 'Hours', 'Capacity/month', 'Recent', 'Over since', '']
+        .map((h) => el('th', {}, h)))),
+      el('tbody', {}, (data.teams || []).map((team) => el('tr', {},
+        el('td', {}, el('b', {}, team.name)),
+        el('td', {}, team.lead || ''),
+        el('td', { class: 'num' }, fmt.int(team.headcount)),
+        ...GRADE_ORDER.map((g) => el('td', { class: 'num' },
+          team.by_grade[g] ? fmt.int(team.by_grade[g]) : '')),
+        el('td', { class: 'num' }, fmt.hours(team.hours)),
+        el('td', { class: 'num' }, fmt.hours(team.monthly_capacity)),
+        el('td', {}, utilisationPill(team.recent_utilisation)),
+        el('td', {}, team.over_since
+          ? el('span', { class: 'pill pill-warn' }, team.over_since) : ''),
+        el('td', { class: 'row-actions' },
+          team.id === '__none__' ? null : el('button', {
+            class: 'btn btn-sm btn-ghost', type: 'button', title: 'Rename, or set the lead',
+            onclick: () => editTeam(team) }, '✎'),
+          team.id === '__none__' ? null : el('button', {
+            class: 'btn btn-sm btn-danger', type: 'button',
+            title: 'Delete the team; its people stay, without one',
+            onclick: () => deleteTeam(team) }, '✕'))))))));
+}
+
+/** Month by month, each team against the capacity it actually has.
+    "Since when" as a picture, next to the same answer in words above. */
+function renderTeamTrend(data) {
+  const months = data.months || [];
+  const teams = (data.teams || []).filter((t) => t.headcount);
+  if (months.length < 2 || !teams.length) return null;
+  const series = teams.map((team) => ({
+    label: team.name,
+    values: months.map((m) => team.by_month[m] || 0),
+  }));
+  // One line across all of them only makes sense when the teams are the same
+  // size; when they are not, the capacity is per team and belongs in the table.
+  const sameSize = new Set(teams.map((t) => t.monthly_capacity)).size === 1;
+  return el('div', { class: 'panel' },
+    charts.groupedBars(months, series, {
+      title: 'Hours booked by team, month by month',
+      note: sameSize
+        ? `The line is each team's capacity: ${fmt.hours(teams[0].monthly_capacity)} h a month.`
+        : 'Teams are different sizes, so each one\'s capacity is in the table above.',
+      unit: 'h',
+      target: sameSize ? teams[0].monthly_capacity : null,
+    }));
+}
+
+function renderPeople(data) {
+  const teams = (data.roster || {}).teams || [];
+  const grades = ((data.roster || {}).grades || []);
+  const members = data.members || [];
+  return el('div', { class: 'panel' },
+    el('div', { class: 'panel-head' },
+      el('h3', {}, 'People'),
+      el('div', { class: 'row-actions' },
+        el('span', { class: 'muted', id: 'people-chosen' }, 'none chosen'),
+        el('select', { id: 'move-target' },
+          el('option', { value: '' }, 'Move chosen to…'),
+          ...teams.map((t) => el('option', { value: t.id }, t.name)),
+          el('option', { value: '__clear__' }, 'No team')),
+        el('button', { class: 'btn btn-sm btn-primary', type: 'button',
+          onclick: () => moveChosen() }, 'Move'))),
+    el('p', { class: 'muted' },
+      'Everyone the timesheets know about, whether or not they have been given '
+      + 'a team. Change a grade or a team and it saves at once.'),
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {},
+        el('th', {}, ''), ...['Name', 'Grade', 'Team', 'Hours', 'Months',
+          'Projects', 'Capacity/month', 'Recent'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, members.map((person) => el('tr', {},
+        el('td', {}, el('input', {
+          type: 'checkbox', class: 'person-pick', value: person.name,
+          onchange: () => countChosen() })),
+        el('td', {}, el('b', {}, person.name)),
+        el('td', {}, el('select', {
+          onchange: (event) => savePerson(person.name, { grade: event.target.value }),
+        }, ...grades.map(([key, label]) => el('option', {
+          value: key, selected: key === person.grade }, label)))),
+        el('td', {}, el('select', {
+          onchange: (event) => savePerson(person.name,
+            { team_id: event.target.value || null }),
+        }, el('option', { value: '', selected: !person.team_id }, '— none —'),
+           ...teams.map((t) => el('option', {
+             value: t.id, selected: t.id === person.team_id }, t.name)))),
+        el('td', { class: 'num' }, fmt.hours(person.hours)),
+        el('td', { class: 'num' }, fmt.int(person.months_booked)),
+        el('td', { class: 'num' }, fmt.int(person.projects)),
+        el('td', { class: 'num' }, fmt.hours(person.monthly_capacity)),
+        el('td', {}, utilisationPill(person.recent_utilisation))))))));
+}
+
+function renderProjectSpread(data) {
+  const projects = (data.projects || []).slice(0, 20);
+  if (!projects.length) return null;
+  return el('div', { class: 'panel' },
+    el('h3', {}, 'Which teams carry which projects'),
+    el('p', { class: 'muted' },
+      'The twenty projects with the most hours behind them. A project split '
+      + 'across teams is where a move costs the least.'),
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {},
+        ['Project', 'Hours', 'Carried by'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, projects.map((project) => el('tr', {},
+        el('td', {}, el('code', {}, project.job_number)),
+        el('td', { class: 'num' }, fmt.hours(project.hours)),
+        el('td', {}, el('span', { class: 'row-actions' },
+          ...project.teams.map((t) => el('span', { class: 'pill pill-info' },
+            `${t.name} ${t.percent}%`))))))))));
+}
+
+function chosenPeople() {
+  return $$('.person-pick').filter((box) => box.checked).map((box) => box.value);
+}
+
+function countChosen() {
+  const n = chosenPeople().length;
+  const label = $('#people-chosen');
+  if (label) label.textContent = n ? `${n} chosen` : 'none chosen';
+}
+
+async function savePerson(name, body) {
+  try {
+    await api(`/api/people/${encodeURIComponent(name)}`, { method: 'PUT', body });
+    await loadResourcing();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function moveChosen() {
+  const names = chosenPeople();
+  const target = $('#move-target').value;
+  if (!names.length) { toast('Choose somebody to move first.', 'warn'); return; }
+  if (!target) { toast('Choose the team to move them to.', 'warn'); return; }
+  await movePeople(names, target === '__clear__' ? null : target);
+}
+
+async function moveToTeamNamed(person, teamName) {
+  const team = ((state.resourcing.roster || {}).teams || [])
+    .find((t) => t.name === teamName);
+  if (!team) { toast(`There is no team called ${teamName}.`, 'bad'); return; }
+  await movePeople([person], team.id);
+}
+
+async function movePeople(names, teamId) {
+  try {
+    const result = await api('/api/people/move',
+      { method: 'POST', body: { names, team_id: teamId } });
+    toast(`${result.moved} moved to ${result.team || 'no team'}.`, 'ok');
+    await loadResourcing();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function addTeam() {
+  const name = window.prompt('Name the team');
+  if (!name) return;
+  try {
+    await api('/api/teams', { method: 'POST', body: { name } });
+    await loadResourcing();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function editTeam(team) {
+  const name = window.prompt('Name of the team', team.name);
+  if (name === null) return;
+  const lead = window.prompt(
+    `Who leads ${name}? (they are never the one suggested for a move)`,
+    team.lead || '');
+  if (lead === null) return;
+  try {
+    await api(`/api/teams/${team.id}`, { method: 'PUT', body: { name, lead } });
+    await loadResourcing();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function deleteTeam(team) {
+  if (!window.confirm(
+    `Delete the team "${team.name}"?\n\nIts ${team.headcount} people stay — `
+    + 'they just stop being in a team. No timesheet row is touched.')) return;
+  try {
+    await api(`/api/teams/${team.id}`, { method: 'DELETE' });
+    await loadResourcing();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
 }
 
 /* -- administration ------------------------------------------------------
@@ -1872,6 +2140,7 @@ function switchView(view) {
   if (view === 'team' && !state.team) loadTeam();
   if (view === 'tasks' && !state.tasks) loadTasks();
   if (view === 'admin') loadAdmin();
+  if (view === 'resourcing') loadResourcing();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
@@ -1917,6 +2186,11 @@ function wire() {
   $('#btn-new-unit').addEventListener('click', newUnit);
   $('#btn-upload-unit').addEventListener('click', uploadUnit);
   $('#btn-signout-chooser').addEventListener('click', signOut);
+  $('#btn-add-team').addEventListener('click', () => addTeam());
+  $('#resourcing-year').addEventListener('change', (event) => {
+    state.resourcingYear = event.target.value ? Number(event.target.value) : null;
+    loadResourcing();
+  });
   $('#btn-show-passwords').addEventListener('click', () => togglePasswords());
   $('#btn-new-account').addEventListener('click', () => newAccount());
   $('#btn-account-chooser').addEventListener('click', openAccountPanel);

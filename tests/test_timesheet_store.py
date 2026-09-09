@@ -55,7 +55,7 @@ class TestHoldingRows:
         for number in range(80):
             store.replace(f"Engineer {number}", rows(200, person=f"E{number}"))
         assert store.count() == 16_000
-        assert len(store.people()) == 80
+        assert len(store.people_with_rows()) == 80
 
 
 class TestWhatItCanAnswer:
