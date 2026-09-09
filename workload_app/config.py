@@ -355,12 +355,19 @@ TASK_COLUMNS: Dict[str, str] = {
     "kind": "M",
     "series": "N",
     "notes": "O",
+    # How far along, and how that number is arrived at. See progress.py.
+    "progress_mode": "P",
+    "stage": "Q",
+    "review_code": "R",
+    "revisions": "S",
+    "pro_rata": "T",
 }
 
 TASK_HEADERS = [
     "ID", "Task", "Definition", "Project", "Deliverable row", "Deliverable",
     "Assigned to", "Required hours", "Actual hours", "Start", "Due", "Status",
-    "Kind", "Series", "Notes",
+    "Kind", "Series", "Notes", "Measured", "Stage", "Review code", "Revisions",
+    "Pro rata %",
 ]
 
 TASK_STATUSES = ["Not started", "In progress", "Blocked", "Done"]

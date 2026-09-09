@@ -673,3 +673,16 @@ tr.row-done .task-name { text-decoration: line-through; }
 .finding-bad { border-left-color: var(--bad); }
 .finding-warn { border-left-color: var(--warn); }
 .finding-ok { border-left-color: var(--ok); }
+
+/* -- progress on a task -------------------------------------------------- */
+
+.progress-cell { min-width: 150px; }
+.progress-cell .meter { margin-bottom: 3px; }
+/* An unfinished workflow task is not "warn" for being at 40%: the neutral
+   accent is for work in hand, and only the last stretch earns a colour.
+   Scoped to this cell -- the capacity meter elsewhere means something else by
+   the same green. */
+.progress-cell .meter > span { background: var(--accent); }
+.progress-cell .meter.ok > span { background: var(--ok); }
+.progress-cell .meter.warn > span { background: var(--warn); }
+.progress-cell .tag { margin-left: 5px; }

@@ -18,7 +18,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from . import config as cfg
+from . import config as cfg, progress
 from .xlsx_io import Workbook, from_serial, to_serial
 
 
@@ -54,10 +54,23 @@ class Task:
     #: Set on generated tasks, so a series can be recognised and not doubled.
     series: str = ""
     notes: str = ""
+    #: How far along, and how that is arrived at -- see ``progress``.
+    progress_mode: str = progress.MODE_PRO_RATA
+    stage: str = progress.STAGE_KEYS[0]
+    review_code: str = ""
+    revisions: int = 0
+    #: Only for a pro-rata task: the fraction somebody typed.
+    pro_rata: Optional[float] = None
 
     @property
     def done(self) -> bool:
         return self.status == cfg.TASK_DONE_STATUS
+
+    @property
+    def progress(self) -> float:
+        return progress.of(self.progress_mode, stage=self.stage,
+                           code=self.review_code, revisions=self.revisions,
+                           pro_rata=self.pro_rata, done=self.done)
 
     def hours_each(self) -> float:
         """A shared task costs each person only their share of it."""
@@ -85,6 +98,16 @@ class Task:
             "done": self.done,
             "shared": len(self.assignees) > 1,
             "hours_each": round(self.hours_each(), 2),
+            "progress_mode": self.progress_mode,
+            "stage": self.stage,
+            "stage_label": progress.STAGE_LABEL.get(self.stage, self.stage),
+            "review_code": self.review_code,
+            "revisions": self.revisions,
+            "pro_rata": self.pro_rata,
+            "progress": round(self.progress, 4),
+            "progress_why": progress.explain(
+                self.progress_mode, stage=self.stage, code=self.review_code,
+                revisions=self.revisions),
         }
 
 
@@ -277,6 +300,13 @@ def read(wb: Workbook) -> List[Task]:
             kind=_text(sheet, f"{cols['kind']}{row}") or cfg.TASK_KINDS[0],
             series=_text(sheet, f"{cols['series']}{row}"),
             notes=_text(sheet, f"{cols['notes']}{row}"),
+            progress_mode=(_text(sheet, f"{cols['progress_mode']}{row}")
+                           or progress.MODE_PRO_RATA),
+            stage=(_text(sheet, f"{cols['stage']}{row}")
+                   or progress.STAGE_KEYS[0]),
+            review_code=_text(sheet, f"{cols['review_code']}{row}").upper(),
+            revisions=int(_number(sheet, f"{cols['revisions']}{row}") or 0),
+            pro_rata=_number(sheet, f"{cols['pro_rata']}{row}"),
         ))
     return out
 
@@ -348,6 +378,11 @@ def write_all(wb: Workbook, tasks: Sequence[Task]) -> None:
             "kind": task.kind,
             "series": task.series,
             "notes": task.notes,
+            "progress_mode": task.progress_mode,
+            "stage": task.stage,
+            "review_code": task.review_code,
+            "revisions": task.revisions or None,
+            "pro_rata": task.pro_rata,
         }
         for name, column in cols.items():
             style = date_style if name in ("start", "due") else None
@@ -436,6 +471,28 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
             errors.append("The deliverable could not be identified.")
             deliverable_row = None
 
+    # How progress is measured, and what the review said about it.
+    mode = progress.MODE_PRO_RATA
+    stage = progress.STAGE_KEYS[0]
+    code = ""
+    revisions = 0
+    pro_rata = None
+    try:
+        mode = progress.clean_mode(data.get("progress_mode"))
+        stage = progress.clean_stage(data.get("stage"))
+        code = progress.clean_code(data.get("review_code"))
+        revisions = progress.clean_revisions(data.get("revisions"))
+        pro_rata = _parse_fraction(data.get("pro_rata"))
+    except progress.ProgressError as error:
+        errors.extend(error.errors)
+    if mode == progress.MODE_WORKFLOW and stage != progress.SUBMITTED:
+        # A code or a resubmission count on a deliverable that has not been
+        # submitted is a mistake somebody will otherwise puzzle over later.
+        if code or revisions:
+            errors.append(
+                "A review code and a revision count only make sense once the "
+                "deliverable has been submitted.")
+
     if errors:
         raise TaskError(errors)
 
@@ -455,7 +512,27 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
         kind=kind,
         series=str(data.get("series") or "").strip(),
         notes=str(data.get("notes") or "").strip(),
+        progress_mode=mode,
+        stage=stage,
+        review_code=code,
+        revisions=revisions,
+        pro_rata=pro_rata,
     )
+
+
+def _parse_fraction(value: Any) -> Optional[float]:
+    """A percentage typed as 60, or a fraction typed as 0.6. Both mean 60%."""
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise TaskError(["Progress has to be a number."])
+    if number < 0:
+        raise TaskError(["Progress cannot be negative."])
+    if number > 100:
+        raise TaskError(["Progress cannot be more than 100%."])
+    return round(number / 100 if number > 1 else number, 4)
 
 
 def next_id(tasks: Iterable[Task]) -> int:

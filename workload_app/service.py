@@ -17,7 +17,8 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from . import config as cfg, library, metrics, people as people_module, reports, timesheets
+from . import (config as cfg, library, metrics, people as people_module,
+               progress, reports, tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .workbook import WorkloadWorkbook, iso
@@ -677,6 +678,15 @@ class WorkloadService:
                 "deliverables": deliverables,
                 "statuses": list(cfg.TASK_STATUSES),
                 "kinds": list(cfg.TASK_KINDS),
+                # How progress may be measured, and what a review can say.
+                "progress_modes": progress.MODES,
+                "stages": [{"key": key, "label": label, "value": value}
+                           for key, label, value in progress.STAGES],
+                "review_codes": [{"key": key, "label": rule["label"],
+                                  "floor": rule["floor"], "cap": rule["cap"]}
+                                 for key, rule in progress.REVIEW_CODES.items()],
+                "rework": progress.rework(
+                    task_sheet.read(wb.raw), wb.engineer_names()),
                 "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday",
                              "Friday", "Saturday", "Sunday"],
             }

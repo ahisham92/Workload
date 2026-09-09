@@ -29,7 +29,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import config as cfg
+from . import config as cfg, progress, tasks as task_sheet
 from .metrics import TimesheetIndex, is_proposal_code, project_rows
 from .workbook import WorkloadWorkbook, iso
 from .xlsx_io import col_to_index, index_to_col
@@ -206,6 +206,7 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
     capacity = _capacity(wb, period, as_at)
     team = _team_totals(projects, capacity, period, as_at)
     per_engineer = _per_engineer(projects, engineers, capacity, wb, index, period)
+    _add_rework(per_engineer, wb, engineers)
     report = ReportSet(
         period=period, as_at=as_at, hours_per_mm=hours_per_mm,
         engineers=engineers, projects=projects, team=team,
@@ -416,6 +417,28 @@ def _team_totals(projects, capacity, period, as_at) -> Dict[str, Any]:
         "projects_not_started": sum(1 for p in live if p["status"] == "Not Started"),
         "projects_in_scope": sum(1 for p in live if p["in_scope"]),
     }
+
+
+def _add_rework(per_engineer: Dict[str, Dict[str, Any]], wb, engineers) -> None:
+    """How much rework each person's submissions caused.
+
+    Hours say how much was done; they never say how much of it had to be done
+    again. A deliverable that came back Code C three times cost the same hours
+    as one approved first time and is not the same piece of work, and this is
+    the only number in the KPIs that knows the difference.
+    """
+    try:
+        stats = progress.rework(task_sheet.read(wb.raw), engineers)
+    except Exception:                       # pragma: no cover - a workbook
+        return                              # without a Tasks sheet
+    for name, entry in stats.items():
+        if name in per_engineer:
+            per_engineer[name].update({
+                "submissions": entry["submissions"],
+                "revisions": entry["revisions"],
+                "revisions_per_submission": entry["revisions_per_submission"],
+                "first_time_right": entry["first_time_right"],
+            })
 
 
 def _per_engineer(projects, engineers, capacity, wb, index, period
