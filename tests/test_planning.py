@@ -12,8 +12,8 @@ import shutil
 
 import pytest
 
-from workload_app import (derive, drawings, needs, people, planner, storage,
-                          submissions)
+from workload_app import (derive, drawings, holidays, needs, people, planner,
+                          storage, submissions)
 from workload_app.service import WorkloadService
 
 openpyxl = pytest.importorskip("openpyxl")
@@ -365,6 +365,55 @@ class TestTimeAway:
                               "end": "2026-10-08"})
         made = unit.add_absence({"person": "Osama", "start": "2026-10-08"})
         assert unit.remove_absence(made["id"])["away"] == []
+
+
+class TestPublicHolidays:
+    def test_the_dates_are_built_in(self):
+        named = {h["date"]: h["name"] for h in holidays.for_year("EG", 2026)}
+        assert named["2026-10-06"] == "Armed Forces Day"
+        assert named["2026-04-13"] == "Sham el-Nessim"        # Orthodox Easter Monday
+        assert named["2026-03-20"] == "Eid al-Fitr"
+        uk = {h["date"] for h in holidays.for_year("GB", 2026)}
+        assert {"2026-04-03", "2026-04-06", "2026-08-31", "2026-12-28"} <= uk
+
+    def test_chosen_once_for_the_unit_and_kept_off_the_plan(self, unit):
+        assert unit.holidays()["unit"] is None
+        unit.save_holidays({"unit": "AE"})
+        day = unit.day_plan({"date": ["2026-12-02"]})["days"][0]
+        assert not day["working_day"]
+        away = unit.day_plan({})["away"]
+        national = next(a for a in away if a["note"] == "National Day")
+        assert (national["start"], national["end"]) == ("2026-12-02", "2026-12-03")
+
+    def test_a_team_elsewhere_keeps_its_own(self, unit):
+        coastal = next(t for t in unit.store.teams() if t["name"] == "COASTAL")
+        unit.save_holidays({"unit": "EG", "teams": {coastal["id"]: "AE"}})
+        dec = unit.day_plan({"date": ["2026-12-02"]})["days"][0]
+        assert dec["working_day"]
+        assert person(dec, "Mariam")["away"] and not person(dec, "Osama")["away"]
+        jan = unit.day_plan({"date": ["2027-01-07"]})["days"][0]
+        assert person(jan, "Osama")["away"] and not person(jan, "Mariam")["away"]
+
+    def test_the_country_s_week_comes_with_it_when_asked(self, unit):
+        unit.save_holidays({"unit": "EG", "use_week": True})
+        assert sorted(unit.workbook.task_settings()["work_days"]) == [0, 1, 2, 3, 6]
+        assert not unit.holidays()["week_differs"]
+
+    def test_a_day_announced_differently_is_taken_off_or_added(self, unit):
+        unit.save_holidays({"unit": "AE", "skip": ["2026-12-02"]})
+        assert unit.day_plan({"date": ["2026-12-02"]})["days"][0]["working_day"]
+        unit.save_holidays({"restore": True})
+        assert not unit.day_plan({"date": ["2026-12-02"]})["days"][0]["working_day"]
+
+    def test_a_city_in_the_unit_s_name_is_a_guess_to_confirm(self, unit):
+        unit.unit = {"name": "Marine Structures Cairo"}
+        view = unit.holidays()
+        assert view["unit"] == "EG" and not view["chosen"]
+
+    def test_an_unknown_country_is_refused(self, unit):
+        from workload_app.workbook import ValidationError
+        with pytest.raises(ValidationError):
+            unit.save_holidays({"unit": "XX"})
 
 
 class TestRequestsAsTheyComeIn:
