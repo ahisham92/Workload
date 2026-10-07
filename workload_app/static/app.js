@@ -1,4 +1,4 @@
-/* Workload — single page front end.
+/* Selecao+ (Workload) — single page front end.
  * The server owns every workbook rule; this file renders state and posts changes.
  */
 'use strict';
@@ -1130,6 +1130,7 @@ function renderOverview() {
       el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
       el('div', { class: 'sub' }, sub))));
 
+  renderFormation(report);
   renderHeroes(report);
   renderOverviewTrend(data, report);
 
@@ -1199,6 +1200,83 @@ function renderHeroes(report) {
                 .sort((a, b) => b[1] - a[1])
                 .map(([name, count]) => `${name} ${count}`).join(' · '))))
       : null);
+}
+
+/** "Ahmed" as "A", "Nour El-Din" as "NE". */
+function initials(name) {
+  const words = String(name || '').split(/[\s-]+/).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+}
+
+/** The team in formation: one row per grade, the most senior at the back,
+ *  each person ringed by how much of their capacity the period used.
+ *  Choosing someone opens their own report. */
+function renderFormation(report) {
+  const host = $('#formation');
+  const names = report.engineers || [];
+  if (!names.length) { setChildren(host); host.hidden = true; return; }
+  host.hidden = false;
+  const people = new Map((state.people || []).map((p) => [p.name, p]));
+  const gradeOf = (name) => (people.get(name) || {}).grade || '';
+  const grades = GRADE_ORDER.filter((g) => names.some((n) => gradeOf(n) === g));
+  const ungraded = names.filter((n) => !GRADE_ORDER.includes(gradeOf(n)));
+  const labelOf = (g) => {
+    const someone = names.find((n) => gradeOf(n) === g);
+    return (people.get(someone) || {}).grade_label || g;
+  };
+  const teamOf = (name) => (people.get(name) || {}).team_name || '';
+  const byTeam = (a, b) => teamOf(a).localeCompare(teamOf(b)) || a.localeCompare(b);
+
+  const node = (name) => {
+    const e = report.per_engineer[name] || {};
+    const p = people.get(name) || {};
+    const util = e.utilisation;
+    const toneName = tone.utilisation(util);
+    const esc = charts.escape;
+    return {
+      id: name, name, initials: initials(name), color: engineerColor(name),
+      value: util, tone: toneName, group: p.team_id || null,
+      caption: util === null || util === undefined ? '—' : `${Math.round(util * 100)}%`,
+      tip: `<b>${esc(name)}</b><br>${esc([p.grade_label, p.team_name].filter(Boolean).join(' · ') || 'No grade or team yet')}`
+        + `<br>${fmt.pct(util)} of capacity · CPI ${fmt.ratio(e.cpi)}`
+        + `<br>${num(e.actual_mm)} MM booked · ${num(e.earned_mm)} MM earned`,
+    };
+  };
+  const rows = grades.map((g) => ({
+    label: labelOf(g),
+    nodes: names.filter((n) => gradeOf(n) === g).sort(byTeam).map(node),
+  }));
+  if (ungraded.length) {
+    rows.push({ label: grades.length ? 'No grade' : '', nodes: ungraded.sort(byTeam).map(node) });
+  }
+  const teams = [];
+  for (const p of state.people || []) {
+    if (p.team_id && names.includes(p.name) && !teams.some((t) => t.id === p.team_id)) {
+      teams.push({ id: p.team_id, label: p.team_name });
+    }
+  }
+
+  setChildren(host,
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, 'Team formation'),
+        el('p', { class: 'muted' },
+          'Everyone in the unit by grade, the most senior at the back. The ring is how much '
+          + `of their capacity ${periodName(report.period)} used; teammates are joined. `
+          + 'Choose someone to open their own report.')),
+      el('span', { class: 'legend formation-key' },
+        ...[['ok', 'on plan'], ['warn', 'light'], ['bad', 'over, or far under']].map(
+          ([key, label]) => el('span', { class: 'legend-item' },
+            el('span', { class: `swatch ring-swatch ring-${key}` }), label)))),
+    charts.formation(rows, {
+      groups: teams,
+      onPick: (picked) => {
+        state.reportView = 'member';
+        state.reportMember = picked.id;
+        switchView('reports');
+        renderReports();
+      },
+    }));
 }
 
 /** "2026-03" as "Mar 26", short enough to sit under a column. */
@@ -2303,15 +2381,20 @@ async function refreshAll() {
   if (!status.open) { showShell(false); await renderChooser(); return; }
 
   const yearParam = state.year === null ? 'all' : state.year;
-  const [overview, projects] = await Promise.all([
+  const [overview, projects, people] = await Promise.all([
     api(`/api/overview?year=${yearParam}`),
     api('/api/projects'),
+    // Grades and teams, for the formation on the Overview. Without them the
+    // team still shows, in one row.
+    api('/api/people').catch(() => ({ people: [] })),
   ]);
   state.overview = overview;
+  state.people = people.people || [];
   state.projects = projects.projects;
   state.projectMetrics = projects.metrics;
 
-  $('#unit-title').textContent = status.unit ? status.unit.name : 'Workload';
+  $('#unit-title').textContent = status.unit ? status.unit.name : 'Selecao+';
+  document.title = status.unit ? `${status.unit.name} — Selecao+` : 'Selecao+';
   // The file lives on the server now, so its path is nobody's business but
   // the administrator's; what a person needs is which unit they are in.
   $('#workbook-path').textContent =
@@ -2554,7 +2637,7 @@ function renderReports() {
 
   setChildren($('#report-header'), 
     el('div', { class: 'print-head' },
-      el('h1', {}, data.unit ? data.unit.name : 'Workload'),
+      el('h1', {}, data.unit ? data.unit.name : 'Selecao+'),
       el('p', {}, `${REPORT_VIEWS.find(([k]) => k === state.reportView)[1]}`
         + ` · ${data.period.label} · as at ${data.as_at}`)));
 
@@ -3106,11 +3189,11 @@ function openSiteAccessModal(person) {
   if (!free.length) {
     openPanel(`Give ${person.short_name} access`, el('div', {},
       el('p', {}, people.length
-        ? 'Everybody who can open Workload on this site already has access to '
+        ? 'Everybody who can open Selecao+ on this site already has access to '
           + 'this unit as somebody.'
-        : 'Nobody else on this site has been given Workload yet.'),
+        : 'Nobody else on this site has been given Selecao+ yet.'),
       el('p', { class: 'muted' },
-        'Ask the administrator to make them an account with Workload ticked. '
+        'Ask the administrator to make them an account with Selecao+ ticked. '
         + 'They will then be in this list, and need no password from you.')));
     return;
   }
@@ -3121,7 +3204,7 @@ function openSiteAccessModal(person) {
       options: free.map((p) => ({ value: p.id,
         label: p.name && p.login && p.name !== p.login
           ? `${p.name} — ${p.login}` : (p.name || p.login) })),
-      hint: 'everyone who can open Workload on this site. They need no new '
+      hint: 'everyone who can open Selecao+ on this site. They need no new '
         + 'password: they sign in as they always do, and see their own figures '
         + 'in this unit and nothing else.' },
   ], async () => {
