@@ -91,6 +91,85 @@ it together and the rework is a cost they carry together — and somebody who
 has submitted nothing scores `—` rather than perfect, because the absence of
 rework is not the same as the absence of submitting.
 
+## The Planner
+
+The everyday tab, and on a phone the second button on the bar. It is filled
+in by the app: the only thing anybody types is a request that came in.
+
+**Today** is everybody's day, hour by hour, laid out from what is already
+known: the requests that came in at the time they were given, the tasks dated
+that day (submission run-ups, meetings), and then each person's usual project
+work at the pace their newest two weeks of timesheets set. Whatever does not
+fit before the end of the working day shows as *over*. **Week** is the same,
+a column a day. **Share** sends the plan as plain text (or copies it), and
+**Print** prints it.
+
+**A request** is one line: what it is, roughly how long, when it is wanted,
+and a project if there is one. It goes to whoever doing that kind of work has
+the most room over the days until it is due, unless you pick somebody, and
+gets the first free time in their day from now on, after the requests they
+already have. It becomes a task of kind *Request*, so it is in the load, the
+task list and the staffing forecast like any other work, and it adds to the
+day rather than standing in for part of it.
+
+**Away** keeps people off the plan on days they are not in. Leave booked on a
+timesheet (a leave or holiday code, a half day or more) is read by itself,
+ahead or past; anything else is one line — who, from, to — or *Everybody* for
+a public holiday. Somebody away has an empty day, gets no requests, and is
+left out of the coming days and the staffing forecast for those days; their
+pace is read over the days they were in.
+
+**Next days** is each person's next few working days against a full load.
+**Hand over** part of somebody's work — a share of their time on a project, or
+a task — and every figure shows the effect before anything changes.
+**Suggest handovers** does it for you: like for like only (an engineer's work
+to an engineer, a draftsman's to a draftsman), to somebody who knows the
+project first, then somebody in the same team, never filling anyone past 90%.
+**Commit** makes it real: a task is reassigned, a share of a project is kept
+for those days and then lapses by itself.
+
+**Submissions** is the submissions plan, drafted by the app: a date for every
+deliverable not yet submitted. On a confirmed project it is the effort left to
+the *Submitted* step (80% of the credit) at the pace that phase is being
+worked. On one the timesheets set up and nobody has confirmed, progress is a
+placeholder, so it is the phase's first booking plus how long this unit's
+phases usually take. Tick, adjust, **Confirm**: the date goes on the
+deliverable and its run-up goes onto the task list, so it is in people's days.
+
+**More people** says, team by team and for engineers and draftsmen apart,
+when to ask for more people, how many, from when and for how long — and says
+outright when a team needs nobody. Each team's forecast work (confirmed
+projects' effort to complete spread to their end dates; unconfirmed ones at
+their recent pace; requests on top) is set against the people it has, week by
+week for twelve weeks. Short by half a person or more for a run of weeks is an
+ask, timed two weeks ahead so they arrive in time; a whole person spare for
+three weeks or more is room. The Overview carries the same alerts under
+*Staffing ahead*.
+
+## Teams and draftsmen
+
+One manager can run one team or several. When a unit's timesheets name more
+than one `CurrentUnitDesc`, each becomes a team and its people go into it, once
+— a move made on Resourcing afterwards is never undone by the next import.
+When every row names the same one, the unit is the team. Teams are the lanes
+of the formation on the Overview and the groups everywhere in the Planner.
+
+Draftsmen are a grade of their own (*Draftsman*, read from a `Grade` that says
+draft or CAD), and drafting is counted apart from engineering wherever
+capacity is: a team short of draftsmen is not helped by a spare engineer.
+
+## Drawings
+
+The one number no timesheet carries, typed once per deliverable in the
+project's deliverable table (the **Drawings** column). Everything else follows:
+**done** is the count times how far along the deliverable is, **left** is the
+rest, a person's drawings are their share of each deliverable, and **hours a
+drawing** is the unit's own rate, measured on confirmed projects only. The
+Projects register shows done of total, the Overview and the Planner show the
+unit's, each team's and each person's drawings, and the drawings left in
+somebody's hands move with the work when it is handed over. The counts live
+in the unit's database, not the workbook.
+
 ## Resourcing
 
 A head of department has teams under him, and the workbook has room for twelve

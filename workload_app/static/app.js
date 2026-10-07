@@ -436,7 +436,7 @@ function openAccountModal() {
    to disagree with them and needs the numbers to do it.
 */
 
-const GRADE_ORDER = ['senior', 'engineer', 'junior', 'bim'];
+const GRADE_ORDER = ['senior', 'engineer', 'junior', 'bim', 'drafter'];
 
 const RESOURCING_VIEWS = [['balance', 'Balance'], ['map', 'Map']];
 
@@ -1716,7 +1716,14 @@ const PROJECT_COLUMNS = [
   { key: 'cpi', label: 'CPI', num: true, of: (p, m) => m.cpi },
   { key: 'deliverables', label: 'Deliverables', num: true,
     of: (p, m) => m.deliverables || 0 },
+  { key: 'drawings', label: 'Drawings', num: true,
+    of: (p) => (drawingsOf(p.number) || {}).total ?? null },
 ];
+
+/** A project's drawings, where any of its deliverables has a count. */
+function drawingsOf(number) {
+  return state.projectDrawings ? state.projectDrawings.get(number) : null;
+}
 
 /** Sort the filtered rows in place. Nulls sink, whichever way the sort runs. */
 function sortProjects(rows, byNumber) {
@@ -1802,7 +1809,7 @@ function renderProjects() {
       el('th', {}, ''),
     ])),
     el('tbody', {}, rows.length === 0
-      ? el('tr', {}, el('td', { colspan: 12 },
+      ? el('tr', {}, el('td', { colspan: 13 },
           el('div', { class: 'empty' }, 'No projects match.')))
       : rows.map((project, position) => {
         const m = byNumber.get(project.number) || {};
@@ -1833,6 +1840,12 @@ function renderProjects() {
                     title: `Phase weights total ${fmt.pct(m.weight_total)}, not 100%` },
                     `${m.deliverables} · ${fmt.pct(m.weight_total)}`))
             : el('span', { class: 'pill pill-warn' }, 'none yet')),
+          el('td', { class: 'num', 'data-sort': String((drawingsOf(project.number) || {}).total ?? '') },
+            drawingsOf(project.number)
+              ? el('span', { title: `${fmt.int(Math.round(drawingsOf(project.number).done))} done, `
+                  + `${fmt.int(Math.round(drawingsOf(project.number).left))} left` },
+                `${fmt.int(Math.round(drawingsOf(project.number).done))} / ${fmt.int(drawingsOf(project.number).total)}`)
+              : el('span', { class: 'muted' }, '—')),
           el('td', {}, el('span', { class: 'chevron' }, '›')));
       })));
 }
@@ -2013,9 +2026,9 @@ function renderDetail() {
         ? el('div', { class: 'table-wrap' }, el('table', { class: 'edit-table' },
             el('thead', {}, el('tr', {},
               ['#', 'Deliverable / phase', 'Type', 'Step reached', 'Weight %',
-               'TS Phase', ...state.reference.engineers.map((e) => `${e.short_name} %`),
+               'TS Phase', 'Drawings', ...state.reference.engineers.map((e) => `${e.short_name} %`),
                'Status date', ''].map((h, i) => el('th', {
-                class: [0, 4, 5, 6, 7, 8].includes(i) ? 'num' : '',
+                class: (i === 0 || (i >= 4 && i < 7 + state.reference.engineers.length)) ? 'num' : '',
               }, h)))),
             el('tbody', {}, draft.deliverables.map(deliverableRow))))
         : el('div', { class: 'empty' },
@@ -2142,6 +2155,7 @@ function deliverableRow(d, position) {
     el('td', { class: 'num' }, num('phase_weight', {
       percent: true, step: '0.1', max: '100' })),
     el('td', { class: 'num' }, num('ts_phase')),
+    el('td', { class: 'num', title: 'How many drawings this deliverable is' }, num('drawings')),
     ...state.reference.engineers.map((e) => el('td', { class: 'num' },
       shareInput(e.short_name))),
     el('td', {}, el('input', {
@@ -2414,6 +2428,7 @@ async function refreshAll() {
   state.people = people.people || [];
   state.projects = projects.projects;
   state.projectMetrics = projects.metrics;
+  state.projectDrawings = new Map((projects.drawings || []).map((d) => [d.number, d]));
 
   $('#unit-title').textContent = status.unit ? status.unit.name : 'Selecao+';
   document.title = status.unit ? `${status.unit.name} — Selecao+` : 'Selecao+';
@@ -2431,6 +2446,7 @@ async function refreshAll() {
   await setupReports();
   if (state.team) await loadTeam();
   if (state.tasks) await loadTasks();
+  if (window.planner) window.planner.afterRefresh();
 }
 
 async function setupReports() {
@@ -2461,6 +2477,7 @@ function switchView(view) {
   if (view === 'tasks' && !state.tasks) loadTasks();
   if (view === 'admin') loadAdmin();
   if (view === 'resourcing') loadResourcing();
+  if (view === 'planner' && window.planner) window.planner.load();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
