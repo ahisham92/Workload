@@ -8,6 +8,13 @@ Passwords are stored as PBKDF2-HMAC-SHA256 with a per-account salt, and the
 iteration count is stored beside each hash so it can be raised later without
 invalidating anyone.  Session tokens are random, and only their SHA-256 digest
 is stored -- a stolen database is not a set of usable cookies.
+
+**Inside another site.**  When Workload is one tab of a larger site, that site
+signs people in and tells Workload who is asking.  An account then carries the
+site's own identifier for that person (``site_key``), and that -- not a
+username and password typed here -- is what finds it.  It is the identifier
+rather than the name or address they sign in with, because those can be
+changed and the units have to stay with the person.  See ``site_user``.
 """
 
 from __future__ import annotations
@@ -67,6 +74,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- sign anybody in; see secretbox.py.
     password_seal TEXT,
     password_at   TEXT,
+    -- Who this is on the surrounding site, when Workload is one tab of a
+    -- larger site and that site does the signing in: the site's own
+    -- identifier for the person, and what they sign in there with (shown,
+    -- never matched on -- it can change).
+    site_key      TEXT,
+    site_login    TEXT,
     created_at    TEXT NOT NULL,
     last_seen     TEXT
 );
@@ -136,6 +149,13 @@ class Accounts:
             db.execute("ALTER TABLE users ADD COLUMN password_seal TEXT")
         if "password_at" not in columns:
             db.execute("ALTER TABLE users ADD COLUMN password_at TEXT")
+        if "site_key" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN site_key TEXT")
+        if "site_login" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN site_login TEXT")
+        # One person on the site is one account here, never two.
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_site_key "
+                   "ON users(site_key) WHERE site_key IS NOT NULL")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
@@ -260,6 +280,121 @@ class Accounts:
             "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND id != ?",
             (user_id,),
         ).fetchone()["n"]
+
+    # -- arriving from the site Workload is a tab of -----------------------
+    #
+    # The site has already signed the person in.  Nothing below checks a
+    # password: it only answers "which account here is this person?", and the
+    # caller is trusted to pass an identifier the site itself vouched for.
+
+    def site_user(self, key: Any) -> Optional[Dict[str, Any]]:
+        key = clean_site_key(key)
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM users WHERE site_key = ?",
+                             (key,)).fetchone()
+        return _public_user(row) if row else None
+
+    def create_site_user(self, key: Any, *, login: str = "",
+                         display_name: str = "",
+                         role: str = ROLE_MANAGER) -> Dict[str, Any]:
+        """An account for somebody the site signs in.
+
+        It has no password anybody knows -- a random one is hashed and thrown
+        away, and no readable copy is kept -- so it can only ever be reached
+        through the site.
+        """
+        key = clean_site_key(key)
+        login = str(login or "").strip()
+        if role not in ROLES:
+            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        salt = secrets.token_bytes(SALT_BYTES)
+        digest = _hash(secrets.token_urlsafe(TOKEN_BYTES), salt, ITERATIONS)
+        try:
+            with self._connect() as db:
+                cursor = db.execute(
+                    "INSERT INTO users (username, display_name, password_hash, "
+                    "salt, iterations, is_admin, role, created_at, site_key, "
+                    "site_login) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+                    (self._free_username(db, login or display_name),
+                     (display_name or "").strip() or login.split("@")[0] or "",
+                     digest, salt, ITERATIONS, role, now(), key, login or None),
+                )
+                user_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            raise AccountError("That person already has an account here.")
+        return self.user(user_id)                      # type: ignore[return-value]
+
+    @staticmethod
+    def _free_username(db: sqlite3.Connection, wanted: str) -> str:
+        """A username nobody has, made from what somebody signs in with."""
+        stem = re.sub(r"[^a-z0-9._-]", "", str(wanted).split("@")[0].lower())
+        stem = stem.lstrip("._-")[:24]
+        if len(stem) < 2:
+            stem = "user"
+        candidate, n = stem, 1
+        while db.execute("SELECT 1 FROM users WHERE username = ?",
+                         (candidate,)).fetchone():
+            n += 1
+            candidate = f"{stem}-{n}"
+        return candidate
+
+    def link_site(self, user_id: int, key: Any,
+                  login: Optional[str] = None) -> Dict[str, Any]:
+        """Say who on the site an account belongs to; ``None`` unlinks it."""
+        key = clean_site_key(key) if key not in (None, "") else None
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM users WHERE id = ?",
+                          (user_id,)).fetchone() is None:
+                raise AccountError("That account no longer exists.")
+            if key:
+                taken = db.execute(
+                    "SELECT username FROM users WHERE site_key = ? AND id != ?",
+                    (key, user_id)).fetchone()
+                if taken:
+                    raise AccountError(
+                        f"That sign-in is already linked to the account "
+                        f"{taken['username']}.")
+            db.execute("UPDATE users SET site_key = ?, site_login = ? WHERE id = ?",
+                       (key, (str(login or "").strip() or None) if key else None,
+                        user_id))
+        return self.user(user_id)                      # type: ignore[return-value]
+
+    def set_site_login(self, user_id: int, login: str) -> None:
+        """Keep what is shown in step with what they sign in with now."""
+        with self._connect() as db:
+            db.execute("UPDATE users SET site_login = ? WHERE id = ?",
+                       (str(login or "").strip() or None, user_id))
+
+    def set_role(self, user_id: int, role: str) -> None:
+        if role not in ROLES:
+            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        with self._connect() as db:
+            db.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+
+    def set_display_name(self, user_id: int, display_name: str) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE users SET display_name = ? WHERE id = ?",
+                       ((display_name or "").strip(), user_id))
+
+    def seen(self, user_id: int) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE users SET last_seen = ? WHERE id = ?",
+                       (now(), user_id))
+
+    def remove_if_empty(self, user_id: int) -> bool:
+        """Delete an account that owns nothing and has been shown nothing."""
+        with self._connect() as db:
+            owns = db.execute("SELECT COUNT(*) AS n FROM units WHERE user_id = ?",
+                              (user_id,)).fetchone()["n"]
+            shown = db.execute(
+                "SELECT COUNT(*) AS n FROM memberships WHERE user_id = ?",
+                (user_id,)).fetchone()["n"]
+            admin = db.execute("SELECT is_admin FROM users WHERE id = ?",
+                               (user_id,)).fetchone()
+            if owns or shown or admin is None or admin["is_admin"]:
+                return False
+            db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return True
 
     # -- logging in ------------------------------------------------------
     def verify(self, username: str, password: str) -> Optional[Dict[str, Any]]:
@@ -446,7 +581,7 @@ class Accounts:
         with self._connect() as db:
             rows = db.execute(
                 "SELECT m.engineer, m.created_at, u.id AS user_id, u.username, "
-                "u.display_name, u.last_seen "
+                "u.display_name, u.last_seen, u.site_key, u.site_login "
                 "FROM memberships m JOIN users u ON u.id = m.user_id "
                 "WHERE m.unit_id = ? ORDER BY u.username",
                 (unit_id,),
@@ -490,6 +625,9 @@ def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
         "password_stored": bool("password_seal" in row.keys()
                                 and row["password_seal"]),
         "password_at": row["password_at"] if "password_at" in row.keys() else None,
+        # Who this is on the surrounding site, if Workload is a tab of one.
+        "site_key": row["site_key"] if "site_key" in row.keys() else None,
+        "site_login": row["site_login"] if "site_login" in row.keys() else None,
     }
 
 
@@ -501,6 +639,18 @@ def clean_username(username: str) -> str:
             "underscore, starting with a letter or digit."
         )
     return name
+
+
+def clean_site_key(key: Any) -> str:
+    """The site's identifier for a person, as text.
+
+    Whatever the site uses -- a number, usually.  It is only ever compared
+    for equality, so the one rule is that it is something.
+    """
+    text = unicodedata.normalize("NFKC", str(key if key is not None else "")).strip()
+    if not text or len(text) > 190:
+        raise AccountError("That is not somebody the site knows.")
+    return text
 
 
 def check_password(password: str, username: str = "") -> None:
