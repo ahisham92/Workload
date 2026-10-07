@@ -15,13 +15,14 @@ import uuid
 from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Sequence, Union
 
-from . import (config as cfg, library, metrics, people as people_module,
+from . import (config as cfg, derive, library, metrics, people as people_module,
                progress, reports, tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
-from .workbook import WorkloadWorkbook, iso
+from .workbook import ValidationError, WorkloadWorkbook, iso
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
@@ -73,7 +74,7 @@ class WorkloadService:
         self.autosave = autosave
         self._lock = threading.RLock()
         self._wb: Optional[WorkloadWorkbook] = None
-        self._staged: Dict[str, ParsedTimesheet] = {}
+        self._staged: Dict[str, Any] = {}
         self._unlocked = False
         self._stack_raised_to: Optional[int] = None
         self._file_stamp = None
@@ -387,8 +388,13 @@ class WorkloadService:
                                        body: Dict[str, Any]) -> Dict[str, Any]:
         """Save a project and its whole deliverable set in one go."""
         with self._lock:
+            project = dict(body.get("project", {}))
+            # Saving a project the timesheets set up is somebody confirming it.
+            if derive.needs_confirming(project.get("notes") or ""):
+                project["notes"] = (project["notes"] or "").replace(
+                    derive.TO_CONFIRM, "").strip()
             result = self.workbook.save_project_with_deliverables(
-                number, body.get("project", {}), body.get("deliverables", []))
+                number, project, body.get("deliverables", []))
             result["save"] = self._commit()
             return result
 
@@ -475,7 +481,7 @@ class WorkloadService:
     def apply_timesheet(self, token: str, mode: str) -> Dict[str, Any]:
         with self._lock:
             parsed = self._staged.pop(token, None)
-            if parsed is None:
+            if not isinstance(parsed, ParsedTimesheet):
                 raise ApiError(
                     HTTPStatus.NOT_FOUND,
                     "That import has expired. Upload the export again.",
@@ -513,6 +519,266 @@ class WorkloadService:
             result["save"] = self._commit()
             result["data_check"] = wb.data_check(store=store)
             return result
+
+    # -- timesheets as the only input ------------------------------------
+    #
+    # The routine above wants the engineer chosen first and the projects in
+    # the register before their hours will count. These two need neither: the
+    # exports say who booked and to what, so the people and the projects are
+    # read out of them, and only the hours have to be supplied at all.
+
+    def stage_exports(self, files: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Read any number of exports, for anyone, and say what they will do."""
+        with self._lock:
+            wb = self.workbook
+            if not files:
+                raise ApiError(HTTPStatus.BAD_REQUEST,
+                               "Choose at least one timesheet export.")
+            headers = wb.timesheet_headers(next(iter(wb.ts_sheets())))
+            parsed: List[ParsedTimesheet] = []
+            errors: List[str] = []
+            warnings: List[str] = []
+            for item in files:
+                filename = str(item.get("filename") or "export.xlsx")
+                data = _decode(item.get("content_base64"))
+                try:
+                    result = timesheets.parse("", filename, data, headers)
+                except timesheets.ImportError_ as error:
+                    errors.append(f"{filename}: {error}")
+                    continue
+                errors.extend(f"{filename}: {m}" for m in result.errors)
+                # Unknown job numbers are not a problem here: they are the
+                # projects this import is about to set up.
+                warnings.extend(
+                    f"{filename}: {m}" for m in result.warnings
+                    if not m.startswith("Job numbers charged but not"))
+                parsed.append(result)
+
+            records = [r for p in parsed if p.ok for r in p.records()]
+            if not records and not errors:
+                errors.append("None of the files held any timesheet rows.")
+            people = self._people_in(records)
+            for record in records:
+                record["engineer"] = people[record["full_name"]]["name"]
+
+            plan = self._plan(records)
+            token = uuid.uuid4().hex
+            self._staged[token] = {"records": records, "people": people,
+                                   "files": [p.source_name for p in parsed]}
+            dates = [r["date"] for r in records if r.get("date")]
+            return {
+                "token": token,
+                "files": [p.source_name for p in parsed],
+                "errors": errors,
+                "warnings": warnings,
+                "rows": len(records),
+                "hours": round(sum(r["hours"] for r in records), 2),
+                "first_date": min(dates).isoformat() if dates else None,
+                "last_date": max(dates).isoformat() if dates else None,
+                "unit_name": derive.unit_name(records),
+                "people": sorted((
+                    {"full_name": full, **info,
+                     "rows": sum(1 for r in records if r["full_name"] == full),
+                     "hours": round(sum(r["hours"] for r in records
+                                        if r["full_name"] == full), 2)}
+                    for full, info in people.items()),
+                    key=lambda p: -p["hours"]),
+                "new_projects": derive.describe(plan["fits"]),
+                "projects_left_out": derive.describe(plan["left_out"]),
+            }
+
+    def apply_exports(self, token: str, mode: str = "replace") -> Dict[str, Any]:
+        """Write staged exports: the people, their rows, then the projects."""
+        with self._lock:
+            staged = self._staged.pop(token, None)
+            if not isinstance(staged, dict):
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               "That import has expired. Choose the files again.")
+            if mode not in {"append", "replace"}:
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    "Mode must be 'replace' (the monthly routine) or 'append'.")
+            wb = self.workbook
+            store = self.store
+            # Grades only for people the establishment does not know yet, so
+            # a grade somebody set by hand is never undone by an import.
+            graded = {p["name"] for p in store.people()}
+            people_added = self._set_up_people(staged["people"])
+
+            by_person: Dict[str, List[Dict[str, Any]]] = {}
+            for record in staged["records"]:
+                by_person.setdefault(record["engineer"], []).append(record)
+            written = 0
+            for person, rows in by_person.items():
+                written += (store.append(person, rows) if mode == "append"
+                            else store.replace(person, rows))
+
+            for person, title in derive.latest_by_person(
+                    staged["records"], "grade").items():
+                grade = derive.grade_for(title)
+                if grade and person not in graded:
+                    store.save_person(person, grade=grade)
+
+            projects = self._add_derived_projects()
+            result = {
+                "rows_written": written,
+                "rows_in_unit": store.count(),
+                "mode": mode,
+                "people": sorted(by_person),
+                "people_added": people_added,
+                **projects,
+            }
+            result["save"] = self._commit()
+            result["data_check"] = wb.data_check(store=store)
+            return result
+
+    def import_exports(self, files: Sequence[Dict[str, Any]],
+                       mode: str = "replace") -> Dict[str, Any]:
+        """Stage and write in one go, for a unit being set up from scratch."""
+        staged = self.stage_exports(files)
+        if staged["errors"]:
+            self._staged.pop(staged["token"], None)
+            raise ApiError(HTTPStatus.BAD_REQUEST,
+                           "Those files could not be read as timesheet exports.",
+                           staged["errors"])
+        result = self.apply_exports(staged["token"], mode)
+        result["staged"] = staged
+        return result
+
+    def sync_projects(self) -> Dict[str, Any]:
+        """Add any project the timesheets already held imply, on request."""
+        with self._lock:
+            result = self._add_derived_projects()
+            result["save"] = self._commit()
+            return result
+
+    def _people_in(self, records: Sequence[Dict[str, Any]]
+                   ) -> Dict[str, Dict[str, Any]]:
+        """Who each full name in the rows is, in this unit.
+
+        Somebody already on the team is matched by their Work Calendar
+        pattern, as the per-engineer import always did; anybody else gets a
+        short name of their own and is marked new.
+        """
+        wb = self.workbook
+        engineers = wb.engineers()
+        matchers = [(e.short_name, timesheets._wildcard(e.pattern))
+                    for e in engineers if e.pattern]
+        established = set(self.store.people_with_rows()) | {
+            p["name"] for p in self.store.people()}
+        # Past the workbook's twelve, a person has no pattern to match, so the
+        # rows they already have say who they are.
+        seen = self.store.names_by_full_name()
+        out: Dict[str, Dict[str, Any]] = {}
+        unknown: List[str] = []
+        for full in dict.fromkeys(r["full_name"] for r in records):
+            hit = next((short for short, rx in matchers if rx.match(full)), None)
+            if hit is None:
+                hit = seen.get(full) or (full if full in established else None)
+            if hit is None:
+                unknown.append(full)
+            else:
+                out[full] = {"name": hit, "new": False}
+        taken = {e.short_name for e in engineers
+                 if not _placeholder(e.short_name)} | established
+        for full, short in derive.short_names(unknown, taken).items():
+            out[full] = {"name": short, "new": True}
+        return out
+
+    def _set_up_people(self, people: Dict[str, Dict[str, Any]]) -> List[str]:
+        """Give everyone new a place in the workbook, while it has room.
+
+        The blank template's placeholders -- Engineer 1, 2 and 3 -- are taken
+        over first, so a unit set up from timesheets has its own people in
+        them rather than three empty names beside them.
+        """
+        wb = self.workbook
+        holding = set(self.store.people_with_rows())
+        spare = [e.short_name for e in wb.engineers()
+                 if _placeholder(e.short_name) and e.short_name not in holding]
+        added: List[str] = []
+        for full, info in people.items():
+            if not info["new"]:
+                continue
+            # A full month, every year: what the template gives a placeholder,
+            # and what the timesheets cannot say otherwise.
+            body = {"short_name": info["name"], "pattern": full,
+                    "available_hours": wb.hours_per_man_month(),
+                    "availability": {year: 1.0 for year in
+                                     wb._availability_years().values()}}
+            if spare:
+                wb.update_engineer(spare.pop(0), body)
+            elif len(wb.engineers()) < cfg.MAX_ENGINEERS:
+                wb.add_engineer(body)
+            # Past the workbook's twelve, a person is on the roster and in
+            # Resourcing from their rows alone, which is all those need.
+            added.append(info["name"])
+        # Placeholders still unused once real people are in: remove them, so
+        # nobody is ranked against "Engineer 3".
+        real = [e for e in wb.engineers() if not _placeholder(e.short_name)]
+        if real:
+            for name in spare:
+                wb.remove_engineer(name)
+        return added
+
+    def _plan(self, records: Sequence[Dict[str, Any]]) -> Dict[str, List]:
+        """The projects these rows add, and which would not fit."""
+        wb = self.workbook
+        rows = list(records)
+        staged_people = {r["engineer"] for r in rows}
+        # Hours already held count too, so a phase's split and weight reflect
+        # everybody who booked it, not only this batch.
+        rows += [r for r in self.store.all_rows()
+                 if r["engineer"] not in staged_people]
+        engineers = [e.short_name for e in wb.engineers()
+                     if not _placeholder(e.short_name)] or []
+        engineers = list(dict.fromkeys(
+            engineers + sorted({r["engineer"] for r in rows})))[:cfg.MAX_ENGINEERS]
+        plans = derive.plan_projects(
+            rows,
+            existing=[p.number for p in wb.projects()],
+            engineers=engineers,
+            credit_steps=wb.reference()["credit_steps"],
+            hours_per_mm=wb.hours_per_man_month() or 0.0,
+        )
+        room_projects = derive.PROJECT_ROWS - len(wb.projects())
+        room_deliverables = derive.DELIVERABLE_ROWS - len(wb.deliverables())
+        fits, left_out = [], []
+        for plan in plans:
+            need = len(plan["deliverables"])
+            if room_projects >= 1 and room_deliverables >= need:
+                fits.append(plan)
+                room_projects -= 1
+                room_deliverables -= need
+            else:
+                left_out.append(plan)
+        return {"fits": fits, "left_out": left_out}
+
+    def _add_derived_projects(self) -> Dict[str, Any]:
+        wb = self.workbook
+        plan = self._plan([])
+        names = set(wb.engineer_names())
+        added, failed = [], []
+        for item in plan["fits"]:
+            deliverables = [
+                {**d, "shares": {k: v for k, v in d["shares"].items()
+                                 if k in names}}
+                for d in item["deliverables"]]
+            for d in deliverables:
+                if d["shares"] and abs(sum(d["shares"].values()) - 1) > 1e-4:
+                    d["shares"] = derive._split(d["shares"], list(d["shares"]))
+            try:
+                wb.save_project_with_deliverables(
+                    None, item["project"], deliverables)
+                added.append(item["project"]["number"])
+            except ValidationError as error:
+                failed.append({"number": item["project"]["number"],
+                               "errors": error.errors})
+        return {
+            "projects_added": added,
+            "projects_failed": failed,
+            "projects_left_out": [p["project"]["number"] for p in plan["left_out"]],
+        }
 
     # -- teams and people ------------------------------------------------
     #
@@ -771,6 +1037,29 @@ def _int(value: str) -> int:
         return int(value)
     except ValueError:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{value!r} is not a row number.")
+
+
+_PLACEHOLDER = re.compile(r"^Engineer \d+$")
+
+
+def _placeholder(name: str) -> bool:
+    """One of the blank template's stand-ins rather than a real person."""
+    return bool(_PLACEHOLDER.match(name or ""))
+
+
+def _decode(content: Any) -> bytes:
+    if not content:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "No file content was uploaded.")
+    try:
+        data = base64.b64decode(content)
+    except Exception:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "The upload was not valid base64.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ApiError(
+            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            f"That file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+        )
+    return data
 
 
 def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:

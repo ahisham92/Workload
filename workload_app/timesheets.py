@@ -35,6 +35,10 @@ def _normalise(header: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(header or "").lower())
 
 
+def _text(value: Any) -> str:
+    return " ".join(str(value).split()) if value not in (None, "") else ""
+
+
 class ImportError_(ValueError):
     """Raised when the uploaded file is not a timesheet export."""
 
@@ -85,7 +89,8 @@ class ParsedTimesheet:
         index = {_normalise(h): i for i, h in enumerate(self.headers) if h}
 
         def value(row, key, default=None):
-            position = index.get(_normalise(cfg.TS_KEY_FIELDS[key]))
+            header = cfg.TS_KEY_FIELDS.get(key) or cfg.TS_SETUP_FIELDS[key]
+            position = index.get(_normalise(header))
             return row[position] if position is not None and position < len(row) \
                 else default
 
@@ -110,6 +115,10 @@ class ParsedTimesheet:
                 "regular_hours": float(value(row, "regular_hours") or 0.0),
                 "overtime_hours": float(value(row, "overtime_hours") or 0.0),
                 "hours": float(value(row, "total_hours") or 0.0),
+                "deliverable": _text(value(row, "deliverable")),
+                "job_status": _text(value(row, "job_status")),
+                "grade": _text(value(row, "grade")),
+                "unit": _text(value(row, "unit")),
                 "source": self.source_name,
             })
         return out

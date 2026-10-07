@@ -228,17 +228,12 @@ async function renderChooser() {
           }, '⭳'),
           el('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
-            title: 'Put a workbook into this unit, keeping its name and access',
-            onclick: () => replaceUnit(unit),
-          }, '⭱'),
-          el('button', {
-            class: 'btn btn-ghost btn-sm', type: 'button',
             title: 'Delete this unit and its workbook',
             onclick: () => deleteUnit(unit),
           }, '✕')))))
       : el('p', { class: 'muted' },
-          'Start one below. A blank unit carries the whole model — project '
-          + 'types, rules of credit, the scorecard — with none of the data.'),
+          'Start one below from your team\'s timesheet exports. Everything '
+          + 'the app shows is worked out from them.'),
   ];
   if (state.site && !units.length) {
     // Somebody who used Workload at its own address has units there already,
@@ -271,34 +266,28 @@ async function openUnit(unit) {
 }
 
 async function newUnit() {
+  const files = [...$('#unit-timesheets').files];
+  if (!files.length) {
+    chooserError(['Choose your team\'s timesheet exports first.']);
+    return;
+  }
   const name = $('#unit-name').value.trim();
-  if (!name) { chooserError(['Give the unit a name first.']); return; }
   const button = $('#btn-new-unit');
   button.disabled = true;
-  try {
-    await api('/api/units', { method: 'POST', body: { name } });
-    await enterApp();
-  } catch (error) {
-    chooserError(error.errors || [error.message]);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function uploadUnit() {
-  const file = $('#unit-file').files[0];
-  if (!file) { chooserError(['Choose a workbook file first.']); return; }
-  const name = $('#unit-name').value.trim() || file.name.replace(/\.[^.]+$/, '');
-  const button = $('#btn-upload-unit');
-  button.disabled = true;
   chooserError([]);
+  setChildren($('#chooser-error'), el('p', { class: 'muted' },
+    el('span', { class: 'spin' }),
+    ` Reading ${files.length} export(s) and setting the unit up…`));
   try {
-    const base64 = await readFileBase64(file);
-    await api('/api/units/upload', {
+    const result = await api('/api/units/from-timesheets', {
       method: 'POST',
-      body: { name, filename: file.name, content_base64: base64 },
+      body: { name, files: await filesBase64(files) },
     });
+    const made = result.imported || {};
     await enterApp();
+    toast(`${fmt.int(made.rows_written)} rows, ${(made.people || []).length} people `
+      + `and ${(made.projects_added || []).length} projects read from the timesheets.`,
+      'ok');
   } catch (error) {
     chooserError(error.errors || [error.message]);
   } finally {
@@ -306,34 +295,11 @@ async function uploadUnit() {
   }
 }
 
-/** Restore a unit from a copy of its workbook, keeping the unit itself. */
-async function replaceUnit(unit) {
-  const picker = document.createElement('input');
-  picker.type = 'file';
-  picker.accept = '.xlsx,.xlsm';
-  picker.onchange = async () => {
-    const file = picker.files[0];
-    if (!file) return;
-    if (!window.confirm(
-      `Put "${file.name}" into the unit "${unit.name}"?\n\n`
-      + 'Everything the unit shows comes from the new file. What is there now '
-      + 'is kept as a backup first, so this can be undone.')) return;
-    chooserError([]);
-    try {
-      const base64 = await readFileBase64(file);
-      const result = await api(`/api/units/${unit.id}/replace`, {
-        method: 'POST',
-        body: { filename: file.name, content_base64: base64 },
-      });
-      const kept = (result.replaced || {}).previous_kept_as;
-      toast(`"${unit.name}" now holds ${file.name}.`
-        + (kept ? ` The old file is kept as ${kept}.` : ''), 'ok');
-      await enterApp();
-    } catch (error) {
-      chooserError(error.errors || [error.message]);
-    }
-  };
-  picker.click();
+/** Each chosen file as { filename, content_base64 }, for an upload. */
+async function filesBase64(files) {
+  return Promise.all(files.map(async (file) => ({
+    filename: file.name, content_base64: await readFileBase64(file),
+  })));
 }
 
 async function renameUnit(unit) {
@@ -1376,11 +1342,6 @@ function renderTimesheets() {
             `${e.rows_not_matching_pattern} row(s) belong to someone else`)
         : null)));
 
-  const select = $('#ts-engineer');
-  const chosen = select.value;
-  setChildren(select, ...Object.keys(check.per_engineer).map(
-    (name) => el('option', { value: name }, name)));
-  if (chosen) select.value = chosen;
 }
 
 function renderCapacity(check) {
@@ -1480,78 +1441,74 @@ async function extendCapacity(cap) {
 }
 
 async function checkTimesheetFile() {
-  const file = $('#ts-file').files[0];
-  const engineer = $('#ts-engineer').value;
-  if (!file) { toast('Choose an export file first.', 'bad'); return; }
+  const files = [...$('#ts-file').files];
+  if (!files.length) { toast('Choose one or more export files first.', 'bad'); return; }
 
   const result = $('#ts-result');
   setChildren(result, el('p', { class: 'muted' },
-    el('span', { class: 'spin' }), ` Reading ${file.name}…`));
-
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1]);
-    reader.onerror = () => reject(new Error('Could not read the file.'));
-    reader.readAsDataURL(file);
-  });
+    el('span', { class: 'spin' }), ` Reading ${files.length} file(s)…`));
 
   try {
-    const parsed = await api('/api/timesheets/stage', {
-      method: 'POST',
-      body: {
-        engineer, filename: file.name, content_base64: base64,
-        registered_only: $('#ts-registered').checked,
-      },
+    const staged = await api('/api/timesheets/exports/stage', {
+      method: 'POST', body: { files: await filesBase64(files) },
     });
-    state.stagedImport = parsed;
-    renderImportResult(parsed);
+    state.stagedImport = staged;
+    renderImportResult(staged);
   } catch (error) {
     setChildren(result, ...(error.errors || [error.message]).map(
       (message) => el('div', { class: 'msg msg-bad' }, message)));
   }
 }
 
-function renderImportResult(parsed) {
-  const s = parsed.summary || {};
-  const blocked = (parsed.errors || []).length > 0;
-  const rows = (parsed.preview || []).map((row) => el('tr', {},
-    el('td', { class: 'code' }, row.JobNumber ?? '—'),
-    el('td', {}, row.FullName ?? '—'),
-    el('td', {}, row.Date ?? '—'),
-    el('td', { class: 'num' }, row.Phase ?? '—'),
-    el('td', { class: 'num' }, fmt.hours(row.RegularHours)),
-    el('td', { class: 'num' }, fmt.hours(row.OvertimeHours)),
-    el('td', { class: 'num' }, fmt.hours(row.TotalHours))));
+function renderImportResult(staged) {
+  const blocked = (staged.errors || []).length > 0 || !staged.rows;
+  const newPeople = (staged.people || []).filter((p) => p.new);
+  const projects = staged.new_projects || [];
+  const leftOut = staged.projects_left_out || [];
 
-  setChildren($('#ts-result'), 
-    ...(parsed.errors || []).map((m) => el('div', { class: 'msg msg-bad' }, m)),
-    ...(parsed.warnings || []).map((m) => el('div', { class: 'msg msg-warn' }, m)),
+  setChildren($('#ts-result'),
+    ...(staged.errors || []).map((m) => el('div', { class: 'msg msg-bad' }, m)),
+    ...(staged.warnings || []).map((m) => el('div', { class: 'msg msg-warn' }, m)),
     el('div', { class: 'msg msg-info' },
-      el('strong', {}, `${fmt.int(parsed.row_count)} rows to import from ${parsed.source_name}. `),
-      `${parsed.mapped_columns} of 72 columns matched. `,
-      `${fmt.hours(s.hours)} hours, ${fmt.date(s.first_date)} → ${fmt.date(s.last_date)}`,
-      s.months && s.months.length ? ` across ${s.months.length} month(s).` : '.',
-      parsed.dropped_rows
-        ? ` ${fmt.int(parsed.dropped_rows)} unregistered row(s) left out.` : ''),
-    (s.people || []).length > 1
-      ? el('div', { class: 'msg msg-warn' },
-          `More than one person in this file: ${s.people.map((p) => `${p.name} (${p.rows})`).join(', ')}`)
-      : null,
+      el('strong', {}, `${fmt.int(staged.rows)} rows from ${staged.files.length} file(s). `),
+      `${fmt.hours(staged.hours)} hours, `
+      + `${fmt.date(staged.first_date)} → ${fmt.date(staged.last_date)}.`),
     el('div', { class: 'table-wrap' },
       el('table', {},
         el('thead', {}, el('tr', {},
-          ['Job number', 'Name', 'Date', 'Phase', 'Regular', 'Overtime', 'Total']
-            .map((h, i) => el('th', { class: i >= 3 ? 'num' : '' }, h)))),
-        el('tbody', {}, rows))),
+          ['Person', 'In the app as', 'Rows', 'Hours']
+            .map((h, i) => el('th', { class: i >= 2 ? 'num' : '' }, h)))),
+        el('tbody', {}, ...(staged.people || []).map((p) => el('tr', {},
+          el('td', {}, p.full_name),
+          el('td', {}, p.name, p.new
+            ? el('span', { class: 'pill pill-info', style: 'margin-left:6px' }, 'new')
+            : null),
+          el('td', { class: 'num' }, fmt.int(p.rows)),
+          el('td', { class: 'num' }, fmt.hours(p.hours))))))),
+    projects.length
+      ? el('div', { class: 'msg msg-info' },
+          el('strong', {}, `${projects.length} new project(s) will be set up: `),
+          projects.slice(0, 12).map((p) => p.number).join(', ')
+          + (projects.length > 12 ? `, and ${projects.length - 12} more` : '')
+          + '. Each is named by its number, with a budget of the effort spent so '
+          + 'far, until you confirm them on Projects.')
+      : null,
+    leftOut.length
+      ? el('div', { class: 'msg msg-warn' },
+          `${leftOut.length} older project(s) do not fit in the register and are `
+          + `left out: ${leftOut.map((p) => p.number).join(', ')}. Their hours `
+          + 'still count for the people who booked them.')
+      : null,
     el('p', { class: 'muted', style: 'margin-top:10px' },
-      `The sheet currently holds ${fmt.int(parsed.existing_rows)} rows. `
-      + 'Replacing is the monthly routine; appending would add '
-      + `${fmt.int(parsed.duplicate_rows_if_appended)} row(s) that already look present.`),
+      'Replacing is the monthly routine: each person in these files gets exactly '
+      + 'the rows the files hold for them. Anybody not in the files is left alone.'),
     el('div', { class: 'row', style: 'margin-bottom:0' },
       el('button', {
         class: 'btn btn-primary', type: 'button', disabled: blocked,
         onclick: () => applyImport('replace'),
-      }, `Replace all rows for ${parsed.engineer}`),
+      }, newPeople.length
+        ? `Import, adding ${newPeople.length} new ${newPeople.length === 1 ? 'person' : 'people'}`
+        : 'Replace their rows'),
       el('button', {
         class: 'btn', type: 'button', disabled: blocked,
         onclick: () => applyImport('append'),
@@ -1561,34 +1518,37 @@ function renderImportResult(parsed) {
 }
 
 async function applyImport(mode) {
-  const parsed = state.stagedImport;
-  if (!parsed) return;
-  const verb = mode === 'replace' ? 'Replace every row for' : 'Append these rows to';
+  const staged = state.stagedImport;
+  if (!staged) return;
+  const verb = mode === 'replace' ? 'Replace the rows of' : 'Append rows to';
   if (!window.confirm(
-    `${verb} ${parsed.engineer} with ${parsed.row_count.toLocaleString()} row(s)?`
+    `${verb} ${staged.people.map((p) => p.name).join(', ')} `
+    + `(${staged.rows.toLocaleString()} rows)?`
     + '\n\nA timestamped backup of the workbook is taken first.')) return;
   try {
-    const result = await api('/api/timesheets/apply', {
-      method: 'POST', body: { token: parsed.token, mode },
+    const result = await api('/api/timesheets/exports/apply', {
+      method: 'POST', body: { token: staged.token, mode },
     });
     markSaved(result.save);
     state.stagedImport = null;
     $('#ts-file').value = '';
-    const raised = result.capacity_raised;
+    const added = result.projects_added || [];
     setChildren($('#ts-result'),
       el('div', { class: 'msg msg-ok' },
-        `${result.engineer} now has ${fmt.int(result.rows)} rows. `
-        + `${result.data_check.verdict}`),
-      // The app raises the limit itself rather than letting rows land on the
-      // sheet where nothing reads them; it should say so when it does.
-      raised
+        `${fmt.int(result.rows_written)} rows imported for `
+        + `${result.people.join(', ')}. ${result.data_check.verdict}`),
+      result.people_added.length
         ? el('div', { class: 'msg msg-info' },
-            `The workbook now reads ${fmt.int(raised.entries)} entries `
-            + `(it read ${fmt.int(raised.entries_from)} before) — raised `
-            + `automatically because ${raised.why}, so nothing was missed. `
-            + 'Excel will take a little longer to recalculate the file.')
-        : null);
-    toast(`${result.engineer} updated (${fmt.int(result.rows)} rows).`, 'ok');
+            `New on the team: ${result.people_added.join(', ')}.`)
+        : null,
+      added.length
+        ? el('div', { class: 'msg msg-info' },
+            `${added.length} project(s) set up from the timesheets: `
+            + `${added.join(', ')}. Confirm their names, budgets and progress on Projects.`)
+        : null,
+      ...(result.projects_failed || []).map((f) => el('div', { class: 'msg msg-warn' },
+        `${f.number} could not be set up: ${f.errors.join(' ')}`)));
+    toast(`${fmt.int(result.rows_written)} rows imported.`, 'ok');
     await refreshAll();
   } catch (error) {
     toast((error.errors || [error.message]).join(' '), 'bad');
@@ -1596,11 +1556,6 @@ async function applyImport(mode) {
 }
 
 async function discardImport() {
-  if (state.stagedImport) {
-    await api('/api/timesheets/discard', {
-      method: 'POST', body: { token: state.stagedImport.token },
-    }).catch(() => {});
-  }
   state.stagedImport = null;
   $('#ts-file').value = '';
   setChildren($('#ts-result'));
@@ -1621,6 +1576,11 @@ function statusPill(status) {
  *  Each one knows how to read its own value, so sorting and rendering cannot
  *  disagree about what a column holds.
  */
+/** A project the timesheets set up that nobody has confirmed yet. */
+function fromTimesheets(project) {
+  return (project.notes || '').includes('Set up from timesheets');
+}
+
 const PROJECT_COLUMNS = [
   { key: null, label: '#', num: true },
   { key: 'number', label: 'Number', text: true, of: (p) => p.number },
@@ -1726,7 +1686,14 @@ function renderProjects() {
         return el('tr', { class: 'clickable', onclick: () => openProject(project.number) },
           el('td', { class: 'num muted', title: `Inputs row ${project.row}` }, position + 1),
           el('td', { class: 'code' }, project.number),
-          el('td', { class: 'wide' }, project.name),
+          el('td', { class: 'wide' }, project.name,
+            fromTimesheets(project)
+              ? el('span', {
+                  class: 'pill pill-warn', style: 'margin-left:6px',
+                  title: 'Set up from the timesheets. The name, budget and '
+                    + 'progress are estimates until you open it and save it.',
+                }, 'to confirm')
+              : null),
           el('td', {}, el('span', { class: `pill ${statusPill(project.status)}` },
             project.status || '—')),
           el('td', { class: 'num' }, fmt.mm(project.budget_mm)),
@@ -2377,7 +2344,6 @@ function wire() {
   }
   $('#task-search').addEventListener('input', () => renderTaskTable(state.tasks));
   $('#btn-new-unit').addEventListener('click', newUnit);
-  $('#btn-upload-unit').addEventListener('click', uploadUnit);
   $('#btn-signout-chooser').addEventListener('click', signOut);
   $('#btn-add-team').addEventListener('click', () => addTeam());
   $('#resourcing-year').addEventListener('change', (event) => {
