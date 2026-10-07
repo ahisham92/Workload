@@ -52,7 +52,8 @@ async function loadTogether() {
   try {
     const listed = await api('/api/units');
     if (!listed.units || listed.units.length < 2) { checkin.together = null; return; }
-    checkin.together = await api('/api/units/together');
+    // Opens every unit in turn: fills in below, without holding up the page.
+    checkin.together = await api('/api/units/together', { quiet: true });
   } catch (error) {
     checkin.together = null;
     return;

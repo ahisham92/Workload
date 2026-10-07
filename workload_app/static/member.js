@@ -71,14 +71,22 @@ function toned(value, kind, format = num) {
    request below has to be made under it rather than at the site's root. */
 const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 
-async function api(path, options = {}) {
-  const response = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+async function api(path, { quiet = false, ...options } = {}) {
+  // Anything slow brings up the loading ship, so a wait never looks stuck;
+  // the background refreshes ask to stay quiet.
+  const done = quiet ? () => {} : voyage.trip(voyage.labelFor(path, options.method));
+  let response;
   let payload = {};
-  try { payload = await response.json(); } catch { /* empty body */ }
+  try {
+    response = await fetch(BASE + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    try { payload = await response.json(); } catch { /* empty body */ }
+  } finally {
+    done();
+  }
   if (!response.ok) {
     if (response.status === 401) window.location.href = `${BASE}/login.html`;
     const error = new Error(payload.error || `Request failed (${response.status})`);
@@ -384,5 +392,7 @@ async function submitPassword() {
   } catch (error) {
     document.body.prepend(el('div', { class: 'msg msg-bad', style: 'margin:20px' },
       (error.errors || [error.message]).join(' ')));
+  } finally {
+    voyage.ready();
   }
 })();

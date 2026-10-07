@@ -639,7 +639,7 @@ async function loadDay({ quiet = false } = {}) {
   const params = new URLSearchParams({ span: plan.span });
   if (plan.date) params.set('date', plan.date);
   try {
-    plan.dayData = await api(`/api/day?${params}`);
+    plan.dayData = await api(`/api/day?${params}`, { quiet });
     renderDay();
   } catch (error) {
     if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
