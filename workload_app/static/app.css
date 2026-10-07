@@ -1092,6 +1092,15 @@ tr.row-done .task-name { text-decoration: line-through; }
 .ci-meet-when { display: inline-block; min-width: 10.5em; margin-right: 8px; color: var(--muted);
   font-variant-numeric: tabular-nums; }
 .ci-agenda li { margin: 2px 0; }
+.ci-together-table .ci-unit-row td { border-top: 1px solid var(--border); }
+.ci-together-table .ci-unit-row.is-current { background: var(--accent-soft); }
+.ci-together-table .ci-team-row td:first-child { padding-left: 26px; color: var(--muted); }
+.ci-together-table .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: middle; }
+.ci-together-table .dot-ok { background: var(--ok); }
+.ci-together-table .dot-warn { background: var(--warn); }
+.ci-together-table .dot-bad { background: var(--bad); }
+.ci-together-notes { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
 .block.is-done { opacity: .55; text-decoration: line-through; }
 .week-cell { cursor: pointer; }
 .share-text { white-space: pre-wrap; font: 13px/1.5 var(--mono); }

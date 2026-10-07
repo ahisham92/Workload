@@ -33,9 +33,11 @@ MANAGER_GRADE = "manager"
 #: Minutes a day of support each person led takes, by their grade.
 PER_PERSON_MINUTES = {
     "junior": 30,
+    # The drawing office needs as much as a junior: mark-ups, checking each
+    # drawing, and the questions that come with them.
+    "drafter": 30,
+    "bim": 30,
     "engineer": 20,
-    "bim": 15,
-    "drafter": 15,
     "senior": 10,
     MANAGER_GRADE: 10,
 }
