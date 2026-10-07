@@ -1,14 +1,14 @@
 # Workload
 
-An application for the **Workload & Profit Plan** workbook. It gives the monthly
-jobs a proper front end — pasting each engineer's timesheet, adding a project,
-adding its deliverables, planning tasks — and its own reports, while the
-workbook stays the model everything is calculated from.
+A team's workload, KPIs and delivery plan, worked out from its timesheets.
+The monthly jobs — reading everyone's timesheet export, confirming a project,
+moving its deliverables on, planning tasks — have a proper front end, and the
+reports are computed in the app.
 
-The workbook is edited surgically. It is not exported, rebuilt or re-saved by a
-spreadsheet library: only the cells that change are rewritten, so all 14 charts,
-the drawings, the threaded comments, the conditional formatting, the data
-validations and every formula come through untouched.
+The app stands on its own. Each unit is its own database: there is no
+spreadsheet behind it, so there is no limit to how many people, projects,
+deliverables or timesheet rows it holds. Spreadsheets are only ever inputs (the
+timesheet exports and the drawing list) or a copy to take away (⭳ on a unit).
 
 **It runs the same way on your own machine and on a host.** Same login, same
 storage, same code — see [DEPLOY.md](DEPLOY.md) for PythonAnywhere.
@@ -199,13 +199,12 @@ how far along the deliverable is. A person's drawings are their share of each
 deliverable; the Projects register shows done of total, the Overview and the
 Planner show the unit's, each team's and each person's drawings, and drawings
 in somebody's hands move with the work when it is handed over. Counts and the
-list's figures live in the unit's database, not the workbook.
+list's figures live in the unit's database.
 
 ## Resourcing
 
-A head of department has teams under him, and the workbook has room for twelve
-engineers in one flat list. So the establishment lives in the unit's own
-database instead: a person has a **grade** — Senior, Engineer, Junior, BIM
+A head of department has teams under them, and the establishment lives in the
+unit's database: a person has a **grade** — Senior, Engineer, Junior, BIM
 modeller — and a team; a team has a lead; and moving somebody is one row
 changing. Nobody is invisible for want of being set up: anyone the timesheets
 know about is on the roster whether or not they have been given a team.
@@ -306,14 +305,14 @@ is `HttpOnly`, `SameSite=Lax`, and `Secure` as soon as the site is served over
 HTTPS. Changing a password ends every other session.
 
 Two accounts cannot see each other. Each manager has their own folder of
-workbooks and their own rows in the database, and every request is filtered by
+units and their own rows in the database, and every request is filtered by
 the account it came from — the tests in `tests/test_server.py::TestPrivacy` are
 the ones that hold that down.
 
 ## Units
 
-A unit is a name and the workbook behind it — Marine Structures and its file,
-another discipline and its own. One account can hold up to twelve. **Switch
+A unit is a name and its own database — Marine Structures and its file,
+another discipline and its own. An account holds as many as it needs. **Switch
 unit** in the header puts one down and picks up another; each keeps its place.
 
 A unit starts from **timesheets, and nothing else**. Choose everyone's monthly
@@ -346,47 +345,48 @@ marked **to confirm** on Projects until somebody opens it and saves it:
   (*started*), a finished project at its last. Until the real step is set, a
   live project's CPI and profit say nothing, which is why they read red.
 
-The model itself — project types, rules of credit, the scorecard, the glossary —
-comes from the template that ships with the app
-(`python tools/build_template.py <your workbook>` rebuilds it).
+The model itself — project types, rules of credit, the scorecard, the glossary,
+the non-project charge codes — is built into the app
+(`workload_app/data/defaults.json`) and copied into every new unit, where the
+Reference tab can change it.
 
 Nothing derived ever overwrites the register: a job number that is already a
 project is left exactly as it is, so a corrected name or budget stays corrected,
 and next month's import adds only what is new.
 
-The app owns the file from then on: it lives in that account's folder and is
-saved after every change, with a timestamped backup beside it. **⭳ on a unit
-downloads the workbook as it stands**, so the data is never trapped — that is
-the way to open it in Excel, and the way to take it somewhere else.
+Every change is written the moment it is made; there is no Save button. A dated
+copy of the unit is kept when it is opened (at most twice a day) and before
+anything that replaces a lot at once — a Replace import, removing somebody —
+and the last twenty are kept. **⭳ on a unit downloads everything it holds as a
+spreadsheet** — the registers with their figures, the team, every timesheet
+row, the tasks, the drawings, time away and the reference tables — so the data
+is never trapped. Nothing reads that spreadsheet back in.
+
+A unit made before the app stood on its own was a workbook. The first time it
+is opened it is brought across into its own database — registers, team,
+availability, reference tables, tasks and every timesheet row — and the old
+workbook and its timesheet file are moved into the backups folder untouched.
+Nobody has to do anything. An old workbook somebody still has can also be
+brought in as a new unit, or put in place of what a unit holds, from the
+console (`python -m workload_app.admin import` and `restore`).
 
 ## The team
 
 A unit has whoever it has. The **Team** tab adds, renames and removes engineers,
-and everything follows: a paste-target sheet of their own, a place in the stack
-that builds `Timesheet Raw`, a column for their share of every deliverable, a
-row in the availability table, and their own line in every report and the
-scorecard.
+and everything follows: their share of any deliverable, a row in the
+availability table, and their own line in every report and the scorecard. A
+rename follows them into their splits, their tasks, their timesheet rows, their
+team and their time away. Removing somebody takes them out of every split; their
+timesheet rows stay, because the hours were spent and still count toward the
+projects they were booked to.
 
-The workbook ships with room for exactly three, in fixed positions — Deliverables
-K/L/M for the split, Work Calendar rows 20-22, Inputs rows 91-93 — and about
-ninety formulas address those positions directly. So a fourth engineer onwards is
-written into free space rather than inserted: nothing shifts, and not one of
-those formulas has to be repaired. The trade-off is that the workbook's *own*
-Mgmt Review, Engineer KPIs and Team Member sheets stay three columns wide and
-know only the first three people. The app's versions of those reports handle any
-number, which is where you read them now.
+There is no limit to the team. Anybody new on a timesheet export joins it on
+import, however many there are. Somebody taken off the team who still has hours
+here is named by the import and by the data check on Timesheets, so nobody's
+hours go unexplained.
 
-A workbook takes up to twelve people. An import with more than that still
-imports everybody: the rest are on the roster and in Resourcing, and their hours
-count toward every project they booked to, but they have no KPI line and no
-share of a deliverable. Nobody past the twelve goes unmentioned: the import
-names them before anything is written, marks them **no place yet**, and the
-data check on Timesheets keeps naming them until the limit is raised.
-
-Nothing in the app assumes who the engineers are or how many there are. The
-team, the paste-target sheets and the order they are stacked in all come from
-the workbook, so a copy set up for a different discipline works without a code
-change, and the split on a deliverable is keyed by name.
+Nothing in the app assumes who the engineers are or how many there are: the
+split on a deliverable is keyed by name.
 
 ## What it does:
 
@@ -400,9 +400,8 @@ project becomes one, for you to confirm. Columns are matched by heading name, so
 the export's own column order does not matter and a title block above the
 headings is skipped.
 
-The register holds 80 projects and 200 deliverables. If the timesheets imply
-more, the most recently worked come first and the oldest are listed as left
-out; their hours still count for the people who booked them.
+There is no limit to the register: every project job on the exports becomes a
+project, with a deliverable for every phase booked.
 
 **Every night, on its own** — the exports come out of BISpark, which only a
 browser on the company network can reach, so the export runs on the manager's
@@ -435,8 +434,8 @@ that rule workable: a deliverable added on its own would leave the project short
 every time. Anything the Overview flags gets a **Fix** button that opens the
 project responsible.
 
-**Reports** — five of the workbook's report sheets, rebuilt here so the file does
-not have to be opened to show anyone anything: **Dashboard**, **Engineer KPIs**,
+**Reports** — five views, so nothing has to be opened elsewhere to show anyone
+anything: **Dashboard**, **Engineer KPIs**,
 **Team Member**, **Scorecard** and **Management Review**. Pick a full year, a
 single quarter or all time. **Print / Save as PDF** prints the view you are on —
 just the report, with a header naming the unit, the view, the period and the
@@ -444,12 +443,14 @@ as-at date, and nothing breaking across a page.
 
 Every figure is computed **once** into a single result set and shared between
 the views, so the same actual MM cannot say two different things on two tabs.
-The definitions are the workbook's own — planned MM is the budget spread across
-the project's dates (unless a Phasing override says otherwise), a period earns
-in proportion to the effort spent in it, capacity is pro-rated to the as-at
-date, per-engineer figures are each project's value times that engineer's share,
-and the scorecard weights six factors exactly as the sheet does. The test suite
-holds all of it against the values Excel last calculated.
+The definitions are the ones the Workload & Profit Plan workbook used —
+planned MM is the budget spread across the project's dates (unless a phasing
+override says otherwise), a period earns in proportion to the effort spent in
+it, capacity is pro-rated to the as-at date, per-engineer figures are each
+project's value times that engineer's share, and the scorecard weights its
+factors as the Reference tab sets them. The test
+suite holds all of it against the values Excel last calculated for the workbook
+the app grew out of.
 
 **Anything below target reads red, everywhere.** A negative profit, a CPI or
 plan adherence under 1.00, utilisation short of the target, progress behind
@@ -462,7 +463,7 @@ counted over time, the delivery mix included, follows the period you picked
 rather than quietly showing every year at once.
 
 **Tasks** — task management, and the one tab that stands apart: nothing on it
-is read by the workbook. No actual MM, no progress, no CPI. It is the plan
+feeds the figures. No actual MM, no progress, no CPI. It is the plan
 beside the record, not part of it.
 
 A task carries a name, a definition, the hours it needs, the deliverable it
@@ -488,8 +489,8 @@ Two buttons exist so nobody types the same thing fifty times:
   week for as long as it runs, in one click. Running it again extends the
   series rather than doubling it.
 
-The list lives on a `Tasks` sheet the app creates in the workbook, so it
-travels with the file — but no formula in the workbook so much as sees it.
+The list lives in the unit's database beside everything else, but no figure so
+much as sees it.
 
 **Reference** — the `Project Types` and `Rules of Credit` tables **and the
 scorecard factors**, read-only until unlocked with a password. The factors are
@@ -502,7 +503,7 @@ cells are editable in Excel by anyone who can open the file.
 
 **Overview** — the whole page is for one chosen year: the budget in hand, what
 has been planned and booked against it, earned value, profit, utilisation and
-CPI. Each engineer is shown in the workbook's own measures — man-months against
+CPI. Each engineer is shown in the Workload & Profit Plan's own measures — man-months against
 capacity, earned against actual, plan adherence — rather than a count of hours,
 which on its own says very little. Every measure carries its definition from the
 `Definitions` sheet, and the glossary sits at the foot of the page. The data
@@ -523,52 +524,21 @@ whoever booked first. The year's hero tops the scorecard for the period, with a
 tally of months won beside it, so a steady month-by-month winner is visible even
 when someone else leads on total value delivered.
 
-## The row limits, and why they can no longer lose an hour
+## No limits
 
-`Timesheet Raw` builds itself by stacking the monthly sheets:
-
-```
-VSTACK('TS Ahmed'!A4:P6000, 'TS Osama'!A4:P6000, 'TS Kirolos'!A4:P6000)
-```
-
-There are two limits in that one line. Each sheet is read only as far as
-row 6,000, and every formula that reads the result — around 138,000 of them
-across `Phasing`, `Timesheet Daily`, `Deliverable Actuals`, `Proposals` and
-`Work Calendar` — reads rows 4 to 8,000 of the consolidated sheet: **7,997
-entries** for the whole team together, which is what the workbook ships with.
-
-Past either limit a row still appears on the sheet but reaches no calculation
-at all: no project actuals, no dashboard, no CPI. Nothing in the workbook says
-so. It is the one failure in this app nobody would notice, which is why it is
-handled three ways:
-
-1. **The per-sheet limit goes to 25,000 the moment the app opens a workbook.**
-   It is a one-line change to the `VSTACK` with no recalculation cost.
-2. **An import that would not fit raises the limit before writing anything.**
-   The app works out what the timesheet will hold once the import lands; if
-   that is more than the workbook reads, it widens both limits to fit — with
-   years of room to spare — and the import result says so. Rows are never
-   written past what is read.
-3. **The Timesheets tab shows how much room is left** and offers the same
-   raise as a button, for doing it at a quiet moment rather than mid-import.
-
-Raising the consolidated limit is the heavy one: it rewrites every one of those
-138,000 references and extends the per-row helper formulas to match, which
-takes about a minute, and Excel then takes a little longer to recalculate the
-file. That is why it is not done on the way in, and why the app will only go so
-far on its own — past 60,000 entries an import is **refused, before a single
-row is written**, with a message saying to import only registered work or
-archive the earliest years. Refusing loudly is the one thing that is always
-better than dropping rows quietly.
-
-The limit follows the timesheet from there: 25,000 entries until the timesheet
-itself is bigger than that, and then the rows in hand plus room for a few more
-years, rounded up.
+A unit used to be a workbook, and a workbook had edges: twelve engineers,
+eighty projects, sixty-four deliverables before a block had to be grown, a few
+thousand timesheet rows per person and about eight thousand for the team before
+rows quietly stopped counting. A unit is now its own database, and none of those
+edges exist. People, projects, deliverables, project types, credit steps and
+timesheet rows are rows in a table; a deliverable keeps its id for life, so the
+drawings, planned work and tasks attached to it never come loose; and an id is
+never handed out twice.
 
 ## Rules it enforces
 
-These are the workbook's own rules, checked before a cell is written rather than
-found later in a red cell:
+These are the Workload & Profit Plan rules, checked before anything is written
+rather than found later in a red figure:
 
 - project numbers are unique, budget MM is positive, the end date is not before
   the start, and the status is one the register allows;
@@ -578,53 +548,41 @@ found later in a red cell:
   `Rules of Credit` defines *for that type*;
 - the engineer split totals 100% on each deliverable;
 - **phase weights total 100% per project — the save is refused otherwise**;
-- an engineer's sheet only ever holds that engineer's rows.
+- a person's export only ever replaces that person's rows.
 
 ## Safety
 
-- **Every write is preceded by a timestamped backup** in `backups/` beside the
-  workbook. Nothing is overwritten in place without one.
-- Formula cells are protected: a write aimed at one raises rather than silently
-  deleting part of the model.
-- The workbook is saved with a full-recalculation flag, so Excel recomputes
-  everything the next time it is opened.
-- The app owns its copy of each workbook, so nothing you have open in Excel can
-  overwrite it. To read one in Excel, download it (⭳ on the unit). A workbook
-  is never an input in the app; an administrator can still restore one from
-  the console (`python -m workload_app.admin restore`).
-- On a host with more than one worker process, a writer takes an exclusive lock
-  on the file and a reader that finds the file changed underneath re-reads it
-  before answering.
-
-Run with `--no-autosave` to hold changes in memory and write them only when you
-press **Save now**.
-
-## Growing the Deliverable Actuals block
-
-`Deliverable Actuals` ships covering rows 5–68 — exactly the 64 deliverables the
-workbook already has, so there is no room for a 65th. When you add one, the app
-extends the block: it clones the last data row, translates its formulas down
-(resolving Excel's shared and array formulas into explicit ones), and grows
-every range anchored to the old last row, including the conditional-formatting
-ranges and the x14 extension list. The calculation chain is dropped so Excel
-rebuilds it. This happens automatically; there is nothing to do by hand.
+- **A dated copy of the unit is kept** when it is opened (at most every twelve
+  hours) and before anything that replaces a lot at once: a Replace import,
+  the nightly import, or taking somebody off the team. The last twenty are
+  kept, in `backups/` beside the unit. Copies are taken through SQLite, so a
+  copy taken while somebody is writing is still a whole one.
+- Deleting a unit leaves its copies, so an administrator can put it back with
+  `python -m workload_app.admin restore`.
+- Every change is one transaction: a project saved with its deliverables is
+  written whole or not at all.
+- On a host with more than one worker process, every worker sees a change the
+  moment it is written: each change moves the unit's revision on, and a worker
+  that finds it moved re-reads before answering.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `workload_app/xlsx_io.py` | Reads and writes cells directly in the spreadsheet XML |
+| `workload_app/unit.py` | One unit's database: the registers, the team, the reference tables, tasks, and the validation |
+| `workload_app/model.py` | Projects, deliverables, engineers and the rest, as plain records; reading a typed value |
+| `workload_app/legacy.py` | Bringing a unit made in the workbook days across into its own database |
+| `workload_app/export.py` | Everything a unit holds, as a spreadsheet to take away |
+| `workload_app/xlsx_io.py` | Reads cells straight out of the spreadsheet XML (exports and old workbooks) |
 | `workload_app/accounts.py` | Accounts, passwords, sessions and each account's units |
 | `workload_app/secretbox.py` | The sealed copy of a password the Admin tab reads back |
-| `workload_app/storage.py` | Where an account's workbooks live, and the template |
+| `workload_app/storage.py` | Where an account's units live, their copies, and bringing old ones across |
 | `workload_app/app.py` | The application: routes, access, and who is asking |
-| `workload_app/service.py` | One open workbook, and every change that can be made |
-| `workload_app/library.py` | Checking that a file really is a Workload workbook |
-| `workload_app/capacity.py` | The row caps on the consolidated timesheet |
-| `workload_app/config.py` | Where every input lives — sheets, rows, columns |
-| `workload_app/workbook.py` | The registers as a domain model, and the validation |
-| `workload_app/actuals_block.py` | Growing the `Deliverable Actuals` block |
-| `workload_app/timesheets.py` | Reading an export and lining it up with the TS sheet |
+| `workload_app/service.py` | One open unit, and every change that can be made |
+| `workload_app/library.py` | Recognising an old Workload workbook |
+| `workload_app/config.py` | The export's headings, the KPI targets, and where an old workbook kept each input |
+| `workload_app/data/defaults.json` | The reference tables every new unit starts with |
+| `workload_app/timesheets.py` | Reading an export, whatever order its columns are in |
 | `workload_app/metrics.py` | Workload and efficiency, recomputed from raw inputs |
 | `workload_app/reports.py` | The five report views and the heroes, once per period |
 | `workload_app/member.py` | What one engineer is allowed to see of their unit |
@@ -640,51 +598,49 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/wsgi.py` | The transport a host uses (PythonAnywhere) |
 | `workload_app/admin.py` | Making accounts from a console |
 | `workload_app/deployment.py` | The deployment check, and the host's WSGI file |
-| `tools/build_template.py` | Building the blank workbook that ships with the app |
 | `workload_app/static/` | The single-page front end (no build step) |
 
-If the workbook is restructured, `config.py` is the file to edit — the code
-reads its sheet names, row ranges and column letters from there.
+### How the figures are worked out
 
-### Why the figures are recomputed rather than read
-
-The workbook caches the result of every formula, and those caches go stale the
-moment the app writes a change — they only refresh when Excel next opens the
-file. Reading them would show you yesterday's answer. So `metrics.py`
-recomputes from the timesheet rows and the registers, following the workbook's
-own definitions: actual MM is timesheet hours over hours-per-MM, progress is
-phase weight times rules-of-credit credit, earned MM is budget times progress,
-CPI is earned over actual. The test suite checks these against the values Excel
-last calculated, so the two stay in step.
+`metrics.py` and `reports.py` compute every figure from the timesheet rows and
+the registers, by the Workload & Profit Plan definitions: actual MM is
+timesheet hours over hours-per-MM, progress is phase weight times
+rules-of-credit credit, earned MM is budget times progress, CPI is earned over
+actual. The test suite checks these against the values Excel last calculated
+for the workbook the app grew out of, so the two stay in step.
 
 ## Command line
 
 ```
 python -m workload_app [-d DATA_DIR] [--host HOST] [-p PORT]
-                       [--no-autosave] [--no-browser] [-q]
+                       [--no-browser] [-q]
 
 python -m workload_app.admin add <username> [--admin] [--member] [--name NAME]
 python -m workload_app.admin list
 python -m workload_app.admin password <username>
 python -m workload_app.admin remove <username>
 python -m workload_app.admin import <username> <workbook.xlsx> [--name NAME]
+python -m workload_app.admin restore <username> <unit> <copy.db or workbook.xlsx>
+python -m workload_app.admin units [<username>]
 python -m workload_app.admin check [--wsgi-only]
 ```
 
 `check` is the one to run on a host: it says whether this installation can
 serve, whether the data directory is somewhere a deploy would overwrite, and
 prints the WSGI file and static mappings with this checkout's real paths in
-them.
+them. `import` makes a new unit from an old workbook; `restore` puts a kept copy
+(or an old workbook) in place of what a unit holds, keeping what it had first;
+`units` says what each unit holds, straight from the files.
 
-Accounts and workbooks live in `$WORKLOAD_DATA_DIR`, or `./instance` if that is
+Accounts and units live in `$WORKLOAD_DATA_DIR`, or `./instance` if that is
 not set. The local server binds to `127.0.0.1`, so it is reachable only from
 your own machine; to put it on the open internet use the WSGI entry point and
 HTTPS, which is what [DEPLOY.md](DEPLOY.md) describes.
 
 ## Tests
 
-The tests need a workbook to run against, and none is committed — the
-repository holds no project data. Point them at yours:
+Most tests run against a unit brought across from a real workbook, and none is
+committed — the repository holds no project data. Point them at yours:
 
 ```
 pip install -r requirements-dev.txt
@@ -692,15 +648,15 @@ export WORKLOAD_TEST_WORKBOOK=/path/to/Workload.xlsx   # or drop a copy at data/
 python -m pytest
 ```
 
-They work on a throw-away copy, never your file. Without one they skip
-themselves and say so.
+The workbook is brought across into a unit once per run and each test works on
+a throw-away copy, never your file. Without one those tests skip themselves and
+say so; the ones that start from timesheet exports alone still run.
 
-The suite covers the XML surgery (including that every sheet reassembles byte
-for byte and that only the intended parts of the file change), the row caps and
-what happens when they are exceeded, the validation rules, the import —
-including the stub `<dimension>` that the real export writes — and the
-arithmetic, cross-checked against the values the workbook itself last
-calculated.
+The suite covers bringing an old unit across, the copies kept and putting one
+back, the validation rules, that there is no limit to people, projects,
+deliverables or rows, the import — including the stub `<dimension>` that the
+real export writes — and the arithmetic, cross-checked against the values the
+workbook itself last calculated.
 
 It also covers what makes the site safe to put on the internet: that a password
 never reaches the database as text, that a session token is stored only as a
@@ -712,7 +668,7 @@ application answers correctly through the WSGI entry point a host uses.
 
 1. Sign in and open the unit.
 2. **Timesheets** — choose everyone's export, check the summary, Replace.
-3. **Overview** — check the data check reads "All rows matched to an engineer".
+3. **Overview** — check the data check reads "All rows matched to somebody on the team".
 4. **Projects** — open anything marked *to confirm* and give it its name,
    budget and step; open each active project and move its deliverables' steps on.
    **Team** — only to set someone's availability; joiners arrive with their timesheets.
@@ -720,11 +676,7 @@ application answers correctly through the WSGI entry point a host uses.
    deliverable date fill in its week of preparation.
 6. **Reports** — read the Dashboard and Management Review, and print whichever
    view you need for the meeting.
-7. Download the workbook (⭳) when you want `Delivery Sequence` or `Profit Plan`,
-   which are not yet in the app.
-
-Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
-are already automatic; the workbook reads them from the timesheet.
+7. Download the unit (⭳) when somebody wants the figures in a spreadsheet.
 
 
 ## About the charts
@@ -749,18 +701,20 @@ $WORKLOAD_DATA_DIR/            (or ./instance)
 ├── accounts.db                accounts, sessions, and each account's units
 └── users/
     └── 7/                     one folder per account
-        ├── 3f2b….xlsx         one workbook per unit
-        └── backups/           a timestamped copy before every write
+        ├── 3f2b….db           one database per unit: registers, team, timesheet rows, plans
+        └── backups/           dated copies of each unit, the last twenty kept
 ```
 
 That folder is the whole application state. Back it up and you have backed up
 everything; move it to another machine and everyone signs in to find their work
-where they left it. The code carries only the blank template.
+where they left it. The code carries only the reference tables a new unit
+starts with.
 
 ## Still to come
 
 `Delivery Sequence` and `Profit Plan` — the ranking of what to deliver next and
-the year-end projection — are still read in the workbook.
+the year-end projection — were sheets of the old workbook and are not in the
+app yet.
 
 The task tab is deliberately not wired to anything yet: its hours are typed,
 not read from the timesheet, and nothing it holds reaches a project's figures.

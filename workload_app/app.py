@@ -9,7 +9,7 @@ used on a host.  Both hand over a :class:`Request` and send back a
 The rule that makes the site private is short enough to state in one line:
 every route below is either public, or resolves a session cookie to an account
 and works only inside that account's own row of the database and its own folder
-of workbooks.
+of units.
 
 **As one tab of a larger site.**  Mounted inside another site, Workload does no
 signing in of its own: the site hands over who is asking (``Request.site``) and
@@ -20,6 +20,7 @@ is found a different way, and then sees exactly what it always did.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import mimetypes
 import traceback
@@ -31,7 +32,8 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import accounts as accounts_module, member as member_view, nightly, storage
+from . import (accounts as accounts_module, export as export_module,
+               member as member_view, nightly, storage)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
@@ -45,15 +47,14 @@ from .intake import IntakeError
 from .planner import PlanError
 from .tasks import TaskError
 from .timesheets import ImportError_
-from .workbook import ValidationError
+from .model import ValidationError
 from .xlsx_io import XlsxError
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "workload_session"
-#: How many accounts' workbooks are held parsed in memory at once.  A workbook
-#: is tens of megabytes once parsed, and a small host does not have many of
-#: those; the least recently used is saved and dropped.
-OPEN_WORKBOOK_LIMIT = 4
+#: How many accounts' open units are kept in memory at once.  A unit is read
+#: from its database as it is needed, so this only bounds what is cached.
+OPEN_WORKBOOK_LIMIT = 16
 
 
 @dataclass
@@ -116,7 +117,7 @@ class WorkloadApp:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.accounts = Accounts(self.data_dir / "accounts.db")
         self.autosave = autosave
-        #: user id -> their open workbook, most recently used last.
+        #: user id -> their open unit, most recently used last.
         self._services: "OrderedDict[int, WorkloadService]" = OrderedDict()
         #: Set by a site that mounts Workload: a call returning the people who
         #: can sign in to it, as ``[{"id", "login", "name"}]``.  Access to a
@@ -133,7 +134,7 @@ class WorkloadApp:
         while len(self._services) > OPEN_WORKBOOK_LIMIT:
             _old_id, old = self._services.popitem(last=False)
             try:
-                old.close()                    # saves anything still pending
+                old.close()
             except Exception:                  # pragma: no cover - best effort
                 traceback.print_exc()
         return service
@@ -491,7 +492,7 @@ class WorkloadApp:
                     }
                     for row in self.accounts.memberships(user_id)
                 ],
-                "limit": 0,
+                "limit": None,
                 "read_only": True,
                 "template_available": False,
             }
@@ -501,23 +502,22 @@ class WorkloadApp:
             record = dict(unit)
             record["exists"] = path.is_file()
             if record["exists"]:
-                stat = path.stat()
-                record["size_mb"] = round(stat.st_size / 1_048_576, 2)
+                record["size_mb"] = storage.size_mb(path)
             out.append(record)
         return {
             "units": out,
-            "limit": storage.MAX_UNITS_PER_USER,
-            "template_available": storage.template_path().is_file(),
+            # No limit: an account holds as many units as it runs.
+            "limit": None,
+            "template_available": True,
         }
 
     def create_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
-        """A new unit from the blank template that ships with the app."""
+        """A new, empty unit, with the built-in reference tables."""
         user_id = ctx.user["id"]
-        self._check_room(user_id)
         name = body.get("name", "")
         unit = self.accounts.create_unit(user_id, name, "")
         try:
-            path = storage.new_from_template(self.data_dir, user_id, unit["id"])
+            path = storage.new_unit(self.data_dir, user_id, unit["id"])
             self.accounts_update_filename(user_id, unit["id"], path.name)
         except Exception:
             self.accounts.delete_unit(user_id, unit["id"])
@@ -528,12 +528,11 @@ class WorkloadApp:
                                     ) -> Dict[str, Any]:
         """A new unit whose only input is its people's timesheet exports.
 
-        It starts from the blank template, and the exports supply the rest:
-        the team, the project register, the deliverables and their splits. Left
-        unnamed, the unit takes the name the exports give it.
+        It starts empty, and the exports supply the rest: the team, the
+        project register, the deliverables and their splits. Left unnamed, the
+        unit takes the name the exports give it.
         """
         user_id = ctx.user["id"]
-        self._check_room(user_id)
         files = body.get("files") or []
         if not files:
             raise ApiError(HTTPStatus.BAD_REQUEST,
@@ -543,7 +542,7 @@ class WorkloadApp:
             user_id, wanted or f"New unit {uuid.uuid4().hex[:6]}", "")
         path = None
         try:
-            path = storage.new_from_template(self.data_dir, user_id, unit["id"])
+            path = storage.new_unit(self.data_dir, user_id, unit["id"])
             self.accounts_update_filename(user_id, unit["id"], path.name)
             self.open_unit(ctx, query, body, unit["id"])
             service = ctx.service or self.service_for(user_id)
@@ -579,14 +578,18 @@ class WorkloadApp:
             return
 
     def upload_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
-        """A new unit from a workbook the account already has."""
+        """A new unit from an old Workload workbook somebody still has.
+
+        The workbook is read once, into the unit's own database, and is not
+        kept: from then on the unit is the database.
+        """
         user_id = ctx.user["id"]
-        self._check_room(user_id)
         data = self._uploaded_bytes(body)
         name = body.get("name") or Path(body.get("filename", "workbook")).stem
         unit = self.accounts.create_unit(user_id, name, "")
         try:
-            path = storage.save_upload(self.data_dir, user_id, unit["id"], data)
+            path = storage.import_workbook(
+                self.data_dir, user_id, unit["id"], data)["path"]
             self.accounts_update_filename(user_id, unit["id"], path.name)
         except Exception:
             self.accounts.delete_unit(user_id, unit["id"])
@@ -594,12 +597,11 @@ class WorkloadApp:
         return self.open_unit(ctx, query, body, unit["id"])
 
     def replace_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
-        """Put a workbook into a unit that already exists.
+        """Put a copy of a unit back in place of what it holds now.
 
-        Uploading has always made a *new* unit, which is no use when what you
-        want is the unit you already have -- with its name, and the accounts
-        your team already reach it through -- holding the file you have in
-        your hand. The old file is kept as a backup first.
+        The copy is one of the unit's own kept copies, or an old Workload
+        workbook. The unit keeps its name, and the accounts your team reach it
+        through; what it held is kept as a copy first.
         """
         user_id = ctx.user["id"]
         unit = self.accounts.unit(user_id, unit_id)
@@ -610,6 +612,11 @@ class WorkloadApp:
         if ctx.service and ctx.service.unit \
                 and ctx.service.unit.get("id") == unit_id:
             ctx.service.close()
+        if storage.legacy.is_workbook(storage.unit_path(
+                self.data_dir, user_id, unit["filename"])):
+            # Still a workbook unit: bring it across first, so what it held
+            # is kept as a copy like any other.
+            self._unit_file(user_id, unit_id, unit["filename"])
         result = storage.replace_unit_file(self.data_dir, user_id, unit_id, data)
         self.accounts_update_filename(user_id, unit_id, result["path"].name)
         opened = self.open_unit(ctx, query, body, unit_id)
@@ -648,11 +655,30 @@ class WorkloadApp:
         path = storage.unit_path(self.data_dir, user_id, unit["filename"])
         if not path.is_file():
             raise ApiError(HTTPStatus.NOT_FOUND,
-                           f"The workbook for {unit['name']} is missing.")
+                           f"The data for {unit['name']} is missing.")
+        path = self._unit_file(user_id, unit_id, unit["filename"])
+        unit = self.accounts.unit(user_id, unit_id)
+        try:
+            storage.backup_if_due(self.data_dir, user_id, path)
+        except Exception:                  # pragma: no cover - a copy is a
+            traceback.print_exc()          # nicety, never a reason not to open
         service = ctx.service or self.service_for(user_id)
-        result = service.open(path, unit=unit)
+        result = service.open(path, unit=unit,
+                              keep_copy=self._copier(user_id, path))
         self.accounts.touch_unit(user_id, unit_id)
         return result
+
+    def _copier(self, owner_id: int, path: Path):
+        """What a service calls to keep a dated copy of the unit it has open."""
+        return functools.partial(storage.keep_a_copy, self.data_dir, owner_id, path)
+
+    def _unit_file(self, owner_id: int, unit_id: str, filename: str) -> Path:
+        """The unit's database, brought across from its old workbook if it
+        still has one."""
+        result = storage.bring_across(self.data_dir, owner_id, unit_id, filename)
+        if result["filename"] != filename:
+            self.accounts_update_filename(owner_id, unit_id, result["filename"])
+        return result["path"]
 
     def rename_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         # Look first, so a unit that is not this account's is refused the same
@@ -679,18 +705,20 @@ class WorkloadApp:
         return {"deleted": unit_id, "name": unit["name"]}
 
     def download_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
-        """The workbook itself, base64 encoded, so it can be taken away again."""
+        """Everything the unit holds, as a spreadsheet to keep or send on."""
         user_id = ctx.user["id"]
         unit = self.accounts.unit(user_id, unit_id)
         if unit is None:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
-        if ctx.service and ctx.service.unit \
-                and ctx.service.unit.get("id") == unit_id:
-            ctx.service.save()
         path = storage.unit_path(self.data_dir, user_id, unit["filename"])
         if not path.is_file():
-            raise ApiError(HTTPStatus.NOT_FOUND, "That workbook is missing.")
-        data = path.read_bytes()
+            raise ApiError(HTTPStatus.NOT_FOUND, "That unit's data is missing.")
+        path = self._unit_file(user_id, unit_id, unit["filename"])
+        if ctx.service and ctx.service.unit \
+                and ctx.service.unit.get("id") == unit_id:
+            data = export_module.unit_workbook(ctx.service.workbook, unit["name"])
+        else:
+            data = export_module.unit_workbook(storage.Unit(path), unit["name"])
         return {
             "filename": f"{unit['name']}.xlsx",
             "size_bytes": len(data),
@@ -720,7 +748,8 @@ class WorkloadApp:
         path = storage.unit_path(self.data_dir, row["owner_id"], row["filename"])
         if not path.is_file():
             raise ApiError(HTTPStatus.NOT_FOUND,
-                           "That workbook is not there any more.")
+                           "That unit is not there any more.")
+        path = self._unit_file(row["owner_id"], row["unit_id"], row["filename"])
 
         service = ctx.service
         if service.path != path or not service.read_only:
@@ -972,16 +1001,11 @@ class WorkloadApp:
         path = storage.unit_path(self.data_dir, user_id, mine["filename"]) \
             if mine else None
         if path is not None and path.is_file():
-            service.open(path, unit=mine)
+            path = self._unit_file(user_id, mine["id"], mine["filename"])
+            service.open(path, unit=self.accounts.unit(user_id, mine["id"]),
+                         keep_copy=self._copier(user_id, path))
         else:
             service.close()
-
-    def _check_room(self, user_id: int) -> None:
-        if len(self.accounts.units(user_id)) >= storage.MAX_UNITS_PER_USER:
-            raise ApiError(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                f"An account holds up to {storage.MAX_UNITS_PER_USER} units. "
-                f"Delete one you no longer need.")
 
     # ------------------------------------------------------------------
     # the routes
@@ -1169,8 +1193,6 @@ class WorkloadApp:
                  b.get("token", ""), b.get("mode", "replace")), "manager"),
             ("POST", "/api/projects/from-timesheets",
              lambda ctx, q, b: ctx.service.sync_projects(), "manager"),
-            ("POST", "/api/timesheets/capacity",
-             lambda ctx, q, b: ctx.service.extend_capacity(b), "manager"),
             ("POST", "/api/timesheets/discard",
              lambda ctx, q, b: ctx.service.discard_timesheet(b.get("token", "")),
              "manager"),

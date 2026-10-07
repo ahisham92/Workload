@@ -8,7 +8,6 @@ import base64
 import datetime as dt
 import io
 import math
-import shutil
 
 import pytest
 
@@ -79,9 +78,7 @@ def department():
 @pytest.fixture
 def unit(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKLOAD_TODAY", TODAY.isoformat())
-    target = tmp_path / "unit.xlsx"
-    shutil.copy(storage.template_path(), target)
-    service = WorkloadService(target)
+    service = WorkloadService(storage.new_unit(tmp_path, 1, "unit-one"))
     service.import_exports(department())
     return service
 
@@ -106,9 +103,7 @@ class TestTeamsFromTheTimesheets:
         assert teams["Osama"] == "COASTAL"
 
     def test_one_unit_on_every_row_makes_no_teams(self, tmp_path):
-        target = tmp_path / "unit.xlsx"
-        shutil.copy(storage.template_path(), target)
-        service = WorkloadService(target)
+        service = WorkloadService(storage.new_unit(tmp_path, 1, "unit-one"))
         service.import_exports([export("a", booking(
             "Solo Person", "P2", "ONE", "N9-0100D", 1, "Design", 8))])
         assert service.store.teams() == []
@@ -549,7 +544,7 @@ class TestPublicHolidays:
         assert view["unit"] == "EG" and not view["chosen"]
 
     def test_an_unknown_country_is_refused(self, unit):
-        from workload_app.workbook import ValidationError
+        from workload_app.model import ValidationError
         with pytest.raises(ValidationError):
             unit.save_holidays({"unit": "XX"})
 

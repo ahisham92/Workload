@@ -2,14 +2,13 @@
 
 Every request here carries a session cookie, because without one the app
 answers nothing: that is the point of the login.  The isolation tests are the
-ones to read first -- they are what make one account's workbook private.
+ones to read first -- they are what make one account's units private.
 """
 
 import base64
 import datetime as dt
 import io
 import json
-import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -18,6 +17,8 @@ import pytest
 
 from workload_app import storage
 from workload_app.server import make_server
+
+from conftest import copy_unit
 
 PASSWORD = "a-good-long-password"
 
@@ -62,13 +63,13 @@ def _account(httpd, base, username="ahmed", *, admin=True) -> Client:
     return client
 
 
-def _adopt(client: Client, workbook, name="Marine Structures") -> str:
-    """Put a workbook into the signed-in account without a 3 MB upload."""
+def _adopt(client: Client, unit_db, name="Marine Structures") -> str:
+    """Put a unit into the signed-in account without a 3 MB upload."""
     app = client.app
     unit = app.accounts.create_unit(client.user["id"], name, "")
     target = storage.unit_path(app.data_dir, client.user["id"],
-                               f"{unit['id']}.xlsx")
-    shutil.copy(workbook, target)
+                               f"{unit['id']}.db")
+    copy_unit(unit_db, target)
     app.accounts_update_filename(client.user["id"], unit["id"], target.name)
     return unit["id"]
 
@@ -86,9 +87,9 @@ def empty_server(tmp_path):
 
 
 @pytest.fixture
-def server(empty_server, workbook_copy):
-    """Signed in, with the real workbook open as this account's unit."""
-    unit_id = _adopt(empty_server, workbook_copy)
+def server(empty_server, migrated):
+    """Signed in, with the real unit open as this account's own."""
+    unit_id = _adopt(empty_server, migrated)
     call(empty_server, f"/api/units/{unit_id}/open", "POST")
     return empty_server
 
@@ -251,7 +252,7 @@ class TestWrites:
         assert status == 422
         assert any("not in the project register" in m for m in body["errors"])
 
-    def test_adding_a_deliverable_grows_the_actuals_block(self, server):
+    def test_a_65th_deliverable_needs_no_room_made(self, server):
         call(server, "/api/projects", "POST", self.PROJECT)
         _status, before = call(server, "/api/status")
         status, body = call(server, "/api/deliverables", "POST", {
@@ -260,8 +261,7 @@ class TestWrites:
         })
         assert status == 200
         _status, after = call(server, "/api/status")
-        assert after["actuals_last_row"] > before["actuals_last_row"]
-        assert after["actuals_last_row"] == body["deliverable"]["row"]
+        assert after["deliverables"] == before["deliverables"] + 1 == 65
 
     def test_deleting_a_project_with_deliverables_needs_confirmation(self, server):
         call(server, "/api/projects", "POST", self.PROJECT)
@@ -310,10 +310,15 @@ class TestTimesheetEndpoints:
         _status, check = call(server, "/api/timesheets")
         assert staged["existing_rows"] == check["per_engineer"]["Kirolos"]["rows"]
 
+        unit_id = call(server, "/api/status")[1]["unit"]["id"]
+        copies = len(storage.backups_of(server.app.data_dir, server.user["id"], unit_id))
         status, applied = call(server, "/api/timesheets/apply", "POST",
                                {"token": staged["token"], "mode": "replace"})
         assert status == 200 and applied["rows"] == 5
         assert applied["data_check"]["per_engineer"]["Kirolos"]["rows"] == 5
+        # What was replaced is kept in a dated copy first.
+        assert len(storage.backups_of(server.app.data_dir, server.user["id"],
+                                      unit_id)) == copies + 1
 
     def test_append_keeps_what_was_there(self, server, readonly_wb):
         _status, staged = call(server, "/api/timesheets/stage", "POST", {
@@ -367,7 +372,7 @@ class TestTimesheetEndpoints:
 
 
 class TestUnits:
-    """A unit is a name and a workbook, and it belongs to one account."""
+    """A unit is a name and a database, and it belongs to one account."""
 
     def test_an_account_starts_with_nothing_open(self, empty_server):
         status, body = call(empty_server, "/api/status")
@@ -380,22 +385,21 @@ class TestUnits:
                      "/api/overview", "/api/timesheets", "/api/tasks"):
             status, body = call(empty_server, path)
             assert status == 409, path
-            assert "No workbook is open" in body["error"]
+            assert "No unit is open" in body["error"]
 
-    def test_a_new_unit_starts_from_the_blank_template(self, empty_server):
+    def test_a_new_unit_starts_with_the_model_and_nobody_s_data(self, empty_server):
         status, body = call(empty_server, "/api/units", "POST",
                             {"name": "New unit"})
         assert status == 200
         assert body["open"] is True
         assert body["unit"]["name"] == "New unit"
-        # The template carries the model but none of anybody's data.
         assert body["projects"] == 0
         assert body["deliverables"] == 0
-        assert body["engineers"] == ["Engineer 1", "Engineer 2", "Engineer 3"]
+        assert body["engineers"] == []
         _status, reference = call(empty_server, "/api/reference")
         assert len(reference["project_types"]) > 5
 
-    def test_a_workbook_can_be_uploaded_as_a_unit(self, empty_server, workbook_copy):
+    def test_an_old_workbook_can_be_brought_in_as_a_unit(self, empty_server, workbook_copy):
         content = base64.b64encode(workbook_copy.read_bytes()).decode()
         status, body = call(empty_server, "/api/units/upload", "POST", {
             "name": "Marine Structures", "filename": "Workload.xlsx",
@@ -404,6 +408,10 @@ class TestUnits:
         assert status == 200
         assert body["projects"] == 40
         assert body["engineers"] == ["Ahmed", "Osama", "Kirolos"]
+        # The workbook was read once; the unit is its own database.
+        folder = storage.user_dir(empty_server.app.data_dir, empty_server.user["id"])
+        assert [p.suffix for p in folder.iterdir() if p.is_file()
+                and not p.name.endswith(("-wal", "-shm"))] == [".db"]
 
     def test_something_that_is_not_a_workbook_is_refused(self, empty_server):
         status, body = call(empty_server, "/api/units/upload", "POST", {
@@ -431,7 +439,7 @@ class TestUnits:
         _status, listed = call(server, "/api/units")
         assert listed["units"] == []
 
-    def test_the_workbook_can_be_taken_away_again(self, server):
+    def test_the_unit_can_be_taken_away_as_a_spreadsheet(self, server):
         _status, listed = call(server, "/api/units")
         unit_id = listed["units"][0]["id"]
         status, body = call(server, f"/api/units/{unit_id}/download")
@@ -440,6 +448,10 @@ class TestUnits:
         assert data[:2] == b"PK"                      # a real xlsx
         assert body["filename"].endswith(".xlsx")
         assert body["size_bytes"] == len(data)
+        openpyxl = pytest.importorskip("openpyxl")
+        book = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
+        assert {"Projects", "Deliverables", "Team", "Timesheets"} <= set(book.sheetnames)
+        assert sum(1 for _ in book["Projects"].iter_rows()) == 41
 
     def test_two_units_of_the_same_name_are_refused(self, server):
         status, body = call(server, "/api/units", "POST",
@@ -564,51 +576,6 @@ class TestAccounts:
                             {"username": "shorty", "password": "abc"})
         assert status == 422
         assert "at least" in body["errors"][0]
-
-
-class TestCapacityEndpoint:
-    def test_status_reports_how_much_room_is_left(self, server):
-        _status, body = call(server, "/api/status")
-        assert body["capacity"]["headroom"] == 315
-        assert body["capacity"]["low_headroom"] is True
-
-    def test_a_full_sheet_is_no_longer_a_warning_about_the_data(self, server):
-        """The rows are in the store; the sheet's fullness is not about them.
-
-        The workbook's caps still describe its own sheets, and still matter on
-        the way out -- the capacity report is still there and still says the
-        headroom is low. What is gone is the warning, because a full sheet no
-        longer means a row of anybody's timesheet is unreachable.
-        """
-        _status, body = call(server, "/api/timesheets")
-        assert body["source"] == "database"
-        assert body["capacity"]["low_headroom"] is True
-        assert body["capacity_warnings"] == []
-
-    def test_the_limit_can_be_raised(self, server):
-        status, body = call(server, "/api/timesheets/capacity", "POST",
-                            {"raw_last_row": 12000})
-        assert status == 200
-        assert body["raw_last_row"] == 12000
-        assert body["capacity"]["low_headroom"] is False
-        assert body["helper_rows_added"] == 4000
-
-    def test_the_suggestion_is_25000_entries(self, server):
-        # What the button offers, without paying the minute it takes to do it:
-        # raising the consolidated limit rewrites 138,000 formulas.
-        _status, body = call(server, "/api/timesheets")
-        assert body["capacity"]["suggested_raw_last_row"] == 25000
-
-    def test_it_defaults_to_that_suggestion(self, server):
-        status, body = call(server, "/api/timesheets/capacity", "POST", {})
-        assert status == 200 and body["raw_last_row"] == 25000
-        assert body["capacity"]["total_capacity"] == 24997
-
-    def test_an_impossible_limit_is_refused(self, server):
-        status, body = call(server, "/api/timesheets/capacity", "POST",
-                            {"raw_last_row": 90000})
-        assert status == 422
-        assert any("beyond what the stack" in m for m in body["errors"])
 
 
 class TestProjectWithDeliverables:
@@ -912,7 +879,7 @@ class TestTeamEndpoint:
             "availability": {"2026": 1.0},
         })
         assert status == 200
-        assert body["sheet"] == "TS Nadia"
+        assert body["engineer"] == "Nadia"
         _status, team = call(server, "/api/team")
         assert "Nadia" in [p["short_name"] for p in team["engineers"]]
 
@@ -941,7 +908,7 @@ class TestTeamEndpoint:
     def test_an_engineer_can_be_removed(self, server):
         status, body = call(server, "/api/team/Kirolos", "DELETE")
         assert status == 200
-        assert body["sheet_removed"] == "TS Kirolos"
+        assert body["deliverables_cleared"] > 0
         _status, team = call(server, "/api/team")
         assert [p["short_name"] for p in team["engineers"]] == ["Ahmed", "Osama"]
 
@@ -1004,28 +971,6 @@ class TestHeroesInTheApi:
         assert body["heroes"]["month"]["month"] == "2026-08"
         assert body["heroes"]["year"]["engineer"] in body["engineers"]
         assert body["monthly"]
-
-
-class TestTheStackIsWidenedOnOpen:
-    """The workbook ships reading 6,000 rows a sheet; nobody should have to ask."""
-
-    def test_opening_a_workbook_deepens_the_stack(self, server):
-        _status, status = call(server, "/api/status")
-        assert status["stack_raised_to"] == 25000
-        assert status["capacity"]["source_last_row"] == 25000
-        assert status["capacity"]["source_is_short"] is False
-
-    def test_the_consolidated_limit_is_left_alone(self, server):
-        _status, status = call(server, "/api/status")
-        # Raising that one rewrites 138,000 formulas; it stays a decision.
-        assert status["capacity"]["raw_last_row"] == 8000
-
-    def test_a_workbook_already_deep_enough_is_not_rewritten(self, workbook_copy):
-        from workload_app.service import WorkloadService
-        first = WorkloadService(workbook_copy)
-        assert first._stack_raised_to == 25000
-        again = WorkloadService(workbook_copy)
-        assert again._stack_raised_to is None
 
 
 class TestTasks:
@@ -1129,18 +1074,11 @@ class TestAnImportNeverLosesRows:
         book.save(buffer)
         return base64.b64encode(buffer.getvalue()).decode()
 
-    def test_an_import_past_the_workbooks_limit_keeps_every_row(
+    def test_an_import_past_the_old_workbooks_limit_keeps_every_row(
             self, server, readonly_wb):
-        """The limit that used to lose rows is not in the path any more.
-
-        The workbook's consolidated sheet had a fixed last row, and an import
-        bigger than the room left dropped the overflow silently. Rows now go
-        to the unit's database, which has no such row, so a 2,000-row import
-        into a workbook with under 1,000 rows of headroom simply lands.
-        """
-        _status, before = call(server, "/api/timesheets")
-        assert before["capacity"]["headroom"] < 1000, "the fixture is nearly full"
-
+        """The workbook's consolidated sheet had a fixed last row, and an
+        import bigger than the room left dropped the overflow silently.  A
+        unit is its database, which has no such row."""
         content = self._export(readonly_wb, 2000)
         _status, staged = call(server, "/api/timesheets/stage", "POST", {
             "engineer": "Kirolos", "filename": "k.xlsx",
@@ -1150,12 +1088,6 @@ class TestAnImportNeverLosesRows:
         assert status == 200, (staged.get("errors"), applied)
         assert applied["rows"] == 2000
         assert applied["rows_written"] == 2000
-        # Nothing had to be widened, because nothing was written to a sheet.
-        assert applied["capacity_raised"] is None
 
         _status, after = call(server, "/api/timesheets")
-        assert after["source"] == "database"
         assert after["per_engineer"]["Kirolos"]["all_time_rows"] == 2000
-        # The workbook's own caps still describe its sheets; they are no
-        # longer warnings about the data, because the data is not there.
-        assert after["capacity_warnings"] == []
