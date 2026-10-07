@@ -513,8 +513,8 @@ def _quarterly(wb, index, quarters, engineers, hours_per_mm
         total = 0.0
         for engineer in engineers:
             hours = sum(
-                r["hours"] for r in index.rows
-                if r["engineer"] == engineer and r["date"]
+                r["hours"] for r in index.by_engineer.get(engineer, ())
+                if r["date"]
                 and quarter.start <= r["date"] <= quarter.end
             )
             value = hours / hours_per_mm if hours_per_mm else 0.0
@@ -639,7 +639,7 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
         date = row["date"]
         if date is None:
             continue
-        buckets[date.strftime("%Y-%m")][row["engineer"]][row["job_number"]] += row["hours"]
+        buckets[f"{date.year:04d}-{date.month:02d}"][row["engineer"]][row["job_number"]] += row["hours"]
 
     out: List[Dict[str, Any]] = []
     for label, first, last in _months_in(period):

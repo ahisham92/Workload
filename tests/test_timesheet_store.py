@@ -10,7 +10,7 @@ import datetime as dt
 
 import pytest
 
-from workload_app.timesheet_store import TimesheetStore
+from workload_app.timesheet_store import REVISION_KEY, TimesheetStore
 
 
 @pytest.fixture
@@ -120,4 +120,5 @@ class TestSettings:
     def test_clearing_one(self, store):
         store.set_setting("start_date", "2025-01-01")
         store.set_setting("start_date", None)
-        assert store.settings() == {}
+        # Only the count of writes is left, which every write bumps.
+        assert store.settings() == {REVISION_KEY: "2"}

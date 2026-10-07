@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import functools
 import json
 import threading
 import traceback
@@ -29,6 +30,7 @@ from . import (calendar_, checkins as checkins_module, config as cfg, daily, der
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .model import ValidationError, iso, today as _model_today
+from . import unit as unit_module
 from .unit import Unit, outside_message
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -48,6 +50,28 @@ class ApiError(Exception):
         self.status = status
         self.message = message
         self.errors = errors or [message]
+
+
+
+def _remembered(method):
+    """A read whose answer is kept until the unit is next written.
+
+    Every tab asks for its figures again each time it is shown, and most of
+    them start from the same rows; worked out once per revision of the unit,
+    they cost one lookup after that.  The answer depends on the unit's data
+    (the revision), the arguments, which unit this is, and today's date --
+    all of which are part of the key.  Each caller gets its own copy.
+    """
+    @functools.wraps(method)
+    def remembered(self, *args):
+        with self._lock:
+            wb = self.workbook
+            key = ("view", method.__name__, json.dumps(
+                [args, self.unit, self.read_only, self._unlocked],
+                sort_keys=True, default=str), _today().isoformat())
+            return unit_module.fresh_copy(
+                wb._cached(key, lambda: method(self, *args)))
+    return remembered
 
 
 class WorkloadService:
@@ -101,7 +125,7 @@ class WorkloadService:
             if not resolved.is_file():
                 raise ApiError(HTTPStatus.NOT_FOUND,
                                "That unit's data is missing.")
-            self._wb = Unit(resolved)
+            self._wb = unit_module.shared(resolved)
             self.path = resolved
             self.unit = unit
             self.read_only = read_only
@@ -112,7 +136,10 @@ class WorkloadService:
             return self.status()
 
     def _index(self, wb: Unit) -> "metrics.TimesheetIndex":
-        return metrics.TimesheetIndex(wb, self._store)
+        """The timesheet rows, indexed; built once per revision of the unit."""
+        if self._store is not getattr(wb, "store", None):
+            return metrics.TimesheetIndex(wb, self._store)
+        return wb._cached("index", lambda: metrics.TimesheetIndex(wb, self._store))
 
     @property
     def store(self) -> "TimesheetStore":
@@ -188,14 +215,16 @@ class WorkloadService:
         with self._lock:
             return self.workbook.reference()
 
+    @_remembered
     def overview(self, year: Optional[int]) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
             index = self._index(wb)
-            data = metrics.overview(wb, year, self._store)
+            data = metrics.overview(wb, year, self._store, index=index)
             data["available_years"] = metrics.available_years(wb, index)
             return data
 
+    @_remembered
     def projects(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -207,6 +236,7 @@ class WorkloadService:
                 "drawings": self._drawings(wb, index, rows)["projects"],
             }
 
+    @_remembered
     def deliverables(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -245,6 +275,7 @@ class WorkloadService:
             result["save"] = self._commit()
             return result
 
+    @_remembered
     def reports(self, kind: str, year: Optional[int],
                 quarter: Optional[str]) -> Dict[str, Any]:
         """Every report figure for one period, computed in a single pass."""
@@ -693,6 +724,7 @@ class WorkloadService:
     # The establishment: which team each person is in, and their grade.  A
     # head of department has many people, and they move between teams often.
 
+    @_remembered
     def roster(self) -> Dict[str, Any]:
         with self._lock:
             # Units imported before teams were read from the timesheets get
@@ -702,6 +734,7 @@ class WorkloadService:
             return people_module.roster(self.store,
                                         known=self.workbook.ts_sheets())
 
+    @_remembered
     def resourcing(self, year: Optional[int] = None) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -713,6 +746,7 @@ class WorkloadService:
                 wb, self._index(wb))
             return data
 
+    @_remembered
     def portfolio_map(self, year: Optional[int] = None) -> Dict[str, Any]:
         """The picture: circles for projects, threads for the people on them."""
         with self._lock:
@@ -811,6 +845,7 @@ class WorkloadService:
                       if not derive.needs_confirming(p.notes or "")},
             issued={row: e["issued"] for row, e in self._listed(deliverables).items()})
 
+    @_remembered
     def drawings(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -912,7 +947,7 @@ class WorkloadService:
                   teams: Sequence[Dict[str, Any]] = ()):
         """The working-day settings, less holidays and whoever is away."""
         today = _today()
-        leave = calendar_.leave_from_timesheets(rows, codes=calendar_.leave_codes(wb))
+        leave = {name: set(days) for name, days in self._leave(wb, rows).items()}
         absences = self.store.absences()
         choice = self._holiday_choice(teams)
         public = holidays_module.calendar_for(
@@ -924,6 +959,16 @@ class WorkloadService:
             holidays=calendar_.workbook_holidays(wb) | public["common"],
             absences=absences, leave=leave, own_holidays=public["own"])
         return config, absences, leave, public, choice
+
+    def _leave(self, wb, rows) -> Dict[str, Any]:
+        """Days off booked on the timesheets, read once per revision."""
+        codes = calendar_.leave_codes(wb)
+        build = lambda: calendar_.leave_from_timesheets(          # noqa: E731
+            rows, codes=codes)
+        if self._store is not getattr(wb, "store", None):
+            return build()
+        # Kept with the rows, for as long as the codes that mean leave hold.
+        return wb._cached(("leave", tuple(sorted(codes))), build)
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
@@ -1043,6 +1088,7 @@ class WorkloadService:
             return {"removed": move_id,
                     "outlook": self._outlook(self.workbook, body or {})}
 
+    @_remembered
     def needs(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
@@ -1073,6 +1119,7 @@ class WorkloadService:
                              for t in sorted(self.store.teams(), key=lambda t: t["name"])]
             return data
 
+    @_remembered
     def checkins(self) -> Dict[str, Any]:
         """Free hours, how loaded each person has been, and what to ask them."""
         with self._lock:
@@ -1116,6 +1163,7 @@ class WorkloadService:
             return {"removed": item_id, "needs": self.needs()}
 
     # -- the day, requests as they come in, and the submissions plan -------
+    @_remembered
     def day_plan(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
         """Everybody's day -- or week -- laid out from what is already known."""
         with self._lock:
@@ -1217,6 +1265,7 @@ class WorkloadService:
                      if h["date"] >= today.isoformat()][:40],
         }
 
+    @_remembered
     def holidays(self) -> Dict[str, Any]:
         with self._lock:
             return self._holidays_view(self._planning(self.workbook), _today())
@@ -1359,6 +1408,7 @@ class WorkloadService:
             saved = wb.save_task(data, task_id=task_id)
             return {"task": saved, "save": self._commit()}
 
+    @_remembered
     def submissions(self) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook

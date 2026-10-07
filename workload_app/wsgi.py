@@ -84,6 +84,8 @@ def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
         # under HTTP_*, and this key is not one of those.
         site=site if isinstance(site, dict) and site.get("id") not in (None, "") else None,
         mount=str(environ.get("SCRIPT_NAME") or "").rstrip("/"),
+        accept_encoding=str(environ.get("HTTP_ACCEPT_ENCODING") or ""),
+        if_none_match=str(environ.get("HTTP_IF_NONE_MATCH") or ""),
     )
 
 
@@ -93,10 +95,12 @@ def _reply(start_response: Callable[..., Any], response: Response,
     headers: List = [
         ("Content-Type", response.content_type),
         ("Content-Length", str(len(response.body))),
-        ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"),
         ("Referrer-Policy", "same-origin"),
     ]
+    # Nothing is kept by the browser unless the response says it may be.
+    if not any(name.lower() == "cache-control" for name, _ in response.headers):
+        headers.append(("Cache-Control", "no-store"))
     headers.extend(response.headers)
     start_response(status, headers)
     return [b""] if head else [response.body]

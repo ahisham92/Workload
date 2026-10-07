@@ -629,5 +629,8 @@ def teams_from_timesheets(store, make_id) -> Dict[str, Any]:
             made.append(unit)
         store.save_person(name, team_id=team["id"])
         moved.append(name)
-    store.set_setting(_PLACED_SETTING, json.dumps(sorted(placed)))
+    placed_now = json.dumps(sorted(placed))
+    if placed_now != store.setting(_PLACED_SETTING):
+        # Written only when it changes: every write starts the figures afresh.
+        store.set_setting(_PLACED_SETTING, placed_now)
     return {"teams_made": made, "placed": moved}

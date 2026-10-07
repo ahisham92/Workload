@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
 from .model import Deliverable
-from .unit import Unit
+from .unit import Unit, fresh_copy
 
 #: Job Type values the Phasing sheet uses to pick up proposal effort.
 PROPOSAL_JOB_TYPES = {
@@ -43,6 +43,25 @@ class TimesheetIndex:
         self.by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for row in self.rows:
             self.by_job[row["job_number"]].append(row)
+        self._by: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+    def _grouped(self, field: str) -> Dict[str, List[Dict[str, Any]]]:
+        """The rows by one field, each group in the rows' own order -- so a
+        sum over a group adds up exactly as the same sum over every row."""
+        if field not in self._by:
+            groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+            for row in self.rows:
+                groups[row[field]].append(row)
+            self._by[field] = groups
+        return self._by[field]
+
+    @property
+    def by_type(self) -> Dict[str, List[Dict[str, Any]]]:
+        return self._grouped("job_type")
+
+    @property
+    def by_engineer(self) -> Dict[str, List[Dict[str, Any]]]:
+        return self._grouped("engineer")
 
     def hours_for_job(self, job_number: str, *, phase: Optional[int] = None,
                       engineer: Optional[str] = None,
@@ -76,9 +95,7 @@ class TimesheetIndex:
         ]
         year = _year_suffix(code)
         total = 0.0
-        for row in self.rows:
-            if row["job_type"] != job_type:
-                continue
+        for row in self.by_type.get(job_type, ()):
             if engineer is not None and row["engineer"] != engineer:
                 continue
             if year is not None and (row["date"] is None or row["date"].year != year):
@@ -157,7 +174,18 @@ def engineer_shares(deliverables: List[Deliverable], credit_lookup,
 
 
 def project_rows(wb: Unit, index: TimesheetIndex) -> List[Dict[str, Any]]:
-    """One row per project: effort spent, value earned and how efficient it was."""
+    """One row per project: effort spent, value earned and how efficient it was.
+
+    Most screens start from these; they are worked out once per revision of
+    the unit when ``index`` is the unit's own, and each caller gets a copy.
+    """
+    if index is getattr(wb, "_row_cache", {}).get("index"):
+        return fresh_copy(wb._cached("project_rows",
+                                     lambda: _project_rows(wb, index)))
+    return _project_rows(wb, index)
+
+
+def _project_rows(wb: Unit, index: TimesheetIndex) -> List[Dict[str, Any]]:
     hours_per_mm = wb.hours_per_man_month()
     steps = {(s.type_code, s.step_no): s.credit for s in wb.credit_steps()}
 
@@ -376,9 +404,10 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
 # --------------------------------------------------------------------------
 
 def overview(wb: Unit, year: Optional[int] = None,
-             store: Any = None) -> Dict[str, Any]:
+             store: Any = None, *, index: Optional[TimesheetIndex] = None
+             ) -> Dict[str, Any]:
     """Everything the app's front page shows."""
-    index = TimesheetIndex(wb, store)
+    index = index or TimesheetIndex(wb, store)
     projects = project_rows(wb, index)
     hours_per_mm = wb.hours_per_man_month()
 

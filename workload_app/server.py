@@ -61,13 +61,17 @@ class Handler(BaseHTTPRequestHandler):
             body=body,
             cookies=parse_cookies(self.headers.get("Cookie")),
             secure=self.headers.get("X-Forwarded-Proto", "").lower() == "https",
+            accept_encoding=self.headers.get("Accept-Encoding") or "",
+            if_none_match=self.headers.get("If-None-Match") or "",
         )
         response = self.app.handle(request)
         try:
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(response.body)))
-            self.send_header("Cache-Control", "no-store")
+            if not any(name.lower() == "cache-control"
+                       for name, _ in response.headers):
+                self.send_header("Cache-Control", "no-store")
             for name, value in response.headers:
                 self.send_header(name, value)
             self.end_headers()

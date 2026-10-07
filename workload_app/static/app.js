@@ -2551,12 +2551,14 @@ async function refreshAll() {
   if (!status.open) { showShell(false); await renderChooser(); return; }
 
   const yearParam = state.year === null ? 'all' : state.year;
-  const [overview, projects, people] = await Promise.all([
+  // Everything the first screen needs is asked for at once, not in turn.
+  const [overview, projects, people, firstReport] = await Promise.all([
     api(`/api/overview?year=${yearParam}`),
     api('/api/projects'),
     // Grades and teams, for the formation on the Overview. Without them the
     // team still shows, in one row.
     api('/api/people').catch(() => ({ people: [] })),
+    state.report ? null : api('/api/reports?period=year'),
   ]);
   state.overview = overview;
   state.people = people.people || [];
@@ -2578,18 +2580,18 @@ async function refreshAll() {
   renderTimesheets();
   renderProjects();
   renderReference();
-  await setupReports();
+  await setupReports(firstReport);
   if (state.team) await loadTeam();
   if (state.tasks) await loadTasks();
   if (window.planner) window.planner.afterRefresh();
   if (window.checkins) window.checkins.summary();
 }
 
-async function setupReports() {
+async function setupReports(prefetched) {
   const periods = state.report ? state.report.periods : null;
   if (!periods) {
     // First load: fetch once to learn which years the workbook covers.
-    const first = await api('/api/reports?period=year');
+    const first = prefetched || await api('/api/reports?period=year');
     state.report = first;
     state.year = first.period.year;
     if (!state.reportMember) state.reportMember = first.engineers[0];

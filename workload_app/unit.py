@@ -18,9 +18,11 @@ process, through a revision number every write bumps.
 
 from __future__ import annotations
 
+import copy
 import datetime as _dt
 import json
 import sqlite3
+import threading
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,7 +32,8 @@ from . import config as cfg, tasks as task_list
 from .model import (CreditStep, Deliverable, Engineer, Project, ProjectType,
                     ValidationError, as_date, as_fraction, as_number, as_text,
                     iso, pattern_to_regex, stored_date)
-from .timesheet_store import TimesheetStore
+from .timesheet_store import (REVISION_KEY, ROWS_REVISION_KEY, TimesheetStore,
+                              note_change)
 
 SCHEMA = """
 -- The team: everybody whose effort is measured here.  No limit on how many.
@@ -191,7 +194,10 @@ CREATE TABLE IF NOT EXISTS phasing (
 #: Settings this module keeps in the store's ``settings`` table.
 _PREFIX = "unit."
 _MODEL = _PREFIX + "model"
-_REVISION = _PREFIX + "revision"
+_REVISION = REVISION_KEY
+
+#: Cached values worked out from the timesheet rows and nothing else.
+ROW_KEYS = frozenset({"rows", "index", "leave"})
 
 #: How many years either side of the plan year a new unit has availability for.
 YEARS_EITHER_SIDE = 2
@@ -217,9 +223,16 @@ class Unit:
         #: The timesheet rows and everything else the planner keeps, in the
         #: same file.  Making it first makes the file and its settings table.
         self.store = TimesheetStore(self.path)
+        self._cache: Dict[str, Any] = {}
+        #: What is read from the timesheet rows alone (``ROW_KEYS``), kept
+        #: through writes to anything else.
+        self._row_cache: Dict[str, Any] = {}
+        self._revision: Any = None
         with self._connect() as db:
             db.executescript(SCHEMA)
-        self._cache: Dict[str, Any] = {}
+        # What the store reads is kept with the rest, and forgotten with it.
+        self.store.memo = self._cached
+        self.store.changed = self.reload
         if seed and not self.is_set_up():
             self.seed(load_defaults())
         self._revision = self._read_revision()
@@ -231,34 +244,71 @@ class Unit:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode = WAL")
         db.execute("PRAGMA busy_timeout = 15000")
+        wrote = False
         try:
             yield db
+            wrote = note_change(db)
             db.commit()
         finally:
             db.close()
+        if wrote:
+            self.reload()
 
     @contextmanager
     def _write(self):
-        """A change, committed whole or not at all, that other readers notice."""
+        """A change, committed whole or not at all, that other readers notice.
+
+        Any write through ``_connect`` bumps the revision (``note_change``);
+        this is the name the writers use.
+        """
         with self._connect() as db:
             yield db
-            db.execute(
-                "INSERT INTO settings (key, value) VALUES (?, '1') "
-                "ON CONFLICT(key) DO UPDATE SET "
-                "value = CAST(value AS INTEGER) + 1", (_REVISION,))
-        self._cache.clear()
-        self._revision = self._read_revision()
 
-    def _read_revision(self) -> str:
+    def _read_revision(self) -> Tuple[Any, str, str]:
+        """Which version of the file this is: the file itself, its count of
+        writes, and its count of writes to the timesheet rows.  A copy put
+        back in place is a different file even when it happens to carry the
+        same counts."""
         with self._connect() as db:
-            row = db.execute("SELECT value FROM settings WHERE key = ?",
-                             (_REVISION,)).fetchone()
-        return row["value"] if row else "0"
+            counts = dict(db.execute(
+                "SELECT key, value FROM settings WHERE key IN (?, ?)",
+                (_REVISION, ROWS_REVISION_KEY)).fetchall())
+        return (_identity(self.path), counts.get(_REVISION, "0"),
+                counts.get(ROWS_REVISION_KEY, "0"))
 
-    def _cached(self, key: str, build):
-        if key not in self._cache:
-            self._cache[key] = build()
-        return self._cache[key]
+    @property
+    def revision(self) -> Tuple[Any, str, str]:
+        """The version of the unit everything cached was read from."""
+        return self._revision
+
+    def _forget(self, current) -> None:
+        """Drop what was read before ``current``; the rows only if they changed."""
+        before = self._revision
+        self._cache.clear()
+        if (before is None or current[0] != before[0]
+                or current[2] != before[2]):
+            self._row_cache.clear()
+        self._revision = current
+
+    def _cached(self, key: Any, build):
+        """``build()``, kept until the unit is next written.
+
+        What comes from the timesheet rows alone (``ROW_KEYS``) is kept until
+        the rows are next written.  Anything built while a write happened --
+        here or seen from another worker -- is handed back but not kept, so
+        nothing older than the last write is ever served.
+        """
+        name = key[0] if isinstance(key, tuple) else key
+        cache = self._row_cache if name in ROW_KEYS else self._cache
+        try:
+            return cache[key]
+        except KeyError:
+            pass
+        before = self._revision
+        value = build()
+        if self._revision == before:
+            cache[key] = value
+        return value
 
     def _setting(self, key: str, default: Any = None) -> Any:
         return self._settings().get(_PREFIX + key, default)
@@ -284,15 +334,13 @@ class Unit:
         return {"saved": True, "backup": None, "path": str(self.path)}
 
     def reload(self) -> None:
-        self._cache.clear()
-        self._revision = self._read_revision()
+        self._forget(self._read_revision())
 
     def refresh(self) -> bool:
         """Forget what was read if another worker has written since."""
         current = self._read_revision()
         if current != self._revision:
-            self._cache.clear()
-            self._revision = current
+            self._forget(current)
             return True
         return False
 
@@ -1450,6 +1498,7 @@ class Unit:
             # full name when they were imported; there is no pattern to hold
             # them to, and they are listed below rather than counted here.
             regex = pattern_to_regex(person.pattern) if person else None
+            matches: Dict[Any, bool] = {}
             for row in rows:
                 booked = row["hours"]
                 hours += booked
@@ -1459,10 +1508,15 @@ class Unit:
                 if year is not None and date and date.year == year:
                     in_year_rows += 1
                     in_year_hours += booked
-                name = row["full_name"]
-                if regex is not None and not (isinstance(name, str)
-                                              and regex.match(name)):
-                    bad_names += 1
+                if regex is not None:
+                    # One person's rows carry one or two spellings of a name.
+                    name = row["full_name"]
+                    fits = matches.get(name)
+                    if fits is None:
+                        fits = matches[name] = bool(isinstance(name, str)
+                                                    and regex.match(name))
+                    if not fits:
+                        bad_names += 1
             total_rows += len(rows)
             total_hours += hours
             year_rows += in_year_rows
@@ -1772,3 +1826,67 @@ def outside_message(names: Sequence[str]) -> str:
         "toward the projects and in Resourcing; add them on Team to give them "
         "a KPI line and a share of a deliverable."
     )
+
+
+# -- one Unit per file, per worker ---------------------------------------
+
+def fresh_copy(value: Any) -> Any:
+    """A copy of a kept answer that its caller may change freely.
+
+    The answers are JSON-shaped -- dicts and lists of plain values -- so this
+    copies those itself, which is several times quicker than ``deepcopy``;
+    anything else that can change is handed to ``deepcopy``.
+    """
+    kind = type(value)
+    if kind is dict:
+        return {k: fresh_copy(v) for k, v in value.items()}
+    if kind is list:
+        return [fresh_copy(v) for v in value]
+    if kind in _UNCHANGING:
+        return value
+    return copy.deepcopy(value)
+
+
+_UNCHANGING = frozenset({str, int, float, bool, type(None), _dt.date,
+                         _dt.datetime})
+
+
+def _identity(path: Path) -> int:
+    """Which file is at ``path``: a copy put in its place is another file.
+
+    (Not its times: SQLite writes the file itself whenever the last
+    connection closes, which is after nearly every change.)
+    """
+    try:
+        return path.stat().st_ino
+    except OSError:                        # pragma: no cover - gone underneath
+        return 0
+
+
+#: How many units a worker keeps what it has read of.
+KEPT_OPEN = 8
+_open_units: "OrderedDict[Path, Unit]" = OrderedDict()
+_open_lock = threading.Lock()
+
+
+def shared(path: Union[str, Path]) -> Unit:
+    """The worker's one :class:`Unit` for this file, with what it has read.
+
+    Opening a unit again -- after switching away and back, or to put several
+    side by side -- starts from what was already worked out, as long as the
+    file has not been written since (``refresh``).  A file put in its place
+    is a new file, and starts afresh.
+    """
+    key = Path(path).resolve()
+    with _open_lock:
+        unit = _open_units.pop(key, None)
+    if unit is None or unit.revision is None or unit.revision[0] != _identity(key):
+        unit = Unit(key)
+    else:
+        unit.refresh()
+    with _open_lock:
+        _open_units[key] = unit
+        while len(_open_units) > KEPT_OPEN:
+            _open_units.popitem(last=False)
+    return unit
+
