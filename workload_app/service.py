@@ -9,6 +9,7 @@ service instance simply never sees another account's file.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import os
 import threading
 import uuid
@@ -18,8 +19,11 @@ from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from . import (config as cfg, derive, library, metrics, people as people_module,
-               progress, reports, tasks as task_sheet, timesheets)
+from . import (config as cfg, daily, derive, drawings as drawings_module,
+               intake, library, metrics, needs as needs_module,
+               people as people_module, submissions as submissions_module,
+               planner as planner_module, progress, reports,
+               tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .workbook import ValidationError, WorkloadWorkbook, iso
@@ -282,9 +286,11 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             index = self._index(wb)
+            rows = metrics.project_rows(wb, index)
             return {
                 "projects": [p.to_dict() for p in wb.projects()],
-                "metrics": metrics.project_rows(wb, index),
+                "metrics": rows,
+                "drawings": self._drawings(wb, index, rows)["projects"],
             }
 
     def deliverables(self) -> Dict[str, Any]:
@@ -393,8 +399,19 @@ class WorkloadService:
             if derive.needs_confirming(project.get("notes") or ""):
                 project["notes"] = (project["notes"] or "").replace(
                     derive.TO_CONFIRM, "").strip()
+            items = body.get("deliverables", [])
+            # Drawings are checked before anything is written, so a typo in
+            # one count does not leave the project saved without its drawings.
+            counts = [drawings_module.clean_count(item.get("drawings"))
+                      if "drawings" in item else drawings_module.KEEP
+                      for item in items]
             result = self.workbook.save_project_with_deliverables(
-                number, project, body.get("deliverables", []))
+                number, project, items)
+            for written, count in zip(result["deliverables"], counts):
+                if count is not drawings_module.KEEP:
+                    self.store.set_drawings(written["row"],
+                                            written["project_number"], count)
+                    written["drawings"] = count
             result["save"] = self._commit()
             return result
 
@@ -409,19 +426,22 @@ class WorkloadService:
             rows = {m["row"]: m for m in metrics.deliverable_rows(wb, index)}
             attached = [d for d in wb.deliverables()
                         if d.project_number == project.number]
+            drawn = drawings_module.counts(self.store, attached)
             figures = [m for m in metrics.project_rows(wb, index)
                        if m["number"] == project.number]
             return {
                 "project": project.to_dict(),
                 "metrics": figures[0] if figures else None,
                 "deliverables": [
-                    {**d.to_dict(), "computed": rows.get(d.row)} for d in attached
+                    {**d.to_dict(), "computed": rows.get(d.row),
+                     "drawings": drawn.get(d.row)} for d in attached
                 ],
             }
 
     def delete_deliverable(self, row: int) -> Dict[str, Any]:
         with self._lock:
             result = self.workbook.delete_deliverable(row)
+            self.store.set_drawings(row, "", None)
             result["save"] = self._commit()
             return result
 
@@ -619,8 +639,11 @@ class WorkloadService:
                 if grade and person not in graded:
                     store.save_person(person, grade=grade)
 
+            placed = people_module.teams_from_timesheets(
+                store, lambda: uuid.uuid4().hex[:12])
             projects = self._add_derived_projects()
             result = {
+                "teams_from_timesheets": placed,
                 "rows_written": written,
                 "rows_in_unit": store.count(),
                 "mode": mode,
@@ -788,6 +811,10 @@ class WorkloadService:
 
     def roster(self) -> Dict[str, Any]:
         with self._lock:
+            # Units imported before teams were read from the timesheets get
+            # theirs the first time anybody looks.
+            people_module.teams_from_timesheets(
+                self.store, lambda: uuid.uuid4().hex[:12])
             return people_module.roster(self.store,
                                         known=self.workbook.ts_sheets())
 
@@ -879,6 +906,344 @@ class WorkloadService:
         with self._lock:
             self.store.remove_person(people_module.clean_name(name))
             return {"removed": name}
+
+    # -- drawings, the coming days, and who is needed ---------------------
+    def _drawings(self, wb, index, project_rows=None) -> Dict[str, Any]:
+        deliverables = wb.deliverables()
+        return drawings_module.summary(
+            metrics.deliverable_rows(wb, index),
+            drawings_module.counts(self.store, deliverables),
+            project_rows if project_rows is not None
+            else metrics.project_rows(wb, index),
+            people_module.roster(self.store, known=wb.ts_sheets())["people"],
+            measured={p.number for p in wb.projects()
+                      if not derive.needs_confirming(p.notes or "")})
+
+    def drawings(self) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            return self._drawings(wb, self._index(wb))
+
+    def save_drawings(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            saved = drawings_module.save_counts(
+                self.store, wb.deliverables(), body.get("counts") or {})
+            return {"saved": saved, "drawings": self._drawings(wb, self._index(wb))}
+
+    def _planning(self, wb) -> Dict[str, Any]:
+        """What the planner and the forecast both start from."""
+        index = self._index(wb)
+        project_rows = metrics.project_rows(wb, index)
+        drawn = self._drawings(wb, index, project_rows)
+        people_module.teams_from_timesheets(self.store,
+                                            lambda: uuid.uuid4().hex[:12])
+        roster = people_module.roster(self.store, known=wb.ts_sheets())
+        return {
+            "rows": self.store.all_rows(),
+            "tasks": task_sheet.read(wb.raw),
+            "roster": roster["people"],
+            "teams": roster["teams"],
+            "config": wb.task_settings(),
+            "project_rows": project_rows,
+            "project_names": {p.number: p.name or p.number for p in wb.projects()},
+            "drawings": drawn,
+        }
+
+    def _outlook(self, wb, body: Dict[str, Any], *, suggest: bool = False
+                 ) -> Dict[str, Any]:
+        inputs = self._planning(wb)
+        days = planner_module.clean_days(body.get("days"))
+        moves = planner_module.clean_moves(
+            body.get("moves"), people=[p["name"] for p in inputs["roster"]],
+            tasks=inputs["tasks"])
+        common = dict(
+            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
+            config=inputs["config"], project_names=inputs["project_names"],
+            drawings_left=drawings_module.left_by_project(inputs["drawings"]),
+            saved=self.store.plan_moves(), days=days)
+        suggested: List[Dict[str, Any]] = []
+        if suggest:
+            suggested = planner_module.suggest(moves=moves, **common)
+            moves = moves + suggested
+        data = planner_module.outlook(moves=moves, **common)
+        data["suggested"] = suggested
+        data["drawings"] = {k: inputs["drawings"][k] for k in
+                            ("known", "total", "done", "left", "hours_per_drawing",
+                             "drafting_hours_per_drawing", "people", "teams",
+                             "projects")}
+        data["open_tasks"] = [
+            {"id": t.id, "name": t.name, "project_number": t.project_number,
+             "assignees": list(t.assignees), "hours_each": round(t.hours_each(), 1),
+             "due": iso(t.due)}
+            for t in inputs["tasks"] if not t.done and t.assignees]
+        data["projects"] = [{"number": n, "name": name}
+                            for n, name in inputs["project_names"].items()]
+        return data
+
+    def planner(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            return self._outlook(self.workbook, body)
+
+    def planner_suggest(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            return self._outlook(self.workbook, body, suggest=True)
+
+    def planner_commit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Make the moves real: tasks change hands, shares of projects are kept."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            moves = planner_module.clean_moves(
+                body.get("moves"), people=[p["name"] for p in inputs["roster"]],
+                tasks=inputs["tasks"])
+            if not moves:
+                raise planner_module.PlanError(["There is nothing to commit."])
+            days = planner_module.clean_days(body.get("days"))
+            window = planner_module.days_ahead(_today(), days, inputs["config"])
+            start, end = window[0].isoformat(), window[-1].isoformat()
+            engineers = set(wb.engineer_names())
+            tasks_by_id = {t.id: t for t in inputs["tasks"]}
+            for move in moves:
+                if move["kind"] == "task" and move["to"] not in engineers:
+                    raise planner_module.PlanError([
+                        f"{move['to']} has no place in the workbook's task list "
+                        f"yet, so a task cannot be given to them. Hand them a "
+                        f"share of the project instead."])
+            saved_projects, saved_tasks = 0, 0
+            for move in moves:
+                if move["kind"] == "project":
+                    self.store.add_plan_move(
+                        project=move["project"], from_person=move["from"],
+                        to_person=move["to"], share=move["share"],
+                        start=start, end=end)
+                    saved_projects += 1
+                else:
+                    task = tasks_by_id[move["task_id"]].to_dict()
+                    task["assignees"] = list(dict.fromkeys(
+                        move["to"] if n == move["from"] else n
+                        for n in task["assignees"]))
+                    wb.save_task(task, task_id=move["task_id"])
+                    saved_tasks += 1
+            result: Dict[str, Any] = {"projects_moved": saved_projects,
+                                      "tasks_moved": saved_tasks}
+            if saved_tasks:
+                result["save"] = self._commit()
+            result["outlook"] = self._outlook(wb, {"days": days})
+            return result
+
+    def remove_plan_move(self, move_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            if not self.store.remove_plan_move(move_id):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such handover.")
+            return {"removed": move_id,
+                    "outlook": self._outlook(self.workbook, body or {})}
+
+    def needs(self) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            drawn = inputs["drawings"]
+            unit = self.unit or {}
+            data = needs_module.forecast(
+                rows=inputs["rows"], project_rows=inputs["project_rows"],
+                projects=wb.projects(), roster=inputs["roster"],
+                config=inputs["config"], hours_per_mm=wb.hours_per_man_month(),
+                drawings_left=drawings_module.left_by_project(drawn),
+                drafting_hours_per_drawing=drawn["drafting_hours_per_drawing"],
+                today=_today(),
+                unit_name=(unit.get("name") if isinstance(unit, dict) else "") or "",
+                requests=[(name, t.due, t.hours_each())
+                          for t in inputs["tasks"]
+                          if intake.is_request(t) and not t.done and t.due
+                          for name in t.assignees])
+            data["drawings"] = {k: drawn[k] for k in
+                                ("known", "total", "done", "left", "progress",
+                                 "hours_per_drawing", "drafting_hours_per_drawing",
+                                 "deliverables_with_drawings",
+                                 "deliverables_without")}
+            return data
+
+    # -- the day, requests as they come in, and the submissions plan -------
+    def day_plan(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Everybody's day -- or week -- laid out from what is already known."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            today = _today()
+            raw = (query.get("date") or [""])[0]
+            try:
+                day = _dt.date.fromisoformat(raw) if raw else today
+            except ValueError:
+                raise ApiError(HTTPStatus.BAD_REQUEST, f"{raw!r} is not a date.")
+            span = (query.get("span") or ["day"])[0]
+            config = inputs["config"]
+            days = daily.week_of(day, config) if span == "week" else [day]
+            saved = self.store.plan_moves()
+            slots = self.store.slots()
+            out = []
+            for each in days:
+                out.append(daily.plan_day(
+                    day=each, today=today, roster=inputs["roster"],
+                    rates=daily.rates_on(each, inputs["rows"], config, saved),
+                    tasks=inputs["tasks"], slots=slots, config=config,
+                    project_names=inputs["project_names"]))
+            requests = []
+            for task in inputs["tasks"]:
+                if not intake.is_request(task):
+                    continue
+                slot = slots.get(task.id)
+                if task.done and not (slot and slot["start"][:10] >= today.isoformat()):
+                    continue
+                requests.append({
+                    "id": task.id, "title": task.name,
+                    "project_number": task.project_number,
+                    "person": (task.assignees or [""])[0],
+                    "hours": task.required_hours, "due": iso(task.due),
+                    "done": task.done,
+                    "start": slot["start"] if slot else None,
+                    "end": slot["end"] if slot else None,
+                    "late": bool(slot and task.due
+                                 and slot["end"][:10] > task.due.isoformat()),
+                })
+            requests.sort(key=lambda r: (r["done"], r["start"] or ""))
+            teams = {p["team_id"]: p["team_name"] for p in inputs["roster"]
+                     if p.get("team_id")}
+            return {
+                "today": today.isoformat(),
+                "date": day.isoformat(),
+                "span": "week" if span == "week" else "day",
+                "days": out,
+                "requests": requests,
+                "teams": [{"id": k, "name": v} for k, v in sorted(
+                    teams.items(), key=lambda kv: kv[1])],
+                "people": [{"name": p["name"], "role": people_module.role_of(p.get("grade")),
+                            "team_name": p.get("team_name", "")}
+                           for p in inputs["roster"] if p.get("active", True)],
+                "projects": [{"number": n, "name": name}
+                             for n, name in inputs["project_names"].items()],
+                "engineers": wb.engineer_names(),
+                "unit": (self.unit or {}).get("name") if isinstance(self.unit, dict) else "",
+            }
+
+    def add_request(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """One line in; a person and a time slot out."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            today = _today()
+            request = intake.clean(body, projects=inputs["project_names"],
+                                   today=today)
+            engineers = wb.engineer_names()
+            person = request["person"]
+            if person and person not in engineers:
+                raise intake.IntakeError([
+                    f"{person} has no place on the task list yet, so a request "
+                    f"cannot be given to them."])
+            if not person:
+                view = planner_module.outlook(
+                    rows=inputs["rows"], tasks=inputs["tasks"],
+                    roster=inputs["roster"], config=inputs["config"],
+                    project_names=inputs["project_names"],
+                    drawings_left=drawings_module.left_by_project(inputs["drawings"]),
+                    saved=self.store.plan_moves(), today=today,
+                    days=max(1, len(task_sheet.working_days(
+                        today, max(request["due"], today), inputs["config"]))))
+                history: Dict[str, set] = {}
+                for row in inputs["rows"]:
+                    history.setdefault(row["job_number"], set()).add(row["engineer"])
+                person = intake.choose(view, role=request["role"],
+                                       project=request["project_number"],
+                                       eligible=engineers, history=history)
+            if not person:
+                raise intake.IntakeError(["There is nobody on the team to give it to."])
+            now = intake.parse_now(body.get("now"))
+            if now.date() < today:
+                now = _dt.datetime.combine(today, _dt.time(0, 0))
+            taken = [(_dt.datetime.fromisoformat(s["start"]),
+                      _dt.datetime.fromisoformat(s["end"]))
+                     for s in self.store.slots().values() if s["person"] == person]
+            start, end = intake.slot(hours=request["hours"], now=now, taken=taken,
+                                     config=inputs["config"])
+            task = wb.save_task({
+                "name": request["title"],
+                "definition": f"Came in {now:%a %d %b %H:%M}.",
+                "project_number": request["project_number"],
+                "assignees": [person],
+                "required_hours": request["hours"],
+                "start": start.date().isoformat(),
+                "due": max(request["due"], start.date()).isoformat(),
+                "kind": cfg.TASK_REQUEST_KIND,
+                "status": cfg.TASK_STATUSES[0],
+            })
+            self.store.set_slot(task["id"], person, start.isoformat(timespec="minutes"),
+                                end.isoformat(timespec="minutes"))
+            return {"task": task, "person": person,
+                    "start": start.isoformat(timespec="minutes"),
+                    "end": end.isoformat(timespec="minutes"),
+                    "late": end.date() > request["due"],
+                    "save": self._commit()}
+
+    def finish_request(self, task_id: int) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            task = next((t for t in task_sheet.read(wb.raw) if t.id == task_id), None)
+            if task is None:
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such request.")
+            data = task.to_dict()
+            data["status"] = cfg.TASK_DONE_STATUS
+            saved = wb.save_task(data, task_id=task_id)
+            return {"task": saved, "save": self._commit()}
+
+    def submissions(self) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            index = self._index(wb)
+            deliverables = wb.deliverables()
+            return submissions_module.plan(
+                deliverable_rows=metrics.deliverable_rows(wb, index),
+                deliverables=deliverables,
+                project_rows=metrics.project_rows(wb, index),
+                projects=wb.projects(), rows=self.store.all_rows(),
+                tasks=task_sheet.read(wb.raw), config=wb.task_settings(),
+                hours_per_mm=wb.hours_per_man_month(),
+                drawing_counts=drawings_module.counts(self.store, deliverables),
+                today=_today())
+
+    def confirm_submissions(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Write the confirmed dates, and put each run-up on the task list."""
+        with self._lock:
+            wb = self.workbook
+            items = body.get("items") or []
+            if not items:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "Choose a submission to confirm.")
+            by_row = {d.row: d for d in wb.deliverables()}
+            errors, chosen = [], []
+            for item in items:
+                try:
+                    row = int(item.get("row"))
+                    date = _dt.date.fromisoformat(str(item.get("date")))
+                except (TypeError, ValueError):
+                    errors.append(f"{item.get('date')!r} is not a date.")
+                    continue
+                if row not in by_row:
+                    errors.append(f"There is no deliverable on row {row}.")
+                    continue
+                chosen.append((row, date))
+            if errors:
+                raise ValidationError(errors)
+            prepared = 0
+            for row, date in chosen:
+                data = by_row[row].to_dict()
+                data["status_date"] = date.isoformat()
+                wb.update_deliverable(row, data)
+            if body.get("prepare", True):
+                for row, _date in chosen:
+                    prepared += wb.generate_submission_tasks(
+                        only_row=row, today=_today())["added"]
+            result = {"confirmed": len(chosen), "tasks_added": prepared,
+                      "save": self._commit()}
+            return result
 
     # -- reference tables ------------------------------------------------
     def unlock(self, password: str) -> Dict[str, Any]:
@@ -980,6 +1345,7 @@ class WorkloadService:
     def delete_task(self, task_id: int) -> Dict[str, Any]:
         with self._lock:
             result = self.workbook.delete_task(task_id)
+            self.store.remove_slot(task_id)
             result["save"] = self._commit()
             return result
 
@@ -1015,6 +1381,17 @@ class WorkloadService:
             self._staged.pop(token, None)
             return {"discarded": True}
 
+
+
+def _today():
+    """Today, which the tests can pin with ``WORKLOAD_TODAY``."""
+    pinned = os.environ.get("WORKLOAD_TODAY")
+    if pinned:
+        try:
+            return _dt.date.fromisoformat(pinned)
+        except ValueError:
+            pass
+    return _dt.date.today()
 
 
 def _year(query: Dict[str, List[str]]) -> Optional[int]:

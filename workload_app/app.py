@@ -36,7 +36,10 @@ from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
+from .drawings import DrawingsError
 from .people import PeopleError
+from .intake import IntakeError
+from .planner import PlanError
 from .tasks import TaskError
 from .timesheets import ImportError_
 from .workbook import ValidationError
@@ -151,7 +154,8 @@ class WorkloadApp:
         except ApiError as exc:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
-        except (ValidationError, TaskError, PeopleError) as exc:
+        except (ValidationError, TaskError, PeopleError, PlanError,
+                DrawingsError, IntakeError) as exc:
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -985,6 +989,29 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.resourcing(_year(q)), "manager"),
             ("GET", "/api/portfolio-map",
              lambda ctx, q, b: ctx.service.portfolio_map(_year(q)), "manager"),
+            ("GET", "/api/drawings", lambda ctx, q, b: ctx.service.drawings(), "manager"),
+            ("PUT", "/api/drawings",
+             lambda ctx, q, b: ctx.service.save_drawings(b), "manager"),
+            ("POST", "/api/planner",
+             lambda ctx, q, b: ctx.service.planner(b), "manager"),
+            ("POST", "/api/planner/suggest",
+             lambda ctx, q, b: ctx.service.planner_suggest(b), "manager"),
+            ("POST", "/api/planner/commit",
+             lambda ctx, q, b: ctx.service.planner_commit(b), "manager"),
+            ("POST", "/api/planner/moves/{}/remove",
+             lambda ctx, q, b, move_id: ctx.service.remove_plan_move(_int(move_id), b),
+             "manager"),
+            ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
+            ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
+            ("POST", "/api/requests",
+             lambda ctx, q, b: ctx.service.add_request(b), "manager"),
+            ("POST", "/api/requests/{}/done",
+             lambda ctx, q, b, task_id: ctx.service.finish_request(_int(task_id)),
+             "manager"),
+            ("GET", "/api/submissions",
+             lambda ctx, q, b: ctx.service.submissions(), "manager"),
+            ("POST", "/api/submissions/confirm",
+             lambda ctx, q, b: ctx.service.confirm_submissions(b), "manager"),
             ("POST", "/api/teams", lambda ctx, q, b: ctx.service.add_team(b), "manager"),
             ("PUT", "/api/teams/{}",
              lambda ctx, q, b, team_id: ctx.service.update_team(team_id, b), "manager"),

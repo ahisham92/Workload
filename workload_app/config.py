@@ -383,7 +383,9 @@ TASK_HEADERS = [
 
 TASK_STATUSES = ["Not started", "In progress", "Blocked", "Done"]
 TASK_DONE_STATUS = "Done"
-TASK_KINDS = ["Task", "Submission", "Meeting"]
+TASK_KINDS = ["Task", "Submission", "Meeting", "Request"]
+#: Work that came in during the day, on top of whatever was already planned.
+TASK_REQUEST_KIND = "Request"
 
 #: The working day the load is measured against.  The team starts at 09:00 and
 #: is meant to finish at 17:30; anything past that is the overtime the stats

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS rows (
     deliverable     TEXT NOT NULL DEFAULT '',   -- what the phase is called
     job_status      TEXT NOT NULL DEFAULT '',
     grade           TEXT NOT NULL DEFAULT '',
+    unit            TEXT NOT NULL DEFAULT '',   -- CurrentUnitDesc: who sits where
     source          TEXT NOT NULL DEFAULT '',   -- the file it came from
     imported_at     TEXT NOT NULL
 );
@@ -75,12 +76,44 @@ CREATE TABLE IF NOT EXISTS people (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS people_team ON people(team_id);
+
+-- How many drawings a deliverable is.  The one figure no timesheet carries,
+-- and the one the work is measured by.  Keyed by the deliverable's row, with
+-- its project beside it so a row reused by another project reads as empty.
+CREATE TABLE IF NOT EXISTS drawings (
+    row            INTEGER PRIMARY KEY,
+    project_number TEXT NOT NULL,
+    count          INTEGER NOT NULL
+);
+
+-- Work handed from one person to another for the coming days: a share of
+-- what they have been doing on a project, from one day to another.
+CREATE TABLE IF NOT EXISTS plan_moves (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project     TEXT NOT NULL,
+    from_person TEXT NOT NULL,
+    to_person   TEXT NOT NULL,
+    share       REAL NOT NULL,
+    start       TEXT NOT NULL,
+    end         TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+-- When in the day a request that came in is being done: the task itself is
+-- on the workbook's task list, its time of day has nowhere to go there.
+CREATE TABLE IF NOT EXISTS slots (
+    task_id    INTEGER PRIMARY KEY,
+    person     TEXT NOT NULL,
+    start      TEXT NOT NULL,       -- ISO date and time, local to the team
+    end        TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 #: The columns a row is made of, in the order ``add`` expects them.
 FIELDS = ("person", "job_type", "job_number", "job_name", "full_name", "day",
           "phase", "regular_hours", "overtime_hours", "hours", "deliverable",
-          "job_status", "grade", "source")
+          "job_status", "grade", "unit", "source")
 
 #: Columns added after the first stores were made, and so added to those on
 #: open.  A store from before them simply has them blank.
@@ -88,6 +121,7 @@ _LATER_COLUMNS = {
     "deliverable": "TEXT NOT NULL DEFAULT ''",
     "job_status": "TEXT NOT NULL DEFAULT ''",
     "grade": "TEXT NOT NULL DEFAULT ''",
+    "unit": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -173,14 +207,15 @@ class TimesheetStore:
                 str(row.get("deliverable") or ""),
                 str(row.get("job_status") or ""),
                 str(row.get("grade") or ""),
+                str(row.get("unit") or ""),
                 str(row.get("source") or source),
                 stamp,
             ))
         db.executemany(
             "INSERT INTO rows (person, job_type, job_number, job_name, "
             "full_name, day, phase, regular_hours, overtime_hours, hours, "
-            "deliverable, job_status, grade, source, imported_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "deliverable, job_status, grade, unit, source, imported_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             payload)
         return len(payload)
 
@@ -356,6 +391,10 @@ class TimesheetStore:
             db.execute("UPDATE OR REPLACE people SET name = ? WHERE name = ?",
                        (new, old))
             db.execute("UPDATE rows SET person = ? WHERE person = ?", (new, old))
+            db.execute("UPDATE plan_moves SET from_person = ? "
+                       "WHERE from_person = ?", (new, old))
+            db.execute("UPDATE plan_moves SET to_person = ? "
+                       "WHERE to_person = ?", (new, old))
 
     # -- settings --------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -378,3 +417,71 @@ class TimesheetStore:
         with self._connect() as db:
             return {row["key"]: row["value"]
                     for row in db.execute("SELECT key, value FROM settings")}
+
+    # -- where people sit, by their own timesheets -------------------------
+    def latest_units(self) -> Dict[str, str]:
+        """Each person's ``CurrentUnitDesc`` on the latest day they booked."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT person, unit FROM rows WHERE unit <> '' "
+                "ORDER BY day IS NULL DESC, day, id").fetchall()
+        out: Dict[str, str] = {}
+        for row in rows:
+            out[row["person"]] = row["unit"]
+        return out
+
+    # -- drawings ----------------------------------------------------------
+    def drawings(self) -> Dict[int, Dict[str, Any]]:
+        with self._connect() as db:
+            return {row["row"]: dict(row) for row in db.execute(
+                "SELECT row, project_number, count FROM drawings")}
+
+    def set_drawings(self, row: int, project_number: str,
+                     count: Optional[int]) -> None:
+        with self._connect() as db:
+            if count is None:
+                db.execute("DELETE FROM drawings WHERE row = ?", (row,))
+            else:
+                db.execute(
+                    "INSERT INTO drawings (row, project_number, count) "
+                    "VALUES (?, ?, ?) ON CONFLICT(row) DO UPDATE SET "
+                    "project_number = excluded.project_number, "
+                    "count = excluded.count", (row, project_number, int(count)))
+
+    # -- work handed over for the coming days ------------------------------
+    def plan_moves(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM plan_moves ORDER BY id")]
+
+    def add_plan_move(self, *, project: str, from_person: str, to_person: str,
+                      share: float, start: str, end: str) -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO plan_moves (project, from_person, to_person, share, "
+                "start, end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project, from_person, to_person, float(share), start, end,
+                 now())).lastrowid
+
+    def remove_plan_move(self, move_id: int) -> int:
+        with self._connect() as db:
+            return db.execute("DELETE FROM plan_moves WHERE id = ?",
+                              (int(move_id),)).rowcount
+
+    # -- time slots for requests -------------------------------------------
+    def slots(self) -> Dict[int, Dict[str, Any]]:
+        with self._connect() as db:
+            return {row["task_id"]: dict(row) for row in db.execute(
+                "SELECT * FROM slots ORDER BY start")}
+
+    def set_slot(self, task_id: int, person: str, start: str, end: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO slots (task_id, person, start, end, created_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET "
+                "person = excluded.person, start = excluded.start, "
+                "end = excluded.end", (int(task_id), person, start, end, now()))
+
+    def remove_slot(self, task_id: int) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM slots WHERE task_id = ?", (int(task_id),))
