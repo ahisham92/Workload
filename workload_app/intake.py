@@ -93,9 +93,14 @@ def clean(body: Mapping[str, Any], *, projects: Iterable[str],
 
 
 def choose(view: Dict[str, Any], *, role: str, project: str,
-           eligible: Iterable[str], history: Mapping[str, set]) -> Optional[str]:
-    """Who has the most room among those doing this kind of work."""
-    eligible = set(eligible)
+           eligible: Iterable[str], history: Mapping[str, set],
+           away: Iterable[str] = ()) -> Optional[str]:
+    """Who has the most room among those doing this kind of work.
+
+    Nobody away today is given it, nor anybody away for the whole window.
+    """
+    eligible = set(eligible) - set(away)
+    eligible -= {p["name"] for p in view["people"] if not p.get("capacity", 1)}
     knows = history.get(project, set()) if project else set()
     candidates = [p for p in view["people"]
                   if p["name"] in eligible and p["role"] == role]
@@ -109,12 +114,15 @@ def choose(view: Dict[str, Any], *, role: str, project: str,
 
 
 def slot(*, hours: float, now: _dt.datetime, taken: Sequence[Tuple[_dt.datetime, _dt.datetime]],
-         config: Dict[str, Any]) -> Tuple[_dt.datetime, _dt.datetime]:
+         config: Dict[str, Any], away: Iterable[str] = ()
+         ) -> Tuple[_dt.datetime, _dt.datetime]:
     """The first free stretch from ``now`` in the working days, after ``taken``.
 
     A request longer than what is left of a day carries on into the next
-    working day's first free time.
+    working day's first free time.  Days in ``away`` (ISO dates the person is
+    off) are skipped like weekends.
     """
+    away = set(away)
     remaining = hours * 60.0
     cursor = round_up(now)
     start: Optional[_dt.datetime] = None
@@ -122,7 +130,7 @@ def slot(*, hours: float, now: _dt.datetime, taken: Sequence[Tuple[_dt.datetime,
     day = cursor.date()
     busy = sorted(taken)
     for _ in range(370):
-        if task_sheet.is_working_day(day, config):
+        if task_sheet.is_working_day(day, config) and day.isoformat() not in away:
             open_at = max(_at(day, config["day_start"]), cursor)
             close_at = _at(day, config["day_end"])
             for gap_start, gap_end in _gaps(open_at, close_at, busy):

@@ -580,7 +580,15 @@ def delete_series(wb: Workbook, series: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def is_working_day(day: _dt.date, config: Dict[str, Any]) -> bool:
-    return day.weekday() in config["work_days"]
+    """A day of the working week that is not a public holiday.
+
+    ``holidays`` is only in the config when the caller has added the unit's
+    calendar to it; the stored settings never carry it.
+    """
+    if day.weekday() not in config["work_days"]:
+        return False
+    holidays = config.get("holidays")
+    return not (holidays and day.isoformat() in holidays)
 
 
 def working_days(start: _dt.date, end: _dt.date, config: Dict[str, Any]

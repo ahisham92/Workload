@@ -300,6 +300,73 @@ class TestTheDayFillsItself:
         assert all(not p["blocks"] for p in day["people"])
 
 
+class TestTimeAway:
+    def test_one_tap_away_takes_them_out_of_the_coming_days(self, unit):
+        before = person(unit.planner({"days": 5}), "Kirolos")
+        unit.add_absence({"person": "Kirolos", "start": "2026-10-08",
+                          "end": "2026-10-09", "note": "Site visit"})
+        after = person(unit.planner({"days": 5}), "Kirolos")
+        assert after["away_days"] == 2
+        assert after["capacity"] == pytest.approx(before["capacity"] * 3 / 5)
+        # Three days of his usual three hours, not five.
+        assert after["before"]["hours"] == pytest.approx(9)
+        day = person(unit.day_plan({"date": ["2026-10-08"]})["days"][0], "Kirolos")
+        assert day["away"] and not day["blocks"] and day["free_hours"] == 0
+        listed = unit.day_plan({})["away"]
+        assert listed[0]["person"] == "Kirolos" and listed[0]["source"] == "typed"
+
+    def test_a_request_skips_whoever_is_away(self, unit):
+        unit.add_absence({"person": "Kirolos", "start": TODAY.isoformat()})
+        result = unit.add_request({"title": "Check the RFI", "hours": 1,
+                                   "now": "2026-10-07T10:00"})
+        assert result["person"] != "Kirolos"
+        named = unit.add_request({"title": "His one", "hours": 1, "person": "Kirolos",
+                                  "now": "2026-10-07T10:00"})
+        assert named["start"] == "2026-10-08T09:00"
+
+    def test_a_public_holiday_is_nobody_s_working_day(self, unit):
+        unit.add_absence({"person": "*", "start": "2026-10-08", "note": "Holiday"})
+        week = unit.day_plan({"span": ["week"]})["days"]
+        assert "2026-10-08" not in [d["date"] for d in week]
+        view = unit.planner({"days": 5})
+        assert view["to"] == "2026-10-14"
+
+    def test_leave_booked_on_a_timesheet_is_read_ahead_and_behind(self, unit):
+        leave = [{"Job Type": "3-Leave", "JobNumber": "LEAVE", "FullName": "Mariam Adel",
+                  "Grade": "Lead", "Date": day, "Phase": None, "RegularHours": 8,
+                  "OvertimeHours": 0, "TotalHours": 8, "JobStatus": "",
+                  "DeliverableDescription": "Annual leave", "CurrentUnitDesc": "COASTAL"}
+                 for day in (dt.date(2026, 10, 12), dt.date(2026, 10, 13))]
+        unit.import_exports([export("mariam-leave", leave)])
+        view = person(unit.planner({"days": 10}), "Mariam")
+        assert view["away_days"] == 2
+        away = unit.day_plan({})["away"]
+        assert {"person": "Mariam", "start": "2026-10-12", "end": "2026-10-13",
+                "source": "timesheet"}.items() <= next(
+                    a for a in away if a["person"] == "Mariam").items()
+
+    def test_the_forecast_counts_who_is_there(self, unit):
+        before = unit.needs()
+        unit.add_absence({"person": "Mariam", "start": "2026-10-12", "end": "2026-10-16"})
+        after = unit.needs()
+        def week(data, i):
+            group = next(g for g in data["groups"] if g["team_name"] == "COASTAL")
+            return group["weeks"][i]
+        assert week(after, 1)["capacity_hours"] == 0
+        assert week(after, 1)["away_days"] == 5
+        assert week(before, 1)["capacity_hours"] > 0
+
+    def test_nonsense_is_refused_and_a_typed_absence_can_go(self, unit):
+        from workload_app.calendar_ import CalendarError
+        with pytest.raises(CalendarError):
+            unit.add_absence({"person": "Nobody Here", "start": "2026-10-08"})
+        with pytest.raises(CalendarError):
+            unit.add_absence({"person": "Osama", "start": "2026-10-09",
+                              "end": "2026-10-08"})
+        made = unit.add_absence({"person": "Osama", "start": "2026-10-08"})
+        assert unit.remove_absence(made["id"])["away"] == []
+
+
 class TestRequestsAsTheyComeIn:
     def test_one_line_gets_a_person_and_a_time(self, unit):
         result = unit.add_request({"title": "Check the RFI on piles",

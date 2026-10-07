@@ -13,7 +13,8 @@ knows, in this order:
 Each goes into the first free stretch of the working day, so the result reads
 like a page of a pocket diary: 09:00 to 10:30 this, 10:30 to 11:00 that.
 Whatever does not fit before the end of the day is shown as over, which is
-the honest answer to "can they take this on today".
+the honest answer to "can they take this on today".  Somebody away that day
+has an empty page marked away, and a public holiday is not a working day.
 
 The week is the same thing, day by day.
 """
@@ -24,6 +25,7 @@ import datetime as _dt
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from . import calendar_
 from . import intake
 from . import people as people_module
 from . import planner
@@ -75,7 +77,10 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
         name = person["name"]
         fixed: List[Dict[str, Any]] = []
         flexible: List[Dict[str, Any]] = []
+        away = calendar_.is_away(config, name, day)
         if working:
+            # A request booked before the absence was known still shows, so
+            # it is seen and handed on rather than lost.
             for task_id, slot in slots.items():
                 task = tasks_by_id.get(task_id)
                 if task is None or slot["person"] != name:
@@ -87,6 +92,7 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                     fixed.append({"start": first, "end": last, "kind": "request",
                                   "title": task.name, "project": task.project_number,
                                   "task_id": task.id, "done": task.done})
+        if working and not away:
             on_task_projects: Dict[str, float] = defaultdict(float)
             for task in tasks:
                 if intake.is_request(task) or name not in task.assignees:
@@ -130,7 +136,8 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                        for b in blocks],
             "hours": round(booked, 2),
             "over_hours": round(over, 2),
-            "free_hours": round(max(0.0, a_day - booked), 2),
+            "free_hours": 0.0 if away else round(max(0.0, a_day - booked), 2),
+            "away": away,
             "requests": sum(1 for b in blocks if b["kind"] == "request"),
         })
     return {

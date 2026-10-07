@@ -19,7 +19,8 @@ from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from . import (config as cfg, daily, derive, drawings as drawings_module,
+from . import (calendar_, config as cfg, daily, derive,
+               drawings as drawings_module,
                intake, library, metrics, needs as needs_module,
                people as people_module, submissions as submissions_module,
                planner as planner_module, progress, reports,
@@ -29,6 +30,8 @@ from .timesheets import ParsedTimesheet
 from .workbook import ValidationError, WorkloadWorkbook, iso
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+#: How far ahead the Planner lists who will be away.
+AWAY_AHEAD_DAYS = 60
 
 
 class ApiError(Exception):
@@ -931,6 +934,15 @@ class WorkloadService:
                 self.store, wb.deliverables(), body.get("counts") or {})
             return {"saved": saved, "drawings": self._drawings(wb, self._index(wb))}
 
+    def _calendar(self, wb, rows) -> Dict[str, Any]:
+        """The working-day settings, less holidays and whoever is away."""
+        leave = calendar_.leave_from_timesheets(rows, codes=calendar_.leave_codes(wb))
+        absences = self.store.absences()
+        config = calendar_.with_calendar(
+            wb.task_settings(), holidays=calendar_.workbook_holidays(wb),
+            absences=absences, leave=leave)
+        return config, absences, leave
+
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
         index = self._index(wb)
@@ -939,12 +951,16 @@ class WorkloadService:
         people_module.teams_from_timesheets(self.store,
                                             lambda: uuid.uuid4().hex[:12])
         roster = people_module.roster(self.store, known=wb.ts_sheets())
+        rows = self.store.all_rows()
+        config, absences, leave = self._calendar(wb, rows)
         return {
-            "rows": self.store.all_rows(),
+            "rows": rows,
             "tasks": task_sheet.read(wb.raw),
             "roster": roster["people"],
             "teams": roster["teams"],
-            "config": wb.task_settings(),
+            "config": config,
+            "absences": absences,
+            "leave": leave,
             "project_rows": project_rows,
             "project_names": {p.number: p.name or p.number for p in wb.projects()},
             "drawings": drawn,
@@ -1124,7 +1140,32 @@ class WorkloadService:
                              for n, name in inputs["project_names"].items()],
                 "engineers": wb.engineer_names(),
                 "unit": (self.unit or {}).get("name") if isinstance(self.unit, dict) else "",
+                "away": self._away(inputs, today),
             }
+
+    def _away(self, inputs: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
+        return calendar_.upcoming(
+            inputs["config"], inputs["absences"], inputs["leave"], today,
+            today + _dt.timedelta(days=AWAY_AHEAD_DAYS))
+
+    def add_absence(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Somebody will be away -- or, for everybody, a day nobody works."""
+        with self._lock:
+            wb = self.workbook
+            today = _today()
+            roster = people_module.roster(self.store, known=wb.ts_sheets())["people"]
+            absence = calendar_.clean_absence(
+                body, people=[p["name"] for p in roster], today=today)
+            new_id = self.store.add_absence(**absence)
+            return {"id": new_id, **absence,
+                    "away": self._away(self._planning(wb), today)}
+
+    def remove_absence(self, absence_id: int) -> Dict[str, Any]:
+        with self._lock:
+            if not self.store.remove_absence(absence_id):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such absence.")
+            return {"removed": absence_id,
+                    "away": self._away(self._planning(self.workbook), _today())}
 
     def add_request(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """One line in; a person and a time slot out."""
@@ -1154,7 +1195,8 @@ class WorkloadService:
                     history.setdefault(row["job_number"], set()).add(row["engineer"])
                 person = intake.choose(view, role=request["role"],
                                        project=request["project_number"],
-                                       eligible=engineers, history=history)
+                                       eligible=engineers, history=history,
+                                       away=calendar_.away_on(inputs["config"], today))
             if not person:
                 raise intake.IntakeError(["There is nobody on the team to give it to."])
             now = intake.parse_now(body.get("now"))
@@ -1163,8 +1205,9 @@ class WorkloadService:
             taken = [(_dt.datetime.fromisoformat(s["start"]),
                       _dt.datetime.fromisoformat(s["end"]))
                      for s in self.store.slots().values() if s["person"] == person]
-            start, end = intake.slot(hours=request["hours"], now=now, taken=taken,
-                                     config=inputs["config"])
+            start, end = intake.slot(
+                hours=request["hours"], now=now, taken=taken, config=inputs["config"],
+                away=(inputs["config"].get("away") or {}).get(person, ()))
             task = wb.save_task({
                 "name": request["title"],
                 "definition": f"Came in {now:%a %d %b %H:%M}.",
@@ -1200,12 +1243,13 @@ class WorkloadService:
             wb = self.workbook
             index = self._index(wb)
             deliverables = wb.deliverables()
+            rows = self.store.all_rows()
             return submissions_module.plan(
                 deliverable_rows=metrics.deliverable_rows(wb, index),
                 deliverables=deliverables,
                 project_rows=metrics.project_rows(wb, index),
-                projects=wb.projects(), rows=self.store.all_rows(),
-                tasks=task_sheet.read(wb.raw), config=wb.task_settings(),
+                projects=wb.projects(), rows=rows,
+                tasks=task_sheet.read(wb.raw), config=self._calendar(wb, rows)[0],
                 hours_per_mm=wb.hours_per_man_month(),
                 drawing_counts=drawings_module.counts(self.store, deliverables),
                 today=_today())

@@ -19,7 +19,7 @@ The work ahead is the projects' own forecast, week by week:
 Each project's work is shared between teams and between engineers and
 draftsmen the way its recent hours were, because that is who is doing it.
 Against it stands each team's capacity -- its people of that kind, times the
-working hours in the week.  The gap, in people, is the answer:
+working hours in the week, less public holidays and anybody's booked time off.  The gap, in people, is the answer:
 
 * **ask for more** when a team is short by half a person or more for a run of
   weeks: how many (the peak of the run, rounded), from when, until when, and
@@ -40,6 +40,7 @@ import math
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from . import calendar_
 from . import derive
 from . import people as people_module
 from . import planner
@@ -97,7 +98,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     hours_per_mm = float(hours_per_mm or 0) or 185.0
     a_day = task_sheet.hours_per_day(config)
     span = weeks_ahead(today, weeks)
-    week_days = [len(task_sheet.working_days(a, b, config)) for a, b in span]
+    week_dates = [task_sheet.working_days(a, b, config) for a, b in span]
+    week_days = [len(days) for days in week_dates]
     person_week = [d * a_day for d in week_days]
     horizon_end = span[-1][1]
 
@@ -198,9 +200,18 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
 
     # -- capacity, and the gap ------------------------------------------
     headcount: Dict[Tuple[str, str], int] = defaultdict(int)
+    # Hours each team and kind has, week by week: a public holiday is not a
+    # working day, and somebody away is not counted for the days they are.
+    supply: Dict[Tuple[str, str], List[float]] = defaultdict(lambda: [0.0] * len(span))
+    away_days: Dict[Tuple[str, str], List[int]] = defaultdict(lambda: [0] * len(span))
     for person in roster:
         if person.get("active", True):
-            headcount[bucket(person["name"])] += 1
+            key = bucket(person["name"])
+            headcount[key] += 1
+            for i, days in enumerate(week_dates):
+                present = calendar_.present_days(config, person["name"], days)
+                supply[key][i] += present * a_day
+                away_days[key][i] += len(days) - present
 
     groups = []
     alerts = []
@@ -215,12 +226,13 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
             or "The unit"
         series = []
         for i, (first, last) in enumerate(span):
-            cap = heads * person_week[i]
+            cap = supply[key][i] if key in supply else 0.0
             gap = (work[i] - cap) / person_week[i] if person_week[i] else 0.0
             series.append({
                 "from": first.isoformat(), "to": last.isoformat(),
                 "demand_hours": round(work[i], 1),
                 "capacity_hours": round(cap, 1),
+                "away_days": away_days[key][i] if key in away_days else 0,
                 "load": round(work[i] / cap, 3) if cap else None,
                 "gap_people": round(gap, 2),
             })

@@ -31,6 +31,7 @@ import math
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from . import calendar_
 from . import config as cfg
 from . import derive
 from . import people as people_module
@@ -118,7 +119,11 @@ def pace(rows: Iterable[Dict[str, Any]], config: Dict[str, Any], *,
     for row in project_rows:
         if first <= row["date"] <= last:
             sums[(row["engineer"], row["job_number"])] += float(row["hours"] or 0.0)
-    rates = {key: value / len(window) for key, value in sums.items() if value > 0}
+    # Days somebody was off do not count against their pace: a week of leave
+    # in the fortnight does not make them half as quick.
+    present = {name: max(1, calendar_.present_days(config, name, window))
+               for name, _project in sums}
+    rates = {key: value / present[key[0]] for key, value in sums.items() if value > 0}
     return {"rates": rates, "from": first, "to": last, "days": len(window)}
 
 
@@ -246,14 +251,18 @@ def _active_saved(saved: Iterable[Dict[str, Any]], start: _dt.date,
 
 
 def _state(*, rates, assignees, tasks_by_id, window: List[_dt.date],
-           today: _dt.date, drawings_left: Mapping[str, float]
-           ) -> Dict[str, Dict[str, Any]]:
-    """Each person's hours in the window, project by project."""
+           today: _dt.date, drawings_left: Mapping[str, float],
+           present: Mapping[str, int]) -> Dict[str, Dict[str, Any]]:
+    """Each person's hours in the window, project by project.
+
+    Usual work runs only on the days a person is in; tasks and requests are
+    theirs whenever they fall.
+    """
     days = len(window)
     end = window[-1] if window else today
     pace_hours: Dict[str, Dict[str, float]] = defaultdict(dict)
     for (person, project), rate in rates.items():
-        pace_hours[person][project] = rate * days
+        pace_hours[person][project] = rate * present.get(person, days)
     task_hours: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     # Requests came in on top of the usual work, so they add to it rather
     # than standing in for part of it the way a planned task does.
@@ -328,23 +337,30 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     after_rates, moved_amounts = _apply_project_moves(base_rates, project_moves)
     after_assignees = _apply_task_moves(base_assignees, task_moves)
 
+    everybody = ({p["name"] for p in roster} | {k[0] for k in measured["rates"]}
+                 | {n for names in base_assignees.values() for n in names}
+                 | {m["to"] for m in moves})
+    present = {name: calendar_.present_days(config, name, window)
+               for name in everybody}
     before = _state(rates=base_rates, assignees=base_assignees,
                     tasks_by_id=tasks_by_id, window=window, today=today,
-                    drawings_left=drawings_left)
+                    drawings_left=drawings_left, present=present)
     after = _state(rates=after_rates, assignees=after_assignees,
                    tasks_by_id=tasks_by_id, window=window, today=today,
-                   drawings_left=drawings_left)
+                   drawings_left=drawings_left, present=present)
 
     people = {p["name"]: p for p in roster}
     names = [p["name"] for p in roster if p.get("active", True)]
     names += sorted((set(before) | set(after)) - set(names))
+    # A full person's hours in the window; each person's own leaves out the
+    # days they are away.
     capacity = len(window) * a_day
 
-    def figure(state: Dict[str, Any]) -> Dict[str, Any]:
+    def figure(state: Dict[str, Any], own: float) -> Dict[str, Any]:
         hours = state.get("hours", 0.0) if state else 0.0
         return {
             "hours": round(hours, 1),
-            "load": round(hours / capacity, 3) if capacity else None,
+            "load": round(hours / own, 3) if own else (None if not hours else 9.99),
             "drawings": round(state.get("drawings", 0.0), 1) if state else 0.0,
         }
 
@@ -378,7 +394,9 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
                 "drawings_after": round(ai.get("drawings", 0.0), 1),
             })
         items.sort(key=lambda item: -max(item["hours_before"], item["hours_after"]))
-        fb, fa = figure(b), figure(a)
+        days_in = present.get(name, len(window))
+        own = days_in * a_day
+        fb, fa = figure(b, own), figure(a, own)
         out_people.append({
             "name": name,
             "team_id": person.get("team_id"),
@@ -386,11 +404,12 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             "grade": grade,
             "grade_label": people_module.grade_label(grade),
             "role": people_module.role_of(grade),
-            "capacity": round(capacity, 1),
+            "capacity": round(own, 1),
+            "away_days": len(window) - days_in,
             "before": fb,
             "after": fa,
-            "verdict_before": verdict(fb["load"]),
-            "verdict_after": verdict(fa["load"]),
+            "verdict_before": verdict(fb["load"]) if own or fb["hours"] else "away",
+            "verdict_after": verdict(fa["load"]) if own or fa["hours"] else "away",
             "items": items,
         })
 
@@ -430,7 +449,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     for move in moves:
         entry = dict(move)
         if move["kind"] == "project":
-            entry["hours"] = round(next(amounts) * len(window), 1)
+            entry["hours"] = round(next(amounts) * present.get(move["from"], len(window)), 1)
             entry["name"] = project_names.get(move["project"]) or move["project"]
         else:
             task = tasks_by_id.get(move["task_id"])
@@ -460,6 +479,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             "over_after": sum(1 for p in out_people if p["verdict_after"] == "over"),
             "room_before": sum(1 for p in out_people if p["verdict_before"] == "room"),
             "room_after": sum(1 for p in out_people if p["verdict_after"] == "room"),
+            "away": sum(1 for p in out_people if p["away_days"]),
             "peak_before": round(max(loads_before), 3) if loads_before else None,
             "peak_after": round(max(loads_after), 3) if loads_after else None,
             "hours": round(sum(p["after"]["hours"] for p in out_people), 1),
@@ -509,8 +529,7 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         view = outlook(rows=rows, tasks=tasks, roster=roster, config=config,
                        project_names=project_names, drawings_left=drawings_left,
                        saved=saved, moves=plan, today=today, days=days)
-        capacity = view["capacity"]
-        if not capacity:
+        if not view["capacity"]:
             break
         over = sorted((p for p in view["people"] if p["verdict_after"] == "over"
                        and p["name"] not in tried),
@@ -518,12 +537,12 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         if not over:
             break
         person = over[0]
-        excess = person["after"]["hours"] - capacity * OVER
+        excess = person["after"]["hours"] - person["capacity"] * OVER
         move = None
         for item in person["items"]:
             if not item["project"] or item["pace_after"] <= 0:
                 continue
-            pace_hours = item["pace_after"] * view["days"]
+            pace_hours = item["pace_after"] * (view["days"] - person["away_days"])
             # Only the part of the pace above any tasks there actually lowers
             # this person's hours.
             movable = pace_hours - min(pace_hours, item["task_hours"])
@@ -532,7 +551,7 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             target = _best_target(view, person, item["project"], history)
             if target is None:
                 continue
-            room = capacity * FILL_TO - target["after"]["hours"]
+            room = target["capacity"] * FILL_TO - target["after"]["hours"]
             amount = min(excess, room, movable)
             if amount < 1:
                 continue
@@ -551,11 +570,10 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
 
 def _best_target(view: Dict[str, Any], person: Dict[str, Any], project: str,
                  history: Mapping[str, set]) -> Optional[Dict[str, Any]]:
-    capacity = view["capacity"]
     candidates = [
         p for p in view["people"]
         if p["name"] != person["name"] and p["role"] == person["role"]
-        and p["after"]["hours"] < capacity * FILL_TO - 1
+        and p["after"]["hours"] < p["capacity"] * FILL_TO - 1
     ]
     if not candidates:
         return None

@@ -99,6 +99,18 @@ CREATE TABLE IF NOT EXISTS plan_moves (
     created_at  TEXT NOT NULL
 );
 
+-- Somebody away -- leave, a course, site -- or, with person '*', a day
+-- nobody works.  Known ahead, so the plan and the forecast do not count
+-- people who will not be there.
+CREATE TABLE IF NOT EXISTS absences (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    person     TEXT NOT NULL,
+    start      TEXT NOT NULL,
+    end        TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
 -- When in the day a request that came in is being done: the task itself is
 -- on the workbook's task list, its time of day has nowhere to go there.
 CREATE TABLE IF NOT EXISTS slots (
@@ -395,6 +407,8 @@ class TimesheetStore:
                        "WHERE from_person = ?", (new, old))
             db.execute("UPDATE plan_moves SET to_person = ? "
                        "WHERE to_person = ?", (new, old))
+            db.execute("UPDATE absences SET person = ? WHERE person = ?",
+                       (new, old))
 
     # -- settings --------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -485,3 +499,20 @@ class TimesheetStore:
     def remove_slot(self, task_id: int) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM slots WHERE task_id = ?", (int(task_id),))
+
+    # -- time away ---------------------------------------------------------
+    def absences(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM absences ORDER BY start, person")]
+
+    def add_absence(self, person: str, start: str, end: str, note: str = "") -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO absences (person, start, end, note, created_at) "
+                "VALUES (?, ?, ?, ?, ?)", (person, start, end, note, now())).lastrowid
+
+    def remove_absence(self, absence_id: int) -> int:
+        with self._connect() as db:
+            return db.execute("DELETE FROM absences WHERE id = ?",
+                              (int(absence_id),)).rowcount

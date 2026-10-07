@@ -36,6 +36,7 @@ from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
+from .calendar_ import CalendarError
 from .drawings import DrawingsError
 from .people import PeopleError
 from .intake import IntakeError
@@ -155,7 +156,7 @@ class WorkloadApp:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
         except (ValidationError, TaskError, PeopleError, PlanError,
-                DrawingsError, IntakeError) as exc:
+                DrawingsError, IntakeError, CalendarError) as exc:
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -1007,6 +1008,11 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.add_request(b), "manager"),
             ("POST", "/api/requests/{}/done",
              lambda ctx, q, b, task_id: ctx.service.finish_request(_int(task_id)),
+             "manager"),
+            ("POST", "/api/absences",
+             lambda ctx, q, b: ctx.service.add_absence(b), "manager"),
+            ("POST", "/api/absences/{}/remove",
+             lambda ctx, q, b, absence_id: ctx.service.remove_absence(_int(absence_id)),
              "manager"),
             ("GET", "/api/submissions",
              lambda ctx, q, b: ctx.service.submissions(), "manager"),
