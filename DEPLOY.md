@@ -155,6 +155,7 @@ On the **Web** tab, **Add a new web app**. Then:
    | `/member.js` | `/home/<you>/Workload/workload_app/static/member.js` |
    | `/charts.js` | `/home/<you>/Workload/workload_app/static/charts.js` |
    | `/tables.js` | `/home/<you>/Workload/workload_app/static/tables.js` |
+   | `/pocket.js` | `/home/<you>/Workload/workload_app/static/pocket.js` |
 
 7. **Force HTTPS**: on. The session cookie is marked `Secure` as soon as the
    request arrives over HTTPS, and `HttpOnly` and `SameSite=Lax` always.
