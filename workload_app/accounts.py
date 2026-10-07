@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -114,6 +115,18 @@ CREATE TABLE IF NOT EXISTS memberships (
     PRIMARY KEY (user_id, unit_id)
 );
 CREATE INDEX IF NOT EXISTS memberships_unit ON memberships(unit_id);
+
+-- The key a scheduled job on the manager's own PC signs its nightly import
+-- with.  One per unit; only its digest is kept, so it is shown once, when it
+-- is made.  It can import timesheets into that unit and do nothing else.
+CREATE TABLE IF NOT EXISTS import_keys (
+    unit_id     TEXT PRIMARY KEY REFERENCES units(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_hash    TEXT NOT NULL UNIQUE,
+    created_at  TEXT NOT NULL,
+    last_used   TEXT,
+    last_result TEXT
+);
 """
 
 
@@ -454,6 +467,68 @@ class Accounts:
     def end_all_sessions(self, user_id: int) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+    # -- import keys -----------------------------------------------------
+    #
+    # A session is a person at a browser.  An import key is a scheduled job
+    # on that person's PC, which has no browser to sign in with: it carries
+    # the key instead, and the key opens exactly one door -- the nightly
+    # import into one unit.
+
+    def make_import_key(self, user_id: int, unit_id: str) -> str:
+        """A fresh key for this unit, replacing any it had."""
+        if self.unit(user_id, unit_id) is None:
+            raise AccountError("That unit is not yours.")
+        key = "sel_" + secrets.token_urlsafe(TOKEN_BYTES)
+        with self._connect() as db:
+            db.execute("DELETE FROM import_keys WHERE unit_id = ?", (unit_id,))
+            db.execute(
+                "INSERT INTO import_keys (unit_id, user_id, key_hash, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (unit_id, user_id, _token_hash(key), now()))
+        return key
+
+    def import_key_owner(self, key: Optional[str]) -> Optional[Dict[str, Any]]:
+        """``{"user", "unit"}`` for a key that is still good, else None."""
+        if not key or not isinstance(key, str):
+            return None
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT unit_id, user_id FROM import_keys WHERE key_hash = ?",
+                (_token_hash(key),)).fetchone()
+        if row is None:
+            return None
+        user = self.user(row["user_id"])
+        unit = self.unit(row["user_id"], row["unit_id"])
+        if user is None or unit is None:
+            return None
+        return {"user": user, "unit": unit}
+
+    def import_key_info(self, user_id: int, unit_id: str
+                        ) -> Optional[Dict[str, Any]]:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT created_at, last_used, last_result FROM import_keys "
+                "WHERE unit_id = ? AND user_id = ?", (unit_id, user_id)).fetchone()
+        if row is None:
+            return None
+        info = dict(row)
+        info["last_result"] = json.loads(info["last_result"]) \
+            if info["last_result"] else None
+        return info
+
+    def record_import(self, unit_id: str, result: Dict[str, Any]) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE import_keys SET last_used = ?, last_result = ? "
+                "WHERE unit_id = ?",
+                (now(), json.dumps(result, default=str), unit_id))
+
+    def revoke_import_key(self, user_id: int, unit_id: str) -> bool:
+        with self._connect() as db:
+            return db.execute(
+                "DELETE FROM import_keys WHERE unit_id = ? AND user_id = ?",
+                (unit_id, user_id)).rowcount > 0
 
     # -- units -----------------------------------------------------------
     #

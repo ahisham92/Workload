@@ -373,6 +373,21 @@ The register holds 80 projects and 200 deliverables. If the timesheets imply
 more, the most recently worked come first and the oldest are listed as left
 out; their hours still count for the people who booked them.
 
+**Every night, on its own** — the exports come out of BISpark, which only a
+browser on the company network can reach, so the export runs on the manager's
+own PC. *Download the PC kit* on the Timesheets tab gives a zip; `setup.bat` in
+it installs a private Python with Playwright, asks for the report link, runs
+the export once in a window you can watch, and schedules it for 12:00 am. Each
+night it opens the report in Edge (signed in with the Windows login, so no
+password is kept anywhere), exports *Work Breakdown per Project* as underlying
+data and posts it to `/api/nightly/timesheets`, signed with the unit's import
+key. The import is the same replace as the tab's, with one guard: an export
+holding over 10% fewer rows for someone than are already stored is refused, so
+a narrowed date filter cannot wipe history while nobody is watching. The tab
+shows when the last import ran and whether it worked, failures on the PC
+included. Only the key's digest is stored; a new kit cancels the old key. See
+`workload_app/nightly.py` and `workload_app/data/nightly/`.
+
 **Projects** — the register, and behind each row the project's own page: its
 details, its figures, and **its deliverables edited in place**. Every column
 sorts — number, name, status, budget, progress, actual, earned, profit, CPI,
