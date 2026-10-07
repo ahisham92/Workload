@@ -49,7 +49,7 @@ function shortDate(iso) {
 
 /* ------------------------------------------------------------ loading */
 
-const PLANNER_VIEWS = [['today', 'Today'], ['handovers', 'Next days'],
+const PLANNER_VIEWS = [['today', 'Today'], ['handovers', 'Planning board'],
   ['submissions', 'Submissions'], ['people', 'More people']];
 
 function renderPlannerTabs() {
@@ -196,7 +196,11 @@ function renderPlanner() {
       `The newest timesheet is from ${dayName(data.pace_to)}. A pace that old is a guess: `
       + 'import this month’s timesheets for an outlook worth acting on.') : null,
     plannerCards(data),
-    whoHasWhat(data),
+    window.board ? window.board.render(data) : null,
+    window.board
+      ? el('details', { class: 'more-block' },
+        el('summary', {}, 'Each person\u2019s work, as a list'), whoHasWhat(data))
+      : whoHasWhat(data),
     movesPanel(data),
     drawingsPanel(data.drawings));
 }
@@ -1262,6 +1266,7 @@ function wirePlanner() {
 
 window.planner = {
   load: () => { plan.needs = null; plan.submissions = null; return openPlanner(); },
+  board: () => { plan.view = 'handovers'; switchView('planner'); },
   afterRefresh: () => {
     plan.needs = null;
     plan.submissions = null;
