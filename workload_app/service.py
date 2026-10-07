@@ -1571,26 +1571,11 @@ def _decode(content: Any) -> bytes:
 
 
 def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:
-    engineer = body.get("engineer", "")
-    filename = body.get("filename", "upload.xlsx")
-    content = body.get("content_base64")
-    if not content:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "No file content was uploaded.")
-    try:
-        data = base64.b64decode(content)
-    except Exception:
-        raise ApiError(HTTPStatus.BAD_REQUEST, "The upload was not valid base64.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise ApiError(
-            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-            f"That file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
-        )
     return service.stage_timesheet(
-        engineer, filename, data,
+        body.get("engineer", ""), str(body.get("filename") or "upload.xlsx"),
+        _decode(body.get("content_base64")),
         registered_only=bool(body.get("registered_only", True)),
     )
-
-
 
 
 def _duplicates(existing: Sequence[Dict[str, Any]],

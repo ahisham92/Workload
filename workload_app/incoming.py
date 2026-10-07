@@ -21,7 +21,9 @@ it from its start:
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional
+
+from .model import ValidationError
 
 #: The most rough hours one line may carry: past that it is a programme.
 LONGEST_HOURS = 100_000.0
@@ -29,11 +31,8 @@ LONGEST_HOURS = 100_000.0
 DEFAULT_MONTHS = 3
 
 
-class IncomingError(ValueError):
-    def __init__(self, errors: Sequence[str]):
-        errors = list(errors)
-        super().__init__("; ".join(errors))
-        self.errors = errors
+class IncomingError(ValidationError):
+    pass
 
 
 def _date(value: Any, fallback: Optional[_dt.date]) -> Optional[_dt.date]:

@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from . import config as cfg, tasks as task_list
 from .model import (CreditStep, Deliverable, Engineer, Project, ProjectType,
                     ValidationError, as_date, as_fraction, as_number, as_text,
-                    iso, pattern_to_regex)
+                    iso, pattern_to_regex, stored_date)
 from .timesheet_store import TimesheetStore
 
 SCHEMA = """
@@ -209,15 +209,6 @@ def load_defaults() -> Dict[str, Any]:
         return json.load(handle)
 
 
-def _date(value: Optional[str]) -> Optional[_dt.date]:
-    if not value:
-        return None
-    try:
-        return _dt.date.fromisoformat(str(value)[:10])
-    except ValueError:
-        return None
-
-
 class Unit:
     """Read and change one unit."""
 
@@ -371,7 +362,7 @@ class Unit:
 
     def as_at(self) -> Optional[_dt.date]:
         """The date the reports are frozen at, if somebody froze them."""
-        return _date(self._setting("as_at"))
+        return stored_date(self._setting("as_at"))
 
     def availability_years(self) -> List[int]:
         """The years each person's availability is kept for."""
@@ -687,7 +678,7 @@ class Unit:
         """Days off the unit typed in itself."""
         def build() -> List[_dt.date]:
             with self._connect() as db:
-                days = [_date(row["day"]) for row in db.execute(
+                days = [stored_date(row["day"]) for row in db.execute(
                     "SELECT day FROM holidays ORDER BY day")]
             return [d for d in days if d]
         return list(self._cached("holidays", build))
@@ -965,8 +956,8 @@ class Unit:
             number=row["number"],
             name=row["name"],
             budget_mm=row["budget_mm"],
-            start=_date(row["start"]),
-            end=_date(row["end"]),
+            start=stored_date(row["start"]),
+            end=stored_date(row["end"]),
             status=row["status"],
             cac_override=row["cac_override"],
             notes=row["notes"],
@@ -1144,13 +1135,13 @@ class Unit:
                 type_code=row["type_code"],
                 phase_weight=row["phase_weight"],
                 step_no=row["step_no"],
-                status_date=_date(row["status_date"]),
+                status_date=stored_date(row["status_date"]),
                 shares=self._full_split(shares.get(row["row"], {})),
                 notes=row["notes"],
                 ts_phase=row["ts_phase"],
             )
             for name in cfg.ACTUALS_DATE_FIELDS:
-                setattr(deliverable, name, _date(row[name]))
+                setattr(deliverable, name, stored_date(row[name]))
             out.append(deliverable)
         return out
 
@@ -1565,8 +1556,8 @@ class Unit:
                     assignees=assignees,
                     required_hours=row["required_hours"],
                     actual_hours=row["actual_hours"],
-                    start=_date(row["start"]),
-                    due=_date(row["due"]),
+                    start=stored_date(row["start"]),
+                    due=stored_date(row["due"]),
                     status=row["status"] or cfg.TASK_STATUSES[0],
                     kind=row["kind"] or cfg.TASK_KINDS[0],
                     series=row["series"],
