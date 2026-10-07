@@ -118,7 +118,8 @@ def _check_code(report: Report, root: Path) -> None:
 
     missing = [name for name in ("index.html", "login.html", "member.html",
                                  "app.js", "member.js", "app.css", "charts.js",
-                                 "tables.js", "pocket.js", "manifest.json", "sw.js")
+                                 "tables.js", "pocket.js", "planner.js", "checkins.js",
+                                 "manifest.json", "sw.js")
                if not (root / "workload_app" / "static" / name).is_file()]
     if missing:
         report.add("bad", "The front end is incomplete",

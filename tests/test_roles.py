@@ -206,6 +206,7 @@ class TestWhatAMemberCannotDo:
         ("GET", "/api/team/access"),
         ("GET", "/api/reference"),
         ("GET", "/api/timesheets"),
+        ("GET", "/api/checkins"),
     ])
     def test_the_managers_reads_are_refused(self, osama, method, path):
         status, body = call(osama, path, method)

@@ -98,7 +98,7 @@ const tone = {
   },
   /** How far a project has got. */
   progress: (v) => (v === null || v === undefined ? ''
-    : v >= 1 ? 'ok' : v >= 0.5 ? 'warn' : ''),
+    : v >= 1 ? 'ok' : ''),
   score: (v) => (v === null || v === undefined ? ''
     : v >= 80 ? 'ok' : v >= 60 ? 'warn' : 'bad'),
 };
@@ -2392,7 +2392,16 @@ function renderReference() {
           el('td', { class: 'num' }, cell(t, 'portfolio_weight',
             { type: 'number', step: '0.05', number: true })),
           el('td', {}, cell(t, 'include_in_cpi')),
-          el('td', { class: 'wide' }, cell(t, 'notes')))))))),
+          el('td', { class: 'wide' }, cell(t, 'notes'))))))),
+      unlocked ? null : charts.scoreBars(draft.project_types
+        .filter((t) => t.portfolio_weight !== null && t.portfolio_weight !== undefined)
+        .map((t) => ({ label: t.code, value: Number(t.portfolio_weight) * 100,
+          color: 'var(--series-1)' })), {
+        title: 'How much each type counts',
+        note: 'Portfolio weight against a man-month of plain detailed design (100%). '
+          + 'A heavier type counts for more in the rankings.',
+        max: 100, suffix: '%',
+      })),
 
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
@@ -2550,6 +2559,7 @@ async function refreshAll() {
   if (state.team) await loadTeam();
   if (state.tasks) await loadTasks();
   if (window.planner) window.planner.afterRefresh();
+  if (window.checkins) window.checkins.summary();
 }
 
 async function setupReports() {
@@ -2581,6 +2591,7 @@ function switchView(view) {
   if (view === 'admin') loadAdmin();
   if (view === 'resourcing') loadResourcing();
   if (view === 'planner' && window.planner) window.planner.load();
+  if (view === 'checkins' && window.checkins) window.checkins.load();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
@@ -3216,6 +3227,8 @@ function renderTeam() {
       + 'row in the availability table. Anybody new on a timesheet export is '
       + 'added for you.'),
 
+    teamUseChart(data),
+
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {},
         ['#', 'Engineer', 'Timesheet name pattern', 'Hours / month',
@@ -3228,6 +3241,23 @@ function renderTeam() {
     el('p', { class: 'muted' },
       'A sign-in lets that person see their own workload, projects, hours and '
       + 'tasks — and nothing else in the unit. They cannot change anything.'));
+}
+
+/** How much of each person's hours went on booked work over the last year. */
+function teamUseChart(data) {
+  const rows = data.engineers.map((person) => {
+    const months = monthsOf(state.overview, person.short_name).slice(-12);
+    const booked = months.reduce((sum, m) => sum + (m.total || 0), 0);
+    const capacity = months.reduce((sum, m) => sum + (m.capacity || 0), 0);
+    return { label: person.short_name, value: capacity ? (booked / capacity) * 100 : 0,
+      color: engineerColor(person.short_name) };
+  }).filter((row) => row.value > 0);
+  if (!rows.length) return null;
+  return el('section', { class: 'panel' }, charts.scoreBars(rows, {
+    title: 'Hours booked against hours available',
+    note: 'The last twelve months of timesheets, per person. Past 100% is overtime.',
+    max: 100, suffix: '%',
+  }));
 }
 
 function engineerRow(person, position, years) {

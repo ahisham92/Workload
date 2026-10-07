@@ -1161,3 +1161,68 @@ tr.row-done .task-name { text-decoration: line-through; }
 .list-proposals .panel-head { align-items: center; }
 .plain-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
 .list-results .list-proposals { margin-top: 12px; }
+
+/* -- Check-ins ------------------------------------------------------------ */
+
+/* Free hours: a grid of days, each cell shaded by how much of the day is free,
+   so who has room, and when, reads at a glance before any number does. */
+.ci-free-table td.ci-cell { text-align: center; font-variant-numeric: tabular-nums;
+  font-size: 12.5px; color: var(--muted); padding: 7px 6px; min-width: 46px; }
+.ci-free-table td.ci-free { color: var(--ok); font-weight: 600;
+  background: color-mix(in srgb, var(--ok) calc(var(--free, 0) * 30%), transparent); }
+.ci-free-table td.ci-over { color: var(--bad); }
+.ci-free-table td.ci-away { color: var(--muted); font-style: italic;
+  background: repeating-linear-gradient(135deg, var(--surface-2) 0 6px, transparent 6px 12px); }
+.ci-free-table th.num { text-align: center; }
+.ci-free-table tfoot td { font-weight: 600; background: var(--surface-2); text-align: center; }
+.ci-free-table tfoot td:first-child { text-align: left; }
+.ci-dayhead { display: inline-flex; flex-direction: column; align-items: center;
+  line-height: 1.2; font-weight: 500; }
+.ci-dayhead b { font-size: 13px; color: var(--text); }
+.ci-take { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 0; }
+
+/* One card per person: how loaded they have been, their free hours, and what
+   to ask them. The edge colour is the same signal as the pill. */
+.ci-grid { display: grid; gap: 12px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.ci-card { border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: var(--radius); padding: 12px 14px; background: var(--surface);
+  min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ci-card.ci-rest { border-left-color: var(--bad); }
+.ci-card.ci-busy { border-left-color: var(--warn); }
+.ci-card.ci-fresh { border-left-color: var(--ok); }
+.ci-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ci-head { align-items: flex-start; }
+.ci-who { min-width: 0; }
+.ci-who .muted { font-size: 12px; margin-top: 1px; }
+.ci-head .swatch { margin-right: 6px; }
+td.ci-ask { white-space: normal; min-width: 280px; }
+.ci-free-table td.ci-over { font-size: 11.5px; opacity: .8; }
+.ci-chart .ci-bars { width: 100%; height: 64px; display: block; }
+.ci-bar-on { fill: var(--ok); opacity: .85; }
+.ci-bar-over { fill: var(--bad); }
+.ci-bar-light { fill: var(--warn); opacity: .75; }
+.ci-bar-away { fill: var(--border); }
+.ci-line { stroke: var(--text); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55; }
+.ci-facts, .ci-free-line { margin: 0; font-size: 12.5px; }
+.ci-facts { color: var(--muted); }
+.ci-points { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.ci-point { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: baseline;
+  font-size: 12.5px; padding-top: 6px; border-top: 1px dashed var(--border); }
+.ci-point .pill { font-size: 11px; padding: 1px 7px; }
+.ci-none { margin: 4px 0 0; }
+
+/* The short version on Overview. */
+.ci-sums { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .ci-sums { grid-template-columns: 1fr; } }
+.ci-sum { border-radius: var(--radius); padding: 10px 12px; display: flex;
+  flex-direction: column; gap: 2px; font-size: 12.5px; border: 1px solid var(--border);
+  border-left: 4px solid var(--accent); }
+.ci-sum b { font-size: 14px; }
+.ci-sum span { color: var(--muted); }
+.ci-sum-bad { border-left-color: var(--bad); }
+.ci-sum-ok { border-left-color: var(--ok); }
+.ci-sum-warn { border-left-color: var(--warn); }
+/* On a phone the cards already carry every checkpoint; the long table would
+   only squeeze them into a column a word wide. */
+@media (max-width: 760px) { .ci-all { display: none; } }
