@@ -119,6 +119,14 @@ a public holiday. Somebody away has an empty day, gets no requests, and is
 left out of the coming days and the staffing forecast for those days; their
 pace is read over the days they were in.
 
+**Public holidays** are built in for Egypt, Saudi Arabia, the UAE, Qatar,
+Kuwait, Jordan, Lebanon, Oman, Bahrain and the UK: fixed days, Easter worked
+out for the year, and the expected dates of the Islamic holidays to 2030. The
+Planner asks once which country the unit keeps (guessing from a city in its
+name), and can take that country's working week with it; a team somewhere
+else picks its own under *Change*. A holiday announced for another day is
+taken off with *Not a holiday*, and the right day added for everybody.
+
 **Next days** is each person's next few working days against a full load.
 **Hand over** part of somebody's work — a share of their time on a project, or
 a task — and every figure shows the effect before anything changes.
@@ -135,6 +143,14 @@ worked. On one the timesheets set up and nobody has confirmed, progress is a
 placeholder, so it is the phase's first booking plus how long this unit's
 phases usually take. Tick, adjust, **Confirm**: the date goes on the
 deliverable and its run-up goes onto the task list, so it is in people's days.
+
+**Work coming** (under More people) is one line for a project just
+assigned, before anybody books to it: a name or job number, the team, rough
+hours, start and end. The hours are spread over its working days, less
+whatever is booked to the job number, and counted in the forecast until the
+project is confirmed on Projects or the hours are used up. A team short for
+a single week, because somebody is away, is told to hand work over in Next
+days rather than to ask for people.
 
 **More people** says, team by team and for engineers and draftsmen apart,
 when to ask for more people, how many, from when and for how long — and says
@@ -160,15 +176,30 @@ capacity is: a team short of draftsmen is not helped by a spare engineer.
 
 ## Drawings
 
-The one number no timesheet carries, typed once per deliverable in the
-project's deliverable table (the **Drawings** column). Everything else follows:
-**done** is the count times how far along the deliverable is, **left** is the
-rest, a person's drawings are their share of each deliverable, and **hours a
-drawing** is the unit's own rate, measured on confirmed projects only. The
-Projects register shows done of total, the Overview and the Planner show the
-unit's, each team's and each person's drawings, and the drawings left in
-somebody's hands move with the work when it is handed over. The counts live
-in the unit's database, not the workbook.
+The one number no timesheet carries. The simplest way in is the team's own
+**drawing list** (Projects → *Drawing list*): one row a drawing, with its job
+number, deliverable, number or title, status, issue date and the client's
+code. Any list with headings like those is read; *Download the template* gives
+one with a starter row per live deliverable. From it:
+
+* each deliverable's **drawing count** is its rows (superseded ones aside);
+* **done** is the drawings that have gone to the client (an issue date, or a
+  status of IFA, IFC, IFT or issued) — a real count, so **hours a drawing** is
+  measured from it even on a project nobody has confirmed yet;
+* the **codes** that came back (A, B, C, or 1 to 4) move the register on:
+  when every drawing has gone, the deliverable is offered as *sent* on the
+  date of the last, at the Rules of Credit step for issue to the client; when
+  they come back, comments received; when every one is code A, accepted.
+  One *Apply* (in the upload, or above the submissions plan) writes them, and
+  **Waiting for comments** lists what is with the client, oldest first.
+
+A count can still be typed per deliverable in the project's deliverable table
+(the **Drawings** column), and where there is no list, done is the count times
+how far along the deliverable is. A person's drawings are their share of each
+deliverable; the Projects register shows done of total, the Overview and the
+Planner show the unit's, each team's and each person's drawings, and drawings
+in somebody's hands move with the work when it is handed over. Counts and the
+list's figures live in the unit's database, not the workbook.
 
 ## Resourcing
 

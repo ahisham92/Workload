@@ -111,6 +111,35 @@ CREATE TABLE IF NOT EXISTS absences (
     created_at TEXT NOT NULL
 );
 
+-- What the uploaded drawing list says, a deliverable a row: how many
+-- drawings, how many have gone to the client, and the codes come back.
+CREATE TABLE IF NOT EXISTS drawing_list (
+    row            INTEGER PRIMARY KEY,
+    project_number TEXT NOT NULL,
+    total          INTEGER NOT NULL,
+    issued         INTEGER NOT NULL,
+    code_a         INTEGER NOT NULL DEFAULT 0,
+    code_b         INTEGER NOT NULL DEFAULT 0,
+    code_c         INTEGER NOT NULL DEFAULT 0,
+    last_issued    TEXT,
+    last_returned  TEXT,
+    updated_at     TEXT NOT NULL
+);
+
+-- Work coming: a project just assigned, before anybody has booked to it.
+-- Rough hours between two dates, for the staffing forecast, until the
+-- timesheets or the project's own figures take over.
+CREATE TABLE IF NOT EXISTS planned_work (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_number  TEXT NOT NULL DEFAULT '',
+    name        TEXT NOT NULL,
+    team_id     TEXT NOT NULL DEFAULT '',
+    hours       REAL NOT NULL,
+    start       TEXT NOT NULL,
+    end         TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
 -- When in the day a request that came in is being done: the task itself is
 -- on the workbook's task list, its time of day has nowhere to go there.
 CREATE TABLE IF NOT EXISTS slots (
@@ -358,6 +387,8 @@ class TimesheetStore:
         with self._connect() as db:
             db.execute("UPDATE people SET team_id = NULL WHERE team_id = ?",
                        (team_id,))
+            db.execute("UPDATE planned_work SET team_id = '' WHERE team_id = ?",
+                       (team_id,))
             db.execute("DELETE FROM teams WHERE id = ?", (team_id,))
 
     def people(self) -> List[Dict[str, Any]]:
@@ -516,3 +547,50 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM absences WHERE id = ?",
                               (int(absence_id),)).rowcount
+
+    # -- the drawing list ------------------------------------------------------
+    def drawing_list(self) -> Dict[int, Dict[str, Any]]:
+        with self._connect() as db:
+            return {row["row"]: dict(row) for row in db.execute(
+                "SELECT * FROM drawing_list")}
+
+    def save_drawing_list(self, entries: Sequence[Dict[str, Any]],
+                          projects: Iterable[str]) -> None:
+        """The list's figures, replacing what an earlier list said of the
+        same projects; other projects keep theirs."""
+        stamp = now()
+        with self._connect() as db:
+            for number in set(projects):
+                db.execute("DELETE FROM drawing_list WHERE "
+                           "REPLACE(UPPER(project_number), ' ', '') = ?", (number,))
+            for e in entries:
+                db.execute(
+                    "INSERT OR REPLACE INTO drawing_list (row, project_number, total, "
+                    "issued, code_a, code_b, code_c, last_issued, last_returned, "
+                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (int(e["row"]), e["project_number"], int(e["total"]),
+                     int(e["issued"]), int(e["code_a"]), int(e["code_b"]),
+                     int(e["code_c"]), e["last_issued"], e["last_returned"], stamp))
+
+    def clear_drawing_list_row(self, row: int) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM drawing_list WHERE row = ?", (int(row),))
+
+    # -- work coming ---------------------------------------------------------
+    def planned_work(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM planned_work ORDER BY start, name")]
+
+    def add_planned_work(self, *, job_number: str, name: str, team_id: str,
+                         hours: float, start: str, end: str) -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO planned_work (job_number, name, team_id, hours, start, "
+                "end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (job_number, name, team_id, float(hours), start, end, now())).lastrowid
+
+    def remove_planned_work(self, item_id: int) -> int:
+        with self._connect() as db:
+            return db.execute("DELETE FROM planned_work WHERE id = ?",
+                              (int(item_id),)).rowcount

@@ -116,6 +116,7 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
                              [p.number for p in projects if p.status == "Finalized"])
 
     items: List[Dict[str, Any]] = []
+    waiting: List[Dict[str, Any]] = []
     for metric in deliverable_rows:
         number = metric["project_number"]
         project = register.get(number)
@@ -126,6 +127,16 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
         if not totals.get("in_scope", True) or project.status in {"Finalized", "Cancelled"}:
             continue
         credit = min(1.0, max(0.0, metric.get("credit") or 0.0))
+        if deliverable.submitted_to_client and not deliverable.comments_received \
+                and not deliverable.completed:
+            # Sent, and nothing back yet: the client's turn, and worth chasing.
+            sent = deliverable.submitted_to_client
+            waiting.append({
+                "row": metric["row"], "project_number": number,
+                "project_name": project.name or number, "name": metric["name"],
+                "sent": sent.isoformat(), "days": (today - sent).days,
+                "drawings": drawing_counts.get(metric["row"]),
+            })
         if credit >= SUBMITTED_AT - 1e-9 or deliverable.submitted_to_client \
                 or deliverable.completed:
             continue
@@ -218,6 +229,7 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
         "counts": {basis: sum(1 for i in items if i["basis"] == basis)
                    for basis in ("set", "estimated", "typical", "overdue",
                                  "idle", "far")},
+        "waiting": sorted(waiting, key=lambda w: w["sent"]),
         "typical_days": typical["days"],
         "typical_from": typical["from"],
         "lead_days": int(config.get("submission_lead_days", 7)),
