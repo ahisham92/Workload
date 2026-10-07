@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Selecao+</title>
-<link rel="icon" type="image/svg+xml" href="brand/selecao-mark.svg">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -13,10 +13,10 @@
 <section id="chooser" class="chooser" hidden>
   <div class="chooser-card">
     <header class="chooser-head">
-      <span class="mark mark-lg" aria-hidden="true"><svg viewBox="0 0 64 64" focusable="false"><rect width="64" height="64" rx="14" fill="#101B2D"/><circle cx="12.5" cy="50" r="3.8" fill="#fff"/><circle cx="25.5" cy="50" r="3.8" fill="#fff"/><circle cx="38.5" cy="50" r="3.8" fill="#fff"/><circle cx="51.5" cy="50" r="3.8" fill="#fff"/><circle cx="19" cy="38.5" r="3.8" fill="#fff"/><circle cx="32" cy="38.5" r="3.8" fill="#fff"/><circle cx="45" cy="38.5" r="3.8" fill="#fff"/><circle cx="25.5" cy="27" r="3.8" fill="#fff"/><circle cx="38.5" cy="27" r="3.8" fill="#fff"/><polygon points="0,-7 1.65,-2.27 6.66,-2.16 2.66,0.87 4.11,5.66 0,2.8 -4.11,5.66 -2.66,0.87 -6.66,-2.16 -1.65,-2.27" transform="translate(32 14.5) scale(1.05)" fill="#FF5A1F"/></svg></span>
+      <img class="logo logo-lg" src="logo.svg" alt="">
       <div>
-        <h1>Selecao<span class="brand-plus">+</span></h1>
-        <p class="muted">Workload, efficiency and delivery planning</p>
+        <h1><span class="wordmark">Selecao<span class="wordmark-plus">+</span></span></h1>
+        <p class="muted">Team workload, efficiency and delivery planning</p>
       </div>
       <div class="chooser-account">
         <a class="btn btn-sm btn-ghost site-home" href="/" hidden></a>
@@ -59,7 +59,9 @@
 <!-- ============================================================ shell -->
 <header class="topbar" id="topbar" hidden>
   <div class="brand">
-    <span class="mark" aria-hidden="true"><svg viewBox="0 0 64 64" focusable="false"><rect width="64" height="64" rx="14" fill="#101B2D"/><circle cx="12.5" cy="50" r="3.8" fill="#fff"/><circle cx="25.5" cy="50" r="3.8" fill="#fff"/><circle cx="38.5" cy="50" r="3.8" fill="#fff"/><circle cx="51.5" cy="50" r="3.8" fill="#fff"/><circle cx="19" cy="38.5" r="3.8" fill="#fff"/><circle cx="32" cy="38.5" r="3.8" fill="#fff"/><circle cx="45" cy="38.5" r="3.8" fill="#fff"/><circle cx="25.5" cy="27" r="3.8" fill="#fff"/><circle cx="38.5" cy="27" r="3.8" fill="#fff"/><polygon points="0,-7 1.65,-2.27 6.66,-2.16 2.66,0.87 4.11,5.66 0,2.8 -4.11,5.66 -2.66,0.87 -6.66,-2.16 -1.65,-2.27" transform="translate(32 14.5) scale(1.05)" fill="#FF5A1F"/></svg></span>
+    <img class="logo" src="logo.svg" alt="">
+    <span class="wordmark">Selecao<span class="wordmark-plus">+</span></span>
+    <span class="brand-divider" aria-hidden="true"></span>
     <div class="brand-text">
       <h1 id="unit-title">Selecao+</h1>
       <p id="workbook-path" class="muted"></p>
@@ -101,6 +103,7 @@
         <select id="overview-year"></select>
       </label>
     </div>
+    <section class="panel formation-panel" id="formation" hidden></section>
     <div id="overview-cards" class="cards cards-4"></div>
     <div id="hero-strip"></div>
     <section class="panel" id="overview-trend" hidden></section>
