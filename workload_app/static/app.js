@@ -1526,23 +1526,34 @@ function renderTimesheets() {
 async function renderNightly() {
   const box = $('#ts-nightly-state');
   if (!box) return;
-  let info = null;
+  let status = null;
   try {
-    info = (await api('/api/import-key')).key;
+    status = await api('/api/import-key');
   } catch {
     setChildren(box);
     return;
   }
+  const info = status.key;
+  const source = status.source || {};
+  if (document.activeElement !== $('#nightly-folder')) {
+    $('#nightly-folder').value = source.shared_folder || '';
+  }
+  $('#nightly-capture').placeholder = source.set
+    ? `Saved (${source.host}). Paste a new one only if BISpark changes.`
+    : 'Paste it here';
+  $('#btn-nightly-kit').disabled = !source.set;
+  $('#btn-nightly-team').disabled = !source.set || !source.shared_folder;
   $('#btn-nightly-stop').hidden = !info;
-  $('#btn-nightly-kit').textContent = info ? 'Download a new kit' : 'Download the PC kit';
   if (!info) {
-    setChildren(box, el('div', { class: 'msg' }, 'Not set up yet.'));
+    setChildren(box, el('div', { class: 'msg' }, source.set
+      ? 'Ready. Download the kit for your PC and run setup.bat on it.'
+      : 'Not set up yet.'));
     return;
   }
   const last = info.last_result;
   if (!last) {
     setChildren(box, el('div', { class: 'msg msg-warn' },
-      `Kit made ${fmt.date((info.created_at || '').slice(0, 10))}. Nothing has arrived from the PC yet.`));
+      `Kit made ${fmt.date((info.created_at || '').slice(0, 10))}. Nothing has arrived from your PC yet.`));
     return;
   }
   const when = new Date(info.last_used);
@@ -1550,38 +1561,65 @@ async function renderNightly() {
   const at = `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   if (!last.ok) {
     setChildren(box, el('div', { class: 'msg msg-bad' },
-      `Last night's import did not go in (${at}): ${last.error}`,
+      `The last import did not go in (${at}): ${last.error}`,
       ...(last.errors || []).map((e) => el('div', { class: 'small' }, e))));
     return;
   }
   setChildren(box, el('div', { class: stale ? 'msg msg-warn' : 'msg msg-ok' },
-    `${stale ? 'Nothing new since' : 'Last import'} ${at}: ${fmt.int(last.rows)} rows, `
-    + `${fmt.date(last.first_date)} → ${fmt.date(last.last_date)}.`
-    + (stale ? ' Check that the PC was on.' : '')));
+    `${stale ? 'Nothing new since' : 'Last import'} ${at}: ${fmt.int(last.rows)} rows from `
+    + `${(last.people || []).length} people, up to ${fmt.date(last.last_date)}.`
+    + (stale ? ' Check that your PC was on.' : ''),
+    (last.late || []).length
+      ? el('div', { class: 'small' }, `No fresh export from ${last.late.join(', ')}: was their PC off?`)
+      : null));
 }
 
-async function downloadNightlyKit() {
-  if ($('#btn-nightly-stop').hidden === false
-      && !confirm('A new kit stops the old one working. Carry on?')) return;
+async function saveNightlySource() {
   try {
-    const result = await api('/api/import-key', {
-      method: 'POST', body: { app_url: window.location.origin + BASE },
+    await api('/api/import-key/source', {
+      method: 'PUT',
+      body: { capture: $('#nightly-capture').value, shared_folder: $('#nightly-folder').value },
     });
-    const bytes = Uint8Array.from(atob(result.kit_base64), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
-    const link = el('a', { href: url, download: result.filename });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    $('#nightly-capture').value = '';
   } catch (error) {
     alert((error.errors || [error.message]).join('\n'));
   }
   renderNightly();
 }
 
+function saveZip(result) {
+  const bytes = Uint8Array.from(atob(result.kit_base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+  const link = el('a', { href: url, download: result.filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function downloadNightlyKit() {
+  if ($('#btn-nightly-stop').hidden === false
+      && !confirm('A new kit for your PC stops the old one working. Carry on?')) return;
+  try {
+    saveZip(await api('/api/import-key', {
+      method: 'POST', body: { app_url: window.location.origin + BASE },
+    }));
+  } catch (error) {
+    alert((error.errors || [error.message]).join('\n'));
+  }
+  renderNightly();
+}
+
+async function downloadTeamKit() {
+  try {
+    saveZip(await api('/api/import-key/team-kit', { method: 'POST' }));
+  } catch (error) {
+    alert((error.errors || [error.message]).join('\n'));
+  }
+}
+
 async function stopNightly() {
-  if (!confirm('Stop nightly imports? The PC kit stops working until you download a new one.')) return;
+  if (!confirm('Stop nightly imports? Your PC kit stops working until you download a new one.')) return;
   await api('/api/import-key', { method: 'DELETE' });
   renderNightly();
 }
@@ -2578,6 +2616,8 @@ function wire() {
   $('#btn-ts-check').addEventListener('click', checkTimesheetFile);
   $('#btn-nightly-kit').addEventListener('click', downloadNightlyKit);
   $('#btn-nightly-stop').addEventListener('click', stopNightly);
+  $('#btn-nightly-save').addEventListener('click', saveNightlySource);
+  $('#btn-nightly-team').addEventListener('click', downloadTeamKit);
   $('#btn-add-engineer').addEventListener('click', () => openEngineerModal(null));
   $('#btn-add-task').addEventListener('click', () => openTaskModal(null));
   $('#btn-task-settings').addEventListener('click', openWorkingDayModal);
