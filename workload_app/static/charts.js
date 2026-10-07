@@ -382,6 +382,167 @@ function sparkline(values, { labels = [], target = null, unit = 'h',
   return svg;
 }
 
+/* ------------------------------------------------------------ formation */
+
+/** The team laid out on a plane seen in perspective: a row per rank, the most
+ *  senior at the back, and a lane per team across it. Each person is a node
+ *  whose ring is how much of their capacity they are using; teammates are
+ *  joined, so each team reads as its own shape.
+ *
+ *  rows:   [{ label, nodes: [{ id, name, initials, color, value, tone, group, caption, tip }] }]
+ *  groups: [{ id, label }], left to right; a node with no group gets a lane of its own.
+ */
+function formation(rows, { groups = [], onPick = null } = {}) {
+  const R = Math.max(rows.length, 1);
+  const W = 1000;
+  const H = 150 + R * 92;
+  const cx = W / 2;
+  const back = 26;                 // where the far edge of the plane sits
+  const front = H - 48;            // and the near edge
+  const far = 1.75;                // how much further away the far edge is
+  const horizon = (back - front / far) / (1 - 1 / far);
+  const depth = (v) => 1 + (1 - v) * (far - 1);  // v: 0 back .. 1 front
+  const at = (u, v) => {
+    const z = depth(v);
+    return [cx + (u * 450) / z, horizon + (front - horizon) / z];
+  };
+  // Room on both sides for the longest row name, which sits off the plane's
+  // left edge; both sides so the plane stays in the middle.
+  const longest = Math.max(0, ...rows.map((row) => String(row.label || '').length));
+  const pad = Math.max(0, Math.ceil(longest * 10 + 24 - (cx - 450)));
+  const svg = svgEl('svg', {
+    viewBox: `${-pad} 0 ${W + 2 * pad} ${H}`, class: 'chart formation', role: 'img',
+    preserveAspectRatio: 'xMidYMid meet',
+  });
+
+  // Lanes: one per team, plus one for anyone not in a team yet.
+  const lanes = groups.map((g) => ({ id: g.id, label: g.label }));
+  if (rows.some((row) => row.nodes.some((n) => !lanes.some((l) => l.id === n.group)))) {
+    lanes.push({ id: null, label: lanes.length ? 'No team' : '' });
+  }
+  const L = Math.max(lanes.length, 1);
+  const laneOf = (node) => Math.max(0, lanes.findIndex((l) => l.id === (
+    lanes.some((x) => x.id === node.group) ? node.group : null)));
+  const laneCentre = (i) => -1 + (2 * i + 1) / L;
+
+  // The plane, its grid, and the lanes and rows marked on it.
+  const corners = [at(-1, 0), at(1, 0), at(1, 1), at(-1, 1)];
+  svg.append(svgEl('polygon', {
+    points: corners.map((p) => p.join(',')).join(' '), class: 'plane',
+  }));
+  const grid = svgEl('g', { class: 'plane-grid' });
+  for (let i = -6; i <= 6; i += 1) {
+    const [x1, y1] = at(i / 6, 0);
+    const [x2, y2] = at(i / 6, 1);
+    grid.append(svgEl('line', { x1, y1, x2, y2 }));
+  }
+  for (let k = 0; k <= 10; k += 1) {
+    const [x1, y1] = at(-1, k / 10);
+    const [x2, y2] = at(1, k / 10);
+    grid.append(svgEl('line', { x1, y1, x2, y2 }));
+  }
+  svg.append(grid);
+  for (let i = 1; i < L; i += 1) {
+    const u = -1 + (2 * i) / L;
+    const [x1, y1] = at(u, 0);
+    const [x2, y2] = at(u, 1);
+    svg.append(svgEl('line', { x1, y1, x2, y2, class: 'lane-line' }));
+  }
+  lanes.forEach((lane, i) => {
+    if (!lane.label) return;
+    const [x, y] = at(laneCentre(i), 1);
+    svg.append(svgEl('text', { x, y: y + 26, 'text-anchor': 'middle', class: 'lane-label' },
+      lane.label));
+  });
+
+  // Rows evenly spaced on the screen rather than on the plane, so the far
+  // rows, which perspective squeezes together, still have room for names.
+  const yOf = (v) => horizon + (front - horizon) / depth(v);
+  const vAt = (y) => 1 - ((front - horizon) / (y - horizon) - 1) / (far - 1);
+  const vOf = (r) => (R === 1 ? 0.6
+    : vAt(yOf(0.1) + ((yOf(0.86) - yOf(0.1)) * r) / (R - 1)));
+  const placed = [];
+  rows.forEach((row, r) => {
+    const v = vOf(r);
+    const [lx, ly] = at(-1, v);
+    if (row.label) {
+      svg.append(svgEl('text', {
+        x: lx - 14, y: ly + 4, 'text-anchor': 'end', class: 'row-label',
+      }, row.label));
+    }
+    lanes.forEach((_lane, li) => {
+      const here = row.nodes.filter((n) => laneOf(n) === li);
+      const width = 2 / L;
+      const gap = Math.min(0.34, (width * 0.82) / Math.max(here.length, 1));
+      here.forEach((node, i) => {
+        const u = laneCentre(li) + (i - (here.length - 1) / 2) * gap;
+        const [x, y] = at(u, v);
+        placed.push({ node, x, y, scale: 1 / depth(v) });
+      });
+    });
+  });
+
+  // Teammates joined, nearest first, before the people go on top.
+  const links = svgEl('g', { class: 'links' });
+  lanes.forEach((lane) => {
+    if (lane.id === null) return;
+    const members = placed.filter((p) => p.node.group === lane.id)
+      .sort((a, b) => a.y - b.y || a.x - b.x);
+    for (let i = 1; i < members.length; i += 1) {
+      const me = members[i];
+      const near = members.slice(0, i).reduce((best, p) => (
+        Math.hypot(p.x - me.x, p.y - me.y) < Math.hypot(best.x - me.x, best.y - me.y)
+          ? p : best));
+      links.append(svgEl('line', { x1: near.x, y1: near.y, x2: me.x, y2: me.y, class: 'link' }));
+    }
+  });
+  svg.append(links);
+
+  const people = svgEl('g', {});
+  placed.sort((a, b) => a.y - b.y).forEach(({ node, x, y, scale }) => {
+    const r = 20 * scale + 9;
+    const g = svgEl('g', {
+      class: `person${onPick ? ' pickable' : ''}`,
+      transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`,
+      tabindex: onPick ? 0 : null,
+      role: onPick ? 'button' : null,
+      'aria-label': node.name,
+    });
+    g.append(svgEl('ellipse', { cx: 0, cy: r + 4, rx: r * 1.1, ry: r * 0.3, class: 'shadow' }));
+    const ring = r + 4;
+    const length = 2 * Math.PI * ring;
+    const share = Math.max(0, Math.min(1, node.value || 0));
+    g.append(svgEl('circle', { r: ring, class: 'ring-track' }));
+    g.append(svgEl('circle', {
+      r: ring, class: `ring ring-${node.tone || 'none'}`,
+      'stroke-dasharray': `${(share * length).toFixed(1)} ${length.toFixed(1)}`,
+      transform: 'rotate(-90)',
+    }));
+    g.append(svgEl('circle', { r, fill: node.color, class: 'disc' }));
+    g.append(svgEl('text', {
+      y: r * 0.34, 'text-anchor': 'middle', class: 'initials',
+      style: `font-size:${(r * 0.85).toFixed(1)}px`,
+    }, node.initials));
+    g.append(svgEl('text', { y: ring + 16, 'text-anchor': 'middle', class: 'person-name' },
+      node.name));
+    if (node.caption) {
+      g.append(svgEl('text', {
+        y: ring + 30, 'text-anchor': 'middle', class: `person-caption v-${node.tone || ''}`,
+      }, node.caption));
+    }
+    if (node.tip) hoverable(g, node.tip);
+    if (onPick) {
+      g.addEventListener('click', () => onPick(node));
+      g.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onPick(node); }
+      });
+    }
+    people.append(g);
+  });
+  svg.append(people);
+  return wrap('formation-wrap', wrap('chart-scroll', svg));
+}
+
 /* --------------------------------------------------------- budget bars */
 
 /** Spend against budget, one project to a row: the track is the budget, the
@@ -470,5 +631,6 @@ function escape(text) {
 }
 
 window.charts = {
-  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, legend, figure, SERIES,
+  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation,
+  legend, figure, escape, SERIES,
 };
