@@ -254,7 +254,7 @@ def static_files(root: Optional[Path] = None) -> List[Dict[str, str]]:
     static = root / "workload_app" / "static"
     return [{"url": f"/{name}", "path": str(static / name)}
             for name in ("app.css", "app.js", "member.js", "charts.js",
-                         "tables.js", "pocket.js")]
+                         "tables.js", "pocket.js", "voyage.js")]
 
 
 def render(report: Report, *, show_wsgi: bool = True) -> str:

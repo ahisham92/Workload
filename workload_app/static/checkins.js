@@ -44,6 +44,70 @@ async function loadCheckins(force = false) {
   }
   renderCheckins();
   renderCheckinSummary();
+  loadTogether();
+}
+
+/* Every unit side by side, for a manager with more than one. */
+async function loadTogether() {
+  try {
+    const listed = await api('/api/units');
+    if (!listed.units || listed.units.length < 2) { checkin.together = null; return; }
+    // Opens every unit in turn: fills in below, without holding up the page.
+    checkin.together = await api('/api/units/together', { quiet: true });
+  } catch (error) {
+    checkin.together = null;
+    return;
+  }
+  renderCheckins();
+}
+
+function togetherPanel() {
+  const t = checkin.together;
+  if (!t || t.totals.units < 2) return null;
+  const tone = (u) => (u.rest ? 'bad' : u.busy ? 'warn' : 'ok');
+  return el('section', { class: 'panel ci-together' },
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, 'All your units'),
+        el('p', { class: 'muted' },
+          `${t.totals.units} units, ${t.totals.teams} teams, ${t.totals.people} people: `
+          + `${ciHours(t.totals.free_week)} free this week, ${t.totals.rest} need to ease off, `
+          + `${t.totals.urgent} things to ask now. Each unit's own Check-ins, side by side.`))),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'ci-together-table' },
+      el('thead', {}, el('tr', {},
+        el('th', {}, 'Unit · team'), el('th', { class: 'num' }, 'People'),
+        el('th', { class: 'num' }, 'Free this week'), el('th', { class: 'num' }, 'Ease off'),
+        el('th', { class: 'num' }, 'Heavy'), el('th', { class: 'num' }, 'Room'),
+        el('th', { class: 'num' }, 'Ask now'))),
+      el('tbody', {}, t.units.flatMap((u) => [
+        el('tr', { class: `ci-unit-row ${u.id === t.current ? 'is-current' : ''}` },
+          el('td', {}, el('span', { class: `dot dot-${tone(u)}` }), el('b', {}, u.name),
+            u.id === t.current ? el('span', { class: 'muted small' }, ' · open now') : null,
+            u.stale ? el('span', { class: 'muted small' }, ` · timesheets to ${ciDay(u.through, { day: 'numeric', month: 'short' })}`) : null),
+          el('td', { class: 'num' }, String(u.people)),
+          el('td', { class: 'num' }, ciHours(u.free_week)),
+          el('td', { class: 'num' }, String(u.rest)),
+          el('td', { class: 'num' }, String(u.busy)),
+          el('td', { class: 'num' }, String(u.fresh)),
+          el('td', { class: 'num' }, String(u.urgent))),
+        ...(u.teams.length > 1 ? u.teams.map((team) => el('tr', { class: 'ci-team-row' },
+          el('td', {}, team.name),
+          el('td', { class: 'num' }, String(team.people)),
+          el('td', { class: 'num' }, ciHours(team.free_week)),
+          el('td', { class: 'num' }, String(team.rest)),
+          el('td', { class: 'num' }, String(team.busy)),
+          el('td', { class: 'num' }, String(team.fresh)),
+          el('td', { class: 'num' }, String(team.urgent)))) : []),
+      ])))),
+    t.leaders.length ? el('ul', { class: 'ci-together-notes' }, t.leaders.map((l) => el('li', {},
+      el('b', {}, l.name), ` leads in ${l.units.map((u) => `${u.unit} (${u.people})`).join(', ')}: `,
+      el('b', { class: l.too_much ? 'v-bad' : '' }, `${ciHours(l.hours_a_day)} a day`),
+      l.too_much ? ' altogether, more than half the day. Hand some of it to a team lead.' : ' altogether.'))) : null,
+    t.people_in_several.length ? el('p', { class: 'small' },
+      el('b', {}, 'In more than one unit: '),
+      t.people_in_several.map((p) => `${p.name} (${p.units.map((u) => u.unit).join(', ')})`).join('; '),
+      '. Each unit counts their whole day, so their free hours are shared between them.') : null,
+    t.missing.length ? el('p', { class: 'muted small' }, `Could not be opened: ${t.missing.join(', ')}.`) : null);
 }
 
 function visiblePeople() {
@@ -71,6 +135,7 @@ function renderCheckins() {
       + 'so how loaded people are reads from then. Import the latest exports to bring it up to date.')
       : null,
     checkinStats(people),
+    togetherPanel(),
     leadingPanel(data),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
@@ -237,7 +302,7 @@ function leadingPanel(data) {
         el('h3', {}, 'Leading the team'),
         el('p', { class: 'muted' },
           'Time kept every day for questions, checking and replies, more for a junior '
-          + 'than a senior; a team meeting at the start of each week; a one-to-one with '
+          + 'or a draftsman than a senior; a team meeting at the start of each week; a one-to-one with '
           + 'each person every two weeks. It comes out of the leader\'s free hours, so '
           + 'they are never given project work in it. Agendas come from the checkpoints below.'))),
     ...leading.map((l) => el('div', { class: 'ci-lead' },

@@ -56,6 +56,10 @@ class TestTeamSupport:
         # 30 + 20 + 10 minutes.
         assert management.support_hours(led, config) == 1.0
 
+    def test_a_draftsman_takes_as_much_as_a_junior(self, config):
+        drawing_office = roster(("Hala", "drafter", None), ("Rami", "bim", None))
+        assert management.support_hours(drawing_office, config) == 1.0
+
     def test_never_more_than_half_the_day(self, config):
         many = roster(*[(f"J{i}", "junior", None) for i in range(30)])
         assert management.support_hours(many, config) == pytest.approx(4.25)

@@ -680,6 +680,38 @@ class WorkloadApp:
         self.accounts.set_open_unit(user_id, unit_id)
         return result
 
+    def units_together(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """Every unit of this account side by side, from each one's Check-ins.
+
+        Each unit is opened in a service of its own, so whatever is open in
+        the browser is left exactly as it was.
+        """
+        from . import across
+
+        user_id = ctx.user["id"]
+        current = (ctx.service.unit or {}).get("id") if ctx.service else None
+        pairs, missing = [], []
+        hours = 8.5
+        for unit in self.accounts.units(user_id):
+            if unit["id"] == current and ctx.service._wb is not None:
+                view = ctx.service.checkins()
+            else:
+                service = WorkloadService(autosave=self.autosave)
+                try:
+                    self._open(service, user_id, unit["id"])
+                    view = service.checkins()
+                except ApiError:
+                    missing.append(unit["name"])
+                    continue
+                finally:
+                    service.close()
+            hours = view.get("hours_per_day") or hours
+            pairs.append((across.unit_summary(unit["name"], unit["id"], view), view))
+        result = across.combine(pairs, hours_per_day=hours)
+        result["missing"] = missing
+        result["current"] = current
+        return result
+
     def close_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
         self.accounts.set_open_unit(ctx.user["id"], None)
         return ctx.service.close()
@@ -1166,6 +1198,7 @@ class WorkloadApp:
              "manager"),
             ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
             ("GET", "/api/checkins", lambda ctx, q, b: ctx.service.checkins(), "manager"),
+            ("GET", "/api/units/together", self.units_together, "manager"),
             ("POST", "/api/planned-work",
              lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),
             ("POST", "/api/planned-work/{}/remove",

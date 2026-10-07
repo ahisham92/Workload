@@ -134,14 +134,22 @@ function toast(message, kind = '') {
    request below has to be made under it rather than at the site's root. */
 const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 
-async function api(path, options = {}) {
-  const response = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+async function api(path, { quiet = false, ...options } = {}) {
+  // Anything slow brings up the loading ship, so a wait never looks stuck;
+  // the background refreshes ask to stay quiet.
+  const done = quiet ? () => {} : voyage.trip(voyage.labelFor(path, options.method));
+  let response;
   let payload = {};
-  try { payload = await response.json(); } catch { /* empty body */ }
+  try {
+    response = await fetch(BASE + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    try { payload = await response.json(); } catch { /* empty body */ }
+  } finally {
+    done();
+  }
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/')) {
       // The session has ended -- somewhere else, or by simply expiring.
@@ -258,8 +266,11 @@ function chooserError(messages) {
 
 async function openUnit(unit) {
   try {
-    await api(`/api/units/${unit.id}/open`, { method: 'POST' });
-    await enterApp();
+    // One voyage from the click to the unit on screen, not one per request.
+    await voyage.during(`Opening ${unit.name || 'the unit'}`, async () => {
+      await api(`/api/units/${unit.id}/open`, { method: 'POST' });
+      await enterApp();
+    });
   } catch (error) {
     chooserError(error.errors || [error.message]);
   }
@@ -279,12 +290,15 @@ async function newUnit() {
     el('span', { class: 'spin' }),
     ` Reading ${files.length} export(s) and setting the unit up…`));
   try {
-    const result = await api('/api/units/from-timesheets', {
-      method: 'POST',
-      body: { name, files: await filesBase64(files) },
+    const result = await voyage.during('Uploading the timesheets', async () => {
+      const made = await api('/api/units/from-timesheets', {
+        method: 'POST',
+        body: { name, files: await filesBase64(files) },
+      });
+      await enterApp();
+      return made;
     });
     const made = result.imported || {};
-    await enterApp();
     toast(`${fmt.int(made.rows_written)} rows, ${(made.people || []).length} people `
       + `and ${(made.projects_added || []).length} projects read from the timesheets.`,
       'ok');
@@ -342,7 +356,8 @@ async function deleteUnit(unit) {
 /** Hand the unit back as a spreadsheet, so the account is never a trap. */
 async function downloadUnit(unit) {
   try {
-    const result = await api(`/api/units/${unit.id}/download`);
+    const result = await voyage.during('Preparing the download',
+      () => api(`/api/units/${unit.id}/download`));
     const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1675,9 +1690,9 @@ async function checkTimesheetFile() {
     el('span', { class: 'spin' }), ` Reading ${files.length} file(s)…`));
 
   try {
-    const staged = await api('/api/timesheets/exports/stage', {
-      method: 'POST', body: { files: await filesBase64(files) },
-    });
+    const staged = await voyage.during('Uploading', async () => api(
+      '/api/timesheets/exports/stage',
+      { method: 'POST', body: { files: await filesBase64(files) } }));
     state.stagedImport = staged;
     renderImportResult(staged);
   } catch (error) {
@@ -2713,6 +2728,8 @@ function wire() {
   } catch (error) {
     document.body.prepend(el('div', { class: 'msg msg-bad', style: 'margin:20px' },
       `Could not start: ${error.message}`));
+  } finally {
+    voyage.ready();
   }
 })();
 
