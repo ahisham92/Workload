@@ -11,7 +11,8 @@
 #
 # Task Scheduler starts this at night, every hour, and whenever the PC joins a
 # network (FortiClient included). Each run does only what is still owed: one
-# export a day, and an upload only when the shared folder has something new.
+# export a day, and at most every 6 hours an upload -- only when the shared
+# folder has something new since the last one.
 # Off the company network it stops quietly and tries again next time.
 
 $ErrorActionPreference = 'Stop'
@@ -139,7 +140,10 @@ try {
 
     if (-not $manager) { exit 0 }
 
-    # -- the upload: whenever the shared folder has something new ------------
+    # -- the upload: every 6 hours, and only when the folder has something new
+    # An engineer whose PC was off at midnight exports when they next sign in;
+    # their file goes up with the next upload after that.
+    if ((Read-Mark $sentMark) -gt (Get-Date).AddHours(-6)) { exit 0 }
     if ($shared) {
         if (-not (Test-Path $shared)) { exit 0 }      # off the network again
         $toSend = @(Get-ChildItem $shared -Filter '*.xlsx')
