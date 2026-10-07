@@ -46,10 +46,11 @@ const button = document.getElementById('btn-login');
 
 /* If this installation has no accounts at all, say so rather than letting
    somebody guess passwords against a door with nothing behind it. */
-fetch('/api/auth/me', { headers: { Accept: 'application/json' } })
+const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
+fetch(`${BASE}/api/auth/me`, { headers: { Accept: 'application/json' } })
   .then((r) => r.json())
   .then((data) => {
-    if (data.user) { window.location.href = '/'; return; }
+    if (data.user) { window.location.href = `${BASE}/`; return; }
     if (!data.any_accounts) {
       document.getElementById('login-note').innerHTML =
         'This installation has no accounts yet. On the machine running it: '
@@ -63,7 +64,7 @@ form.addEventListener('submit', async (event) => {
   errors.replaceChildren();
   button.disabled = true;
   try {
-    const response = await fetch('/api/auth/login', {
+    const response = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -81,7 +82,7 @@ form.addEventListener('submit', async (event) => {
       document.getElementById('password').focus();
       return;
     }
-    window.location.href = '/';
+    window.location.href = `${BASE}/`;
   } catch (error) {
     const message = document.createElement('div');
     message.className = 'msg msg-bad';

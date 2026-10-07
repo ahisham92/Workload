@@ -129,8 +129,13 @@ function toast(message, kind = '') {
   }, kind === 'bad' ? 8000 : 3800);
 }
 
+/* Where this page is served from. At an address of its own that is the root
+   and BASE is empty; as one tab of a larger site it is "/workload", and every
+   request below has to be made under it rather than at the site's root. */
+const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -140,7 +145,7 @@ async function api(path, options = {}) {
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/')) {
       // The session has ended -- somewhere else, or by simply expiring.
-      window.location.href = '/login.html';
+      window.location.href = `${BASE}/login.html`;
     }
     const error = new Error(payload.error || `Request failed (${response.status})`);
     error.errors = payload.errors || [error.message];
@@ -169,7 +174,22 @@ function showShell(open) {
   for (const id of ['topbar', 'tabs', 'main']) $(`#${id}`).hidden = !open;
   // The Admin tab is an administrator's; the routes behind it refuse anyone
   // else in any case, so this is about not showing a door that will not open.
-  $('#tab-admin').hidden = !(state.me || {}).is_admin;
+  // Inside a larger site, accounts are that site's business: there is no
+  // username or password here for this tab to manage.
+  $('#tab-admin').hidden = !(state.me || {}).is_admin || Boolean(state.site);
+}
+
+/** The way back to the site this is a tab of, and its own sign-out. */
+function applySite() {
+  const site = state.site;
+  for (const link of $$('.site-home')) {
+    link.hidden = !site;
+    if (site) {
+      link.href = site.home;
+      link.textContent = `← ${site.label}`;
+      link.title = `Back to ${site.label}, and its other applications`;
+    }
+  }
 }
 
 async function renderChooser() {
@@ -220,6 +240,15 @@ async function renderChooser() {
           'Start one below. A blank unit carries the whole model — project '
           + 'types, rules of credit, the scorecard — with none of the data.'),
   ];
+  if (state.site && !units.length) {
+    // Somebody who used Workload at its own address has units there already,
+    // under a username this sign-in knows nothing about.
+    parts.push(el('div', { class: 'msg msg-info' },
+      el('b', {}, 'Used Workload before it moved here? '),
+      'Your units are still there. ',
+      el('button', { class: 'btn btn-sm', type: 'button', onclick: openLinkModal },
+        'Bring my units across')));
+  }
   if (units.length >= data.limit) {
     parts.push(el('div', { class: 'msg msg-warn' },
       `An account holds up to ${data.limit} units.`));
@@ -359,12 +388,45 @@ function readFileBase64(file) {
 
 /* ------------------------------------------------------------- account */
 
+/** Sign out of the site this is a tab of, then go to its front door. */
+async function leaveSite(site) {
+  try {
+    if (site.logout) await fetch(site.logout, { method: 'POST' });
+  } finally {
+    window.location.href = site.home;
+  }
+}
+
 async function signOut() {
+  if (state.site) {
+    // One sign-in for the whole site, so one sign-out too.
+    await leaveSite(state.site);
+    return;
+  }
   try {
     await api('/api/auth/logout', { method: 'POST' });
   } finally {
-    window.location.href = '/login.html';
+    window.location.href = `${BASE}/login.html`;
   }
+}
+
+/** Tie the account from Workload's own address to the sign-in used here. */
+function openLinkModal() {
+  openModal('Bring my units across', [
+    { name: 'username', label: 'Your old Workload username', full: true,
+      hint: 'the one you typed at Workload\u2019s own address, before it became a '
+        + 'tab here' },
+    { name: 'password', label: 'Its password', type: 'password', full: true,
+      hint: 'asked once. After this you only ever sign in to the site.' },
+  ], async () => {
+    const result = await api('/api/auth/link', { method: 'POST', body: modalValues() });
+    closeModal();
+    state.me = result.user;
+    toast(result.linked
+      ? `Done — ${result.units} unit${result.units === 1 ? '' : 's'} brought across.`
+      : 'That is already the account you are in.', 'ok');
+    await renderChooser();
+  }, {});
 }
 
 function openAccountModal() {
@@ -1017,12 +1079,20 @@ function openAccountPanel() {
       me.is_admin ? el('span', { class: 'pill pill-info', style: 'margin-left:8px' },
         'administrator') : null),
     el('p', { class: 'muted' },
-      `Signed in as ${me.username}. Your units and their workbooks are yours `
-      + 'alone; no other account can open them.'),
+      `Signed in as ${state.site ? (me.site_login || me.display_name) : me.username}. `
+      + 'Your units and their workbooks are yours alone; nobody else can open '
+      + 'them. A team member sees their own figures only once you give them '
+      + 'access from the Team tab.'),
+    state.site ? el('p', { class: 'muted' },
+      `Your password is the one you use for ${state.site.label}; change it there.`)
+      : null,
     el('div', { class: 'row-actions' },
-      el('button', { class: 'btn', type: 'button', onclick: openAccountModal },
-        'Change password'),
-      me.is_admin
+      state.site
+        ? el('button', { class: 'btn', type: 'button', onclick: openLinkModal },
+          'Bring units from my old Workload account')
+        : el('button', { class: 'btn', type: 'button', onclick: openAccountModal },
+          'Change password'),
+      me.is_admin && !state.site
         ? el('button', { class: 'btn', type: 'button',
           onclick: () => { closeModal(); switchView('admin'); } }, 'Accounts')
         : null,
@@ -2377,8 +2447,10 @@ function wire() {
   wire();
   try {
     const who = await api('/api/auth/me');
-    if (!who.user) { window.location.href = '/login.html'; return; }
+    if (!who.user) { window.location.href = `${BASE}/login.html`; return; }
     state.me = who.user;
+    state.site = who.site || null;
+    applySite();
     const status = await api('/api/status');
     state.status = status;
     if (status.open) await enterApp();
@@ -2959,7 +3031,8 @@ function accessCell(person) {
     }, 'Give access');
   }
   return el('div', { class: 'who' },
-    el('span', { class: 'who-chip', title: `signs in as ${granted.username}` },
+    el('span', { class: 'who-chip',
+      title: `signs in as ${granted.site_login || granted.username}` },
       granted.display_name || granted.username),
     el('button', {
       class: 'btn btn-sm btn-ghost', type: 'button', title: 'Take the access away',
@@ -2967,7 +3040,45 @@ function accessCell(person) {
     }, '✕'));
 }
 
+/** Inside a larger site: access goes to somebody who signs in there. */
+function openSiteAccessModal(person) {
+  const people = ((state.access || {}).site || {}).people || [];
+  const taken = new Set(((state.access || {}).members || [])
+    .map((m) => m.site_key).filter(Boolean));
+  const free = people.filter((p) => !taken.has(p.id));
+  if (!free.length) {
+    openPanel(`Give ${person.short_name} access`, el('div', {},
+      el('p', {}, people.length
+        ? 'Everybody who can open Workload on this site already has access to '
+          + 'this unit as somebody.'
+        : 'Nobody else on this site has been given Workload yet.'),
+      el('p', { class: 'muted' },
+        'Ask the administrator to make them an account with Workload ticked. '
+        + 'They will then be in this list, and need no password from you.')));
+    return;
+  }
+  const guess = free.find((p) => (p.name || '').toLowerCase()
+    .includes(person.short_name.toLowerCase()));
+  openModal(`Give ${person.short_name} access`, [
+    { name: 'person', label: 'Who is this on the site?', type: 'select', full: true,
+      options: free.map((p) => ({ value: p.id,
+        label: p.name && p.login && p.name !== p.login
+          ? `${p.name} — ${p.login}` : (p.name || p.login) })),
+      hint: 'everyone who can open Workload on this site. They need no new '
+        + 'password: they sign in as they always do, and see their own figures '
+        + 'in this unit and nothing else.' },
+  ], async () => {
+    const body = { ...modalValues(), engineer: person.short_name };
+    const result = await api('/api/team/access', { method: 'POST', body });
+    closeModal();
+    toast(`${result.user.display_name} now sees ${person.short_name}\u2019s own `
+      + 'figures in this unit, and nothing else.', 'ok');
+    await loadTeam();
+  }, { person: (guess || free[0]).id });
+}
+
 function openAccessModal(person) {
+  if (state.site) { openSiteAccessModal(person); return; }
   openModal(`Give ${person.short_name} a sign-in`, [
     { name: 'username', label: 'Username', full: true,
       hint: 'what they type to sign in — letters, digits, dot, dash, underscore' },
@@ -2995,7 +3106,7 @@ function openAccessModal(person) {
 
 async function revokeAccess(person, granted) {
   if (!window.confirm(
-    `Take away ${granted.username}'s sign-in for ${person.short_name}?\n\n`
+    `Take away ${granted.display_name || granted.username}'s access as ${person.short_name}?\n\n`
     + 'The account stays, but it can no longer see this unit.')) return;
   try {
     await api(`/api/team/access/${granted.user_id}`, { method: 'DELETE' });
