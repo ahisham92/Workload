@@ -1142,3 +1142,9 @@ tr.row-done .task-name { text-decoration: line-through; }
   margin: 4px 0 10px; padding: 10px 12px; border-radius: var(--radius);
   background: var(--surface-2); border-left: 3px solid var(--accent); }
 .holiday-prompt > span:first-child { flex: 1 1 260px; font-weight: 600; }
+
+/* Work coming: one line for a project just assigned. */
+.pill-muted { background: var(--surface-2); color: var(--muted); }
+.quick-add .num-input { width: 8em; }
+.quick-add .quick-add-options input.job-input { flex: 0 0 7em; width: 7em; font-size: 14px; }
+.inline-date { display: inline-flex; align-items: center; gap: 4px; }
