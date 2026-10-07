@@ -288,11 +288,22 @@ async function newUnit() {
     toast(`${fmt.int(made.rows_written)} rows, ${(made.people || []).length} people `
       + `and ${(made.projects_added || []).length} projects read from the timesheets.`,
       'ok');
+    // Nobody is dropped quietly: past the workbook's places a person still
+    // counts, and the data check on Timesheets keeps saying so.
+    if ((made.people_outside_workbook || []).length) {
+      toast(outsideNote(made.people_outside_workbook), 'bad');
+    }
   } catch (error) {
     chooserError(error.errors || [error.message]);
   } finally {
     button.disabled = false;
   }
+}
+
+/** A line for the people past the workbook's places, who still count. */
+function outsideNote(names) {
+  return `No place in the workbook yet for ${names.join(', ')}. Their hours count `
+    + 'toward the projects and in Resourcing, but not in the KPIs or splits.';
 }
 
 /** Each chosen file as { filename, content_base64 }, for an upload. */
@@ -1415,7 +1426,8 @@ function engineerBlock(name, report, overview) {
 
 function renderDataCheck(check) {
   const kind = check.all_time_rows === 0 ? 'msg-warn'
-    : check.rows_not_matching_pattern ? 'msg-bad' : 'msg-ok';
+    : check.rows_not_matching_pattern ? 'msg-bad'
+      : (check.people_outside_workbook || []).length ? 'msg-warn' : 'msg-ok';
   const unknown = check.unknown_job_numbers || [];
   // The counts follow the year chosen above; the sheets themselves hold every
   // year at once, so the whole-file totals stay beside them.
@@ -1563,6 +1575,7 @@ async function checkTimesheetFile() {
 function renderImportResult(staged) {
   const blocked = (staged.errors || []).length > 0 || !staged.rows;
   const newPeople = (staged.people || []).filter((p) => p.new);
+  const outside = new Set(staged.people_outside_workbook || []);
   const projects = staged.new_projects || [];
   const leftOut = staged.projects_left_out || [];
 
@@ -1582,6 +1595,10 @@ function renderImportResult(staged) {
           el('td', {}, p.full_name),
           el('td', {}, p.name, p.new
             ? el('span', { class: 'pill pill-info', style: 'margin-left:6px' }, 'new')
+            : null,
+          outside.has(p.name)
+            ? el('span', { class: 'pill pill-warn', style: 'margin-left:6px' },
+                'no place yet')
             : null),
           el('td', { class: 'num' }, fmt.int(p.rows)),
           el('td', { class: 'num' }, fmt.hours(p.hours))))))),
@@ -1640,6 +1657,11 @@ async function applyImport(mode) {
       result.people_added.length
         ? el('div', { class: 'msg msg-info' },
             `New on the team: ${result.people_added.join(', ')}.`)
+        : null,
+      // The verdict above names them itself, unless it has worse news first.
+      (result.people_outside_workbook || []).length
+        && result.data_check.rows_not_matching_pattern
+        ? el('div', { class: 'msg msg-warn' }, outsideNote(result.people_outside_workbook))
         : null,
       added.length
         ? el('div', { class: 'msg msg-info' },

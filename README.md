@@ -266,6 +266,13 @@ Mgmt Review, Engineer KPIs and Team Member sheets stay three columns wide and
 know only the first three people. The app's versions of those reports handle any
 number, which is where you read them now.
 
+A workbook takes up to twelve people. An import with more than that still
+imports everybody: the rest are on the roster and in Resourcing, and their hours
+count toward every project they booked to, but they have no KPI line and no
+share of a deliverable. Nobody past the twelve goes unmentioned: the import
+names them before anything is written, marks them **no place yet**, and the
+data check on Timesheets keeps naming them until the limit is raised.
+
 Nothing in the app assumes who the engineers are or how many there are. The
 team, the paste-target sheets and the order they are stacked in all come from
 the workbook, so a copy set up for a different discipline works without a code
