@@ -18,7 +18,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
-from . import (calendar_, config as cfg, daily, derive,
+from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
                incoming, intake, metrics, needs as needs_module,
@@ -1066,6 +1066,17 @@ class WorkloadService:
             data["teams"] = [{"id": t["id"], "name": t["name"]}
                              for t in sorted(self.store.teams(), key=lambda t: t["name"])]
             return data
+
+    def checkins(self) -> Dict[str, Any]:
+        """Free hours, how loaded each person has been, and what to ask them."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            return checkins_module.build(
+                rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
+                config=inputs["config"], project_names=inputs["project_names"],
+                saved=self.store.plan_moves(), slots=self.store.slots(),
+                today=_today())
 
     def add_planned_work(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """A project just assigned: one line, and the forecast counts it."""

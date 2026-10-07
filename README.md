@@ -162,6 +162,34 @@ ask, timed two weeks ahead so they arrive in time; a whole person spare for
 three weeks or more is room. The Overview carries the same alerts under
 *Staffing ahead*.
 
+## Check-ins
+
+The tab a manager opens first thing, and the strip at the top of Overview.
+Nothing on it is typed: it is all worked out from the timesheets, the task list
+and the calendar (`workload_app/checkins.py`).
+
+**Free hours.** Each person's next ten working days, laid out exactly as the
+Planner lays out Today, and what is left of each. A grid shows who has room,
+and when, and the next job is offered to whoever has the most free hours this
+week and has not been overloaded.
+
+**How loaded they have been.** Eight weeks of booked hours against the hours
+each person had, with their overtime. Days away count as neither, so a week of
+leave is a short week, not a quiet one. From that each person gets one signal:
+
+| Signal | When |
+| --- | --- |
+| Needs to ease off | 110% or more of their hours over four weeks, three weeks in a row over 105%, or 30 h of overtime in four weeks |
+| Heavy, keep an eye | at or over their hours for four weeks, 12 h of overtime, or no day off in 80 working days |
+| Fresh, can take more | back from three or more days off, or under 75% of their hours for two weeks |
+| Steady | none of those |
+
+**Checkpoints.** The few things worth raising with each person, each phrased
+as the question to ask: a blocked, late or about-to-fall-due task, a task that
+has used more hours than it was given, an overload or a fresh spell, a long run
+without leave, a timesheet that has stopped arriving, and leave coming up that
+needs a handover.
+
 ## Teams and draftsmen
 
 One manager can run one team or several. When a unit's timesheets name more

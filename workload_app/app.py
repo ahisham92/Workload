@@ -1140,6 +1140,7 @@ class WorkloadApp:
              lambda ctx, q, b, move_id: ctx.service.remove_plan_move(_int(move_id), b),
              "manager"),
             ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
+            ("GET", "/api/checkins", lambda ctx, q, b: ctx.service.checkins(), "manager"),
             ("POST", "/api/planned-work",
              lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),
             ("POST", "/api/planned-work/{}/remove",

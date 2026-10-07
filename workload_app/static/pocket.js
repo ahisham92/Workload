@@ -17,7 +17,7 @@
 
   // The views a thumb should reach first, best first. The first four that
   // are on the page get a button of their own.
-  const DAILY = ['overview', 'planner', 'today', 'tasks', 'timesheets', 'reports'];
+  const DAILY = ['overview', 'planner', 'checkins', 'today', 'tasks', 'timesheets', 'reports'];
   const SLOTS = 4;
 
   const standalone = () => window.matchMedia('(display-mode: standalone)').matches
