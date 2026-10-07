@@ -212,7 +212,7 @@ async function renderChooser() {
         },
           el('b', {}, unit.name),
           el('span', { class: 'muted' },
-            unit.exists ? `${unit.size_mb} MB` : 'its workbook is missing'),
+            unit.exists ? `${unit.size_mb} MB` : 'its data is missing'),
           el('span', { class: 'muted' },
             unit.opened_at ? `last opened ${String(unit.opened_at).slice(0, 10)}`
               : `created ${String(unit.created_at).slice(0, 10)}`)),
@@ -223,12 +223,12 @@ async function renderChooser() {
           }, '✎'),
           el('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
-            title: 'Download a copy of this workbook',
+            title: 'Download everything in this unit as a spreadsheet',
             onclick: () => downloadUnit(unit),
           }, '⭳'),
           el('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
-            title: 'Delete this unit and its workbook',
+            title: 'Delete this unit',
             onclick: () => deleteUnit(unit),
           }, '✕')))))
       : el('p', { class: 'muted' },
@@ -244,7 +244,7 @@ async function renderChooser() {
       el('button', { class: 'btn btn-sm', type: 'button', onclick: openLinkModal },
         'Bring my units across')));
   }
-  if (units.length >= data.limit) {
+  if (data.limit && units.length >= data.limit) {
     parts.push(el('div', { class: 'msg msg-warn' },
       `An account holds up to ${data.limit} units.`));
   }
@@ -288,8 +288,8 @@ async function newUnit() {
     toast(`${fmt.int(made.rows_written)} rows, ${(made.people || []).length} people `
       + `and ${(made.projects_added || []).length} projects read from the timesheets.`,
       'ok');
-    // Nobody is dropped quietly: past the workbook's places a person still
-    // counts, and the data check on Timesheets keeps saying so.
+    // Nobody is dropped quietly: somebody with hours here who is not on the
+    // team still counts, and the data check on Timesheets keeps saying so.
     if ((made.people_outside_workbook || []).length) {
       toast(outsideNote(made.people_outside_workbook), 'bad');
     }
@@ -300,10 +300,12 @@ async function newUnit() {
   }
 }
 
-/** A line for the people past the workbook's places, who still count. */
+/** A line for the people with hours here who are not on the team. */
 function outsideNote(names) {
-  return `No place in the workbook yet for ${names.join(', ')}. Their hours count `
-    + 'toward the projects and in Resourcing, but not in the KPIs or splits.';
+  return `${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} hours here but `
+    + `${names.length === 1 ? 'is' : 'are'} not on the team. Their hours count `
+    + 'toward the projects and in Resourcing; add them on Team to give them a '
+    + 'KPI line and a share of a deliverable.';
 }
 
 /** Each chosen file as { filename, content_base64 }, for an upload. */
@@ -326,8 +328,9 @@ async function renameUnit(unit) {
 
 async function deleteUnit(unit) {
   if (!window.confirm(
-    `Delete "${unit.name}"?\n\nIts workbook and every backup of it are `
-    + 'removed from the server. Download a copy first if you want one.')) return;
+    `Delete "${unit.name}"?\n\nIts data is removed from the server. The dated `
+    + 'copies kept of it stay with your account for an administrator to put '
+    + 'back. Download it first if you want a copy of your own.')) return;
   try {
     await api(`/api/units/${unit.id}`, { method: 'DELETE' });
     await renderChooser();
@@ -336,7 +339,7 @@ async function deleteUnit(unit) {
   }
 }
 
-/** Hand the workbook back as a file, so the account is never a trap. */
+/** Hand the unit back as a spreadsheet, so the account is never a trap. */
 async function downloadUnit(unit) {
   try {
     const result = await api(`/api/units/${unit.id}/download`);
@@ -960,7 +963,7 @@ async function toggleAdmin(user) {
 
 async function deleteAccount(user) {
   if (!window.confirm(
-    `Delete the account ${user.username}?\n\nEvery workbook it holds goes `
+    `Delete the account ${user.username}?\n\nEvery unit it holds goes `
     + 'with it. This cannot be undone.')) return;
   try {
     await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
@@ -1057,7 +1060,7 @@ function openAccountPanel() {
         'administrator') : null),
     el('p', { class: 'muted' },
       `Signed in as ${state.site ? (me.site_login || me.display_name) : me.username}. `
-      + 'Your units and their workbooks are yours alone; nobody else can open '
+      + 'Your units are yours alone; nobody else can open '
       + 'them. A team member sees their own figures only once you give them '
       + 'access from the Team tab.'),
     state.site ? el('p', { class: 'muted' },
@@ -1500,7 +1503,7 @@ function renderTimesheets() {
         el('span', { class: 'label eng-name' },
           el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
           name),
-        el('span', { class: 'muted small' }, e.sheet)),
+        null),
       el('div', { class: 'value' }, fmt.int(e.all_time_rows),
         el('span', { class: 'value-unit' }, ' rows')),
       el('div', { class: 'sub' },
@@ -1745,7 +1748,7 @@ async function applyImport(mode) {
   if (!window.confirm(
     `${verb} ${staged.people.map((p) => p.name).join(', ')} `
     + `(${staged.rows.toLocaleString()} rows)?`
-    + '\n\nA timestamped backup of the workbook is taken first.')) return;
+    + (mode === 'replace' ? '\n\nA dated copy of the unit is kept first.' : ''))) return;
   try {
     const result = await api('/api/timesheets/exports/apply', {
       method: 'POST', body: { token: staged.token, mode },
@@ -1918,7 +1921,7 @@ function renderProjects() {
       : rows.map((project, position) => {
         const m = byNumber.get(project.number) || {};
         return el('tr', { class: 'clickable', onclick: () => openProject(project.number) },
-          el('td', { class: 'num muted', title: `Inputs row ${project.row}` }, position + 1),
+          el('td', { class: 'num muted' }, position + 1),
           el('td', { class: 'code' }, project.number),
           el('td', { class: 'wide' }, project.name,
             fromTimesheets(project)
@@ -2080,7 +2083,7 @@ function renderDetail() {
         el('h2', {}, isNew ? 'Add a project' : (draft.project.name || draft.project.number)),
         el('p', { class: 'muted' }, isNew
           ? 'Enter the project, then the deliverables that make up its scope.'
-          : `Inputs row ${project.row} · ${draft.project.number}`)),
+          : draft.project.number)),
       isNew ? null : el('button', {
         class: 'btn btn-danger', type: 'button', onclick: () => removeProject(project),
       }, 'Delete project')),
@@ -2109,7 +2112,7 @@ function renderDetail() {
           hint: 'used only until the project has deliverables' }),
         field('Cost at completion override (MM)', 'cac_override', {
           type: 'number', step: '0.01', number: true,
-          hint: 'leave blank to let the workbook derive it' }),
+          hint: 'leave blank to let the app work it out' }),
         el('label', { class: 'field full' },
           el('span', {}, 'Notes'),
           el('textarea', {
@@ -2352,8 +2355,6 @@ function renderReference() {
     };
   }
   const draft = state.referenceDraft;
-  const room = state.reference.capacity || {};
-  const stepRoom = room.credit_steps || 34;
 
   const cell = (obj, key, opts = {}) => unlocked
     ? el('input', {
@@ -2399,12 +2400,9 @@ function renderReference() {
         unlocked
           ? el('div', { class: 'row', style: 'margin:0;align-items:center' },
               el('span', { class: 'muted' },
-                `${draft.credit_steps.length} of ${stepRoom} rows used`),
+                `${draft.credit_steps.length} steps`),
               el('button', {
                 class: 'btn btn-sm', type: 'button',
-                disabled: draft.credit_steps.length >= stepRoom,
-                title: draft.credit_steps.length >= stepRoom
-                  ? 'The sheet has no room for another step. Remove one first.' : '',
                 onclick: () => {
                   draft.credit_steps.push({
                     type_code: draft.project_types[0]?.code || '', step_no: null,
@@ -2541,8 +2539,9 @@ async function refreshAll() {
   $('#workbook-path').textContent =
     `${(state.me || {}).display_name || ''}${state.me ? ' · ' : ''}`
     + `${status.projects} project(s) · ${status.deliverables} deliverable(s)`;
-  $('#workbook-path').title = 'Switch unit to open another workbook';
-  markSaved({ saved: !status.unsaved_changes, pending: status.unsaved_changes });
+  $('#workbook-path').title = 'Switch unit to open another one';
+  // Every change is written as it is made.
+  markSaved({ saved: true });
 
   renderTimesheets();
   renderProjects();
@@ -2643,19 +2642,6 @@ function wire() {
     if (e.key === 'Enter') newUnit();
   });
 
-  $('#btn-save').addEventListener('click', async () => {
-    const result = await api('/api/save', { method: 'POST' });
-    markSaved(result.saved ? result : { saved: true });
-    toast(result.saved ? `Saved. Backup: ${result.backup}` : 'Nothing to save.', 'ok');
-  });
-  $('#btn-reload').addEventListener('click', async () => {
-    if (state.status && state.status.unsaved_changes
-      && !window.confirm('Discard unsaved changes and re-read the file from disk?')) return;
-    await api('/api/reload', { method: 'POST' });
-    state.referenceDraft = null;
-    await refreshAll();
-    toast('Workbook re-read from disk.', 'ok');
-  });
   $('#btn-change').addEventListener('click', async () => {
     await api('/api/units/close', { method: 'POST' });
     state.referenceDraft = null;
@@ -2853,8 +2839,7 @@ function renderDashboard(data) {
       el('h3', {}, 'Portfolio by status'),
       el('p', { class: 'muted' },
         'Only projects live in this period, which is why these total less than '
-        + 'the headline figures above — those cover every project in the register, '
-        + 'as the workbook reports them.'),
+        + 'the headline figures above — those cover every project in the register.'),
       table(['Status', 'Projects', 'Budget MM', 'Planned MM', 'Actual MM',
              'Earned MM', 'Remaining MM', 'In scope?'],
         statuses.map((s) => ({
@@ -3189,9 +3174,7 @@ function renderReview(data) {
     el('section', { class: 'panel' },
       el('h3', {}, 'Delivery mix'),
       el('p', { class: 'muted' },
-        `Where the delivered hours came from over ${data.period.label.toLowerCase()}. `
-        + 'Support figures are the plan totals from the Support Plan sheet, which '
-        + 'the workbook does not date, so they are not cut to the period.'),
+        `Where the delivered hours came from over ${data.period.label.toLowerCase()}.`),
       table(['Source', 'Hours', 'Man-months', 'Share'],
         mix.map((row) => ({
           cells: [row.source, fmt.hours(row.hours), num(row.man_months),
@@ -3227,18 +3210,11 @@ function renderTeam() {
   const data = state.team;
   if (!data) return;
   const years = data.years || [];
-  const room = data.max_engineers - data.engineers.length;
-
-  $('#btn-add-engineer').disabled = room <= 0;
-  $('#btn-add-engineer').title = room > 0 ? ''
-    : `A unit can hold ${data.max_engineers} engineers.`;
-
   setChildren($('#team-body'), 
     el('div', { class: 'msg msg-info' },
-      'Adding someone gives them a timesheet sheet of their own, a place in the '
-      + 'stack that builds Timesheet Raw, a column for their share of every '
-      + 'deliverable, and a row in the availability table. '
-      + `Room for ${room} more.`),
+      'Adding someone gives them a KPI line, a share of any deliverable and a '
+      + 'row in the availability table. Anybody new on a timesheet export is '
+      + 'added for you.'),
 
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {},
@@ -3278,8 +3254,7 @@ function engineerRow(person, position, years) {
     ...years.map((year) => el('td', { class: 'num' },
       fmt.pct0((person.availability || {})[year]))),
     el('td', { class: 'num' },
-      el('span', {}, fmt.int(timesheetRows(person))),
-      el('span', { class: 'slot-note' }, ` · ${person.sheet || 'no sheet'}`)),
+      el('span', {}, fmt.int(timesheetRows(person)))),
     el('td', { class: 'spark-cell' }, engineerSpark(person.short_name)),
     el('td', {}, accessCell(person)),
     el('td', {}, actions));
@@ -3445,7 +3420,7 @@ function openEngineerModal(person) {
       markSaved(result.save);
       toast(editing
         ? `${result.engineer} updated.`
-        : `${result.engineer} added, with ${result.sheet}.`, 'ok');
+        : `${result.engineer} added.`, 'ok');
       state.reportMember = null;
       await refreshAll();
       await loadTeam();
@@ -3455,9 +3430,9 @@ function openEngineerModal(person) {
 async function removeEngineer(person) {
   if (!window.confirm(
     `Remove ${person.short_name} from this unit?\n\n`
-    + `Their ${person.sheet} sheet goes with them, along with their column of `
-    + `every deliverable's split (${fmt.int(person.rows)} timesheet rows).\n\n`
-    + 'A backup of the workbook is taken first.')) return;
+    + 'They come out of every deliverable\'s split. Their '
+    + `${fmt.int(person.rows)} timesheet rows stay, and still count toward `
+    + 'the projects they were booked to.\n\nA dated copy of the unit is kept first.')) return;
   try {
     const result = await api(`/api/team/${encodeURIComponent(person.short_name)}`,
       { method: 'DELETE' });

@@ -1,29 +1,25 @@
 """Task management: what has to be done, by whom, and whether it fits.
 
-This is deliberately the one part of the app that does **not** feed the
-workbook's model.  Nothing here touches a project's actual MM, its progress or
-anyone's CPI -- the timesheet remains the only source of what was spent.  Tasks
-are the plan beside it: the work in front of the team, split between the people
-who share it, measured against the hours a working day actually holds.
+Nothing here touches a project's actual MM, its progress or anyone's CPI --
+the timesheet remains the only source of what was spent.  Tasks are the plan
+beside it: the work in front of the team, split between the people who share
+it, measured against the hours a working day actually holds.
 
-The list lives on a sheet of the app's own making, so it travels with the
-workbook and survives being mailed to someone else, without any formula in the
-file so much as seeing it.
+The list is kept in the unit's own database (see ``unit.py``).
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from . import config as cfg, progress
-from .xlsx_io import Workbook, from_serial, to_serial
+from .xlsx_io import from_serial
 
 
 class TaskError(Exception):
-    """A task the sheet will not accept, with every reason at once."""
+    """A task the list will not accept, with every reason at once."""
 
     def __init__(self, errors: Sequence[str]):
         super().__init__("; ".join(errors))
@@ -143,61 +139,31 @@ def _parse_hours(value: Any, label: str) -> Optional[float]:
 
 
 # --------------------------------------------------------------------------
-# the sheet
+# where the list is kept
 # --------------------------------------------------------------------------
+#
+# Every function below that reads or changes the list is handed the place it
+# is kept -- the unit -- and asks it for four things: the tasks, a way to write
+# them all back, the stored settings, and a way to store those.  Nothing here
+# knows that place is a database.
 
-def has_sheet(wb: Workbook) -> bool:
-    return cfg.SHEET_TASKS in wb.sheet_names
-
-
-def ensure_sheet(wb: Workbook) -> bool:
-    """Create the task sheet if this workbook has never had one.
-
-    Returns whether it was created, so the caller knows the file changed.
-    """
-    if has_sheet(wb):
-        return False
-    wb.add_sheet(cfg.SHEET_TASKS)
-    sheet = wb.sheet(cfg.SHEET_TASKS)
-    sheet.set_value(
-        cfg.TASKS_TITLE_CELL,
-        "TASKS - written by the Workload app. No formula in this workbook reads "
-        "this sheet; it is the plan, not the record.",
-    )
-    for name, column in cfg.TASK_COLUMNS.items():
-        header = cfg.TASK_HEADERS[list(cfg.TASK_COLUMNS).index(name)]
-        sheet.set_value(f"{column}{cfg.TASKS_HEADER_ROW}", header)
-    sheet.set_value(cfg.TASKS_SETTINGS_LABEL_CELL, "Settings (edited in the app)")
-    _write_settings(wb, dict(cfg.TASK_DEFAULT_SETTINGS))
-    return True
-
-
-def settings(wb: Workbook) -> Dict[str, Any]:
+def settings(source: Any) -> Dict[str, Any]:
     """The working day, and the defaults the generators use."""
     out = dict(cfg.TASK_DEFAULT_SETTINGS)
-    if not has_sheet(wb):
-        return out
-    raw = wb.sheet(cfg.SHEET_TASKS).get_value(cfg.TASKS_SETTINGS_CELL)
-    if isinstance(raw, str) and raw.strip().startswith("{"):
-        try:
-            stored = json.loads(raw)
-        except ValueError:
-            stored = {}
-        if isinstance(stored, dict):
-            out.update({k: v for k, v in stored.items() if k in out})
+    stored = source.read_task_settings() if source is not None else None
+    if isinstance(stored, dict):
+        out.update({k: v for k, v in stored.items() if k in out})
     out["work_days"] = sorted({int(d) for d in out["work_days"] if 0 <= int(d) <= 6})
     return out
 
 
-def _write_settings(wb: Workbook, values: Dict[str, Any]) -> None:
-    wb.sheet(cfg.SHEET_TASKS).set_value(
-        cfg.TASKS_SETTINGS_CELL, json.dumps(values, separators=(",", ":")))
+def _write_settings(source: Any, values: Dict[str, Any]) -> None:
+    source.write_task_settings(dict(values))
 
 
-def save_settings(wb: Workbook, data: Dict[str, Any]) -> Dict[str, Any]:
+def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and store the working day. Everything else keeps its value."""
-    ensure_sheet(wb)
-    current = settings(wb)
+    current = settings(source)
     errors: List[str] = []
     updated = dict(current)
 
@@ -256,7 +222,7 @@ def save_settings(wb: Workbook, data: Dict[str, Any]) -> Dict[str, Any]:
 
     if errors:
         raise TaskError(errors)
-    _write_settings(wb, updated)
+    _write_settings(source, updated)
     return updated
 
 
@@ -270,140 +236,14 @@ def _minutes(text: str) -> int:
     return when.hour * 60 + when.minute
 
 
-def read(wb: Workbook) -> List[Task]:
-    """Every task on the sheet, in the order it is stored."""
-    if not has_sheet(wb):
-        return []
-    cols = cfg.TASK_COLUMNS
-    sheet = wb.sheet(cfg.SHEET_TASKS)
-    out: List[Task] = []
-    for row in range(cfg.TASKS_FIRST_ROW, cfg.TASKS_LAST_ROW + 1):
-        identifier = sheet.get_value(f"{cols['id']}{row}")
-        if identifier in (None, ""):
-            continue
-        assignees = str(sheet.get_value(f"{cols['assignees']}{row}") or "")
-        deliverable_row = sheet.get_value(f"{cols['deliverable_row']}{row}")
-        out.append(Task(
-            id=int(identifier),
-            name=_text(sheet, f"{cols['name']}{row}"),
-            definition=_text(sheet, f"{cols['definition']}{row}"),
-            project_number=_text(sheet, f"{cols['project_number']}{row}"),
-            deliverable_row=int(deliverable_row) if deliverable_row not in (None, "")
-            else None,
-            deliverable_name=_text(sheet, f"{cols['deliverable_name']}{row}"),
-            assignees=[a.strip() for a in assignees.split(",") if a.strip()],
-            required_hours=_number(sheet, f"{cols['required_hours']}{row}"),
-            actual_hours=_number(sheet, f"{cols['actual_hours']}{row}"),
-            start=_date(sheet, f"{cols['start']}{row}"),
-            due=_date(sheet, f"{cols['due']}{row}"),
-            status=_text(sheet, f"{cols['status']}{row}") or cfg.TASK_STATUSES[0],
-            kind=_text(sheet, f"{cols['kind']}{row}") or cfg.TASK_KINDS[0],
-            series=_text(sheet, f"{cols['series']}{row}"),
-            notes=_text(sheet, f"{cols['notes']}{row}"),
-            progress_mode=(_text(sheet, f"{cols['progress_mode']}{row}")
-                           or progress.MODE_PRO_RATA),
-            stage=(_text(sheet, f"{cols['stage']}{row}")
-                   or progress.STAGE_KEYS[0]),
-            review_code=_text(sheet, f"{cols['review_code']}{row}").upper(),
-            revisions=int(_number(sheet, f"{cols['revisions']}{row}") or 0),
-            pro_rata=_number(sheet, f"{cols['pro_rata']}{row}"),
-        ))
-    return out
+def read(source: Any) -> List[Task]:
+    """Every task, in the order it is kept."""
+    return list(source.read_tasks()) if source is not None else []
 
 
-def _text(sheet, ref: str) -> str:
-    value = sheet.get_value(ref)
-    if value is None:
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
-
-
-def _number(sheet, ref: str) -> Optional[float]:
-    value = sheet.get_value(ref)
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _date(sheet, ref: str) -> Optional[_dt.date]:
-    value = sheet.get_value(ref)
-    if isinstance(value, (int, float)) and value > 0:
-        return from_serial(float(value))
-    if isinstance(value, str) and value:
-        try:
-            return _dt.date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None
-
-
-def write_all(wb: Workbook, tasks: Sequence[Task]) -> None:
-    """Rewrite the whole block.
-
-    The sheet holds no formulas and nothing reads it, so rewriting is both safe
-    and simpler than patching rows in place -- there is no way to leave a half
-    deleted row behind.
-    """
-    ensure_sheet(wb)
-    if len(tasks) > cfg.TASKS_LAST_ROW - cfg.TASKS_FIRST_ROW + 1:
-        raise TaskError([
-            f"The task sheet holds {cfg.TASKS_LAST_ROW - cfg.TASKS_FIRST_ROW + 1:,} "
-            f"tasks. Close some off before adding more."
-        ])
-    sheet = wb.sheet(cfg.SHEET_TASKS)
-    cols = cfg.TASK_COLUMNS
-    # Dates are serial numbers underneath; borrowing the register's own date
-    # format means the sheet reads as dates in Excel rather than as 46,276.
-    date_style = _date_style(wb)
-    row = cfg.TASKS_FIRST_ROW
-    for task in tasks:
-        values = {
-            "id": task.id,
-            "name": task.name,
-            "definition": task.definition,
-            "project_number": task.project_number,
-            "deliverable_row": task.deliverable_row,
-            "deliverable_name": task.deliverable_name,
-            "assignees": ", ".join(task.assignees),
-            "required_hours": task.required_hours,
-            "actual_hours": task.actual_hours,
-            "start": to_serial(task.start) if task.start else None,
-            "due": to_serial(task.due) if task.due else None,
-            "status": task.status,
-            "kind": task.kind,
-            "series": task.series,
-            "notes": task.notes,
-            "progress_mode": task.progress_mode,
-            "stage": task.stage,
-            "review_code": task.review_code,
-            "revisions": task.revisions or None,
-            "pro_rata": task.pro_rata,
-        }
-        for name, column in cols.items():
-            style = date_style if name in ("start", "due") else None
-            sheet.set_value(f"{column}{row}", values[name], style=style)
-        row += 1
-
-    # Anything the list used to be longer than is cleared, not left dangling.
-    while sheet.get_value(f"{cols['id']}{row}") not in (None, ""):
-        for column in cols.values():
-            sheet.set_value(f"{column}{row}", None)
-        row += 1
-
-
-def _date_style(wb: Workbook) -> Optional[str]:
-    """The style the deliverable register uses for a date, if it can be read."""
-    try:
-        column = cfg.DELIVERABLE_INPUT_COLUMNS["status_date"]
-        return wb.sheet(cfg.SHEET_DELIVERABLES).cell_style(
-            f"{column}{cfg.DELIVERABLE_FIRST_ROW}")
-    except Exception:                      # a workbook without the register
-        return None
+def write_all(source: Any, tasks: Sequence[Task]) -> None:
+    """Write the whole list back: there is no half-changed list to leave."""
+    source.write_tasks(list(tasks))
 
 
 # --------------------------------------------------------------------------
@@ -539,7 +379,7 @@ def next_id(tasks: Iterable[Task]) -> int:
     return max((t.id for t in tasks), default=0) + 1
 
 
-def save(wb: Workbook, data: Dict[str, Any], *, engineers: Sequence[str],
+def save(wb: Any, data: Dict[str, Any], *, engineers: Sequence[str],
          projects: Sequence[str], task_id: Optional[int] = None) -> Task:
     """Add a task, or replace the one with this id."""
     existing = read(wb)
@@ -558,7 +398,7 @@ def save(wb: Workbook, data: Dict[str, Any], *, engineers: Sequence[str],
     return task
 
 
-def delete(wb: Workbook, task_id: int) -> Dict[str, Any]:
+def delete(wb: Any, task_id: int) -> Dict[str, Any]:
     tasks = read(wb)
     kept = [t for t in tasks if t.id != task_id]
     if len(kept) == len(tasks):
@@ -567,7 +407,7 @@ def delete(wb: Workbook, task_id: int) -> Dict[str, Any]:
     return {"deleted": task_id, "remaining": len(kept)}
 
 
-def delete_series(wb: Workbook, series: str) -> Dict[str, Any]:
+def delete_series(wb: Any, series: str) -> Dict[str, Any]:
     """Drop a whole generated run -- a meeting series, or one deliverable's."""
     tasks = read(wb)
     kept = [t for t in tasks if t.series != series]
@@ -613,7 +453,7 @@ def submission_series(deliverable_row: int) -> str:
     return f"submission:{deliverable_row}"
 
 
-def generate_submissions(wb: Workbook, deliverables: Sequence[Dict[str, Any]], *,
+def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
                          engineers: Sequence[str],
                          config: Optional[Dict[str, Any]] = None,
                          only_row: Optional[int] = None,
@@ -628,7 +468,6 @@ def generate_submissions(wb: Workbook, deliverables: Sequence[Dict[str, Any]], *
     plainly what was asked for.  Running this again only fills the gaps: a day
     that already has its task, however it was since edited, is untouched.
     """
-    ensure_sheet(wb)
     config = config or settings(wb)
     today = today or _dt.date.today()
     existing = read(wb)
@@ -697,7 +536,7 @@ def meeting_series(project_number: str, weekday: int) -> str:
     return f"meeting:{project_number or 'unit'}:{weekday}"
 
 
-def generate_meetings(wb: Workbook, *, engineers: Sequence[str],
+def generate_meetings(wb: Any, *, engineers: Sequence[str],
                       project_number: str = "", project_name: str = "",
                       start: Optional[_dt.date] = None,
                       weeks: Optional[int] = None,
@@ -709,7 +548,6 @@ def generate_meetings(wb: Workbook, *, engineers: Sequence[str],
     The point of the button is that nobody types the same meeting fifty times.
     Re-running it extends the series rather than doubling it.
     """
-    ensure_sheet(wb)
     config = config or settings(wb)
     weekday = config["meeting_weekday"] if weekday is None else int(weekday)
     weeks = int(config["meeting_weeks"] if weeks is None else weeks)

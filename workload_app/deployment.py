@@ -103,19 +103,18 @@ def _check_dependencies(report: Report) -> None:
                    "virtualenv for THIS web app activated)")
         return
     report.add("ok", f"openpyxl {openpyxl.__version__}",
-               "the only dependency; everything else is the standard library")
+               "the only dependency, for reading timesheet exports and "
+               "writing downloads; everything else is the standard library")
 
 
 def _check_code(report: Report, root: Path) -> None:
-    template = storage.template_path()
-    if template.is_file():
-        size = template.stat().st_size / 1_048_576
-        report.add("ok", f"Blank template present ({size:.1f} MB)",
-                   str(template))
+    defaults = root / "workload_app" / "data" / "defaults.json"
+    if defaults.is_file():
+        report.add("ok", "Built-in reference tables present", str(defaults))
     else:
-        report.add("warn", "No blank template in this checkout",
-                   "'Start blank' will not work; accounts can still upload a "
-                   "workbook. Build one with tools/build_template.py.")
+        report.add("bad", "The built-in reference tables are missing",
+                   f"{defaults} is not there, so no new unit can be set up. "
+                   f"Pull the code again.")
 
     missing = [name for name in ("index.html", "login.html", "member.html",
                                  "app.js", "member.js", "app.css", "charts.js",
@@ -135,11 +134,11 @@ def _check_data_dir(report: Report, root: Path, data_dir: Path) -> None:
 
     if configured and inside_code:
         # Somebody pointed it at the code on purpose. This is the mistake that
-        # loses everyone's workbooks.
+        # loses everyone's units.
         report.add("bad", f"Data directory: {data_dir}",
                    f"WORKLOAD_DATA_DIR puts the data inside {root}. A deploy "
                    f"replaces the code, so it would take the accounts and "
-                   f"every workbook with it. Point it outside the checkout, "
+                   f"every unit with it. Point it outside the checkout, "
                    f"e.g. {suggested_data_dir()}.")
     elif configured:
         report.add("ok", f"Data directory: {data_dir}",
@@ -174,11 +173,15 @@ def _check_data_dir(report: Report, root: Path, data_dir: Path) -> None:
 
     users = data_dir / "users"
     if users.is_dir():
-        workbooks = list(users.rglob("*.xlsx"))
+        units = [p for p in users.glob(f"*/*{storage.UNIT_SUFFIX}")
+                 if not p.name.endswith(".timesheets.db")]
+        waiting = list(users.glob("*/*.xlsx"))
         size = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
         report.add("ok",
-                   f"{len(workbooks)} workbook(s), {size / 1_048_576:.1f} MB in all",
-                   "including the timestamped backup before every save")
+                   f"{len(units)} unit(s), {size / 1_048_576:.1f} MB in all",
+                   "including the dated copies kept of each unit"
+                   + (f"; {len(waiting)} still on an old workbook, moved to "
+                      f"their own database when next opened" if waiting else ""))
 
 
 def _check_accounts(report: Report, data_dir: Path) -> None:
@@ -231,7 +234,7 @@ path = {str(root)!r}
 if path not in sys.path:
     sys.path.insert(0, path)
 
-# Accounts and workbooks, outside the code so a deploy cannot touch them, and
+# Accounts and units, outside the code so a deploy cannot touch them, and
 # not shared with any other web app on this account.
 os.environ['WORKLOAD_DATA_DIR'] = {str(resolved)!r}
 

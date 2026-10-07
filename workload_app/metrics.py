@@ -1,10 +1,7 @@
 """Workload and efficiency figures, computed from the raw inputs.
 
-The workbook caches the result of every formula, but those cached values go
-stale the moment the app writes a change and stay stale until Excel next opens
-the file.  Reading them back would show the user yesterday's answer, so this
-module recomputes the headline numbers from the timesheet rows and the two
-registers instead, following the same definitions the workbook uses:
+Every figure is worked out from the timesheet rows and the two registers, on
+the definitions the unit's old workbook used, so the numbers carry on from it:
 
 * actual MM   -- timesheet hours for the job number, divided by hours per MM
 * progress    -- sum of (phase weight x rules-of-credit credit) over total weight
@@ -21,8 +18,8 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
-from .workbook import Deliverable, WorkloadWorkbook, as_text
-from .xlsx_io import from_serial
+from .model import Deliverable
+from .unit import Unit
 
 #: Job Type values the Phasing sheet uses to pick up proposal effort.
 PROPOSAL_JOB_TYPES = {
@@ -36,49 +33,16 @@ def _round(value: Optional[float], places: int = 2) -> Optional[float]:
 
 
 class TimesheetIndex:
-    """Every timesheet row for a unit, indexed for lookups.
+    """Every timesheet row for a unit, indexed for lookups."""
 
-    They come from the unit's own store, or -- for a unit that has not been
-    moved yet -- from the TS sheets, which is where they used to live.
-    """
-
-    def __init__(self, wb: WorkloadWorkbook, store: Any = None):
-        """Rows from the unit's store if it has one, else from the sheets.
-
-        The store is where they live once a unit has been moved off the
-        workbook's own consolidated sheet; everything below this constructor
-        works off ``self.rows`` and cannot tell the difference.
-        """
-        self.rows: List[Dict[str, Any]] = (
-            store.all_rows() if store is not None and not store.is_empty()
-            else self.from_workbook(wb))
+    def __init__(self, wb: Unit, store: Any = None):
+        """Rows from the unit's store -- ``store`` if given, else its own."""
+        store = store if store is not None else getattr(wb, "store", None)
+        self.rows: List[Dict[str, Any]] = store.all_rows() if store is not None else []
 
         self.by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for row in self.rows:
             self.by_job[row["job_number"]].append(row)
-
-    @staticmethod
-    def from_workbook(wb: WorkloadWorkbook) -> List[Dict[str, Any]]:
-        """The rows as the TS sheets hold them."""
-        rows: List[Dict[str, Any]] = []
-        for engineer in wb.ts_sheets():
-            for raw in wb.timesheet_rows(engineer, ["A", "B", "C", "J", "K", "L", "M", "P"]):
-                date = raw.get("L")
-                hours = raw.get("P")
-                phase = raw.get("M")
-                rows.append({
-                    "engineer": engineer,
-                    "job_type": as_text(raw.get("A")),
-                    "job_number": as_text(raw.get("B")).strip(),
-                    "job_name": "",
-                    "full_name": as_text(raw.get("C")),
-                    "regular_hours": float(raw.get("J") or 0.0),
-                    "overtime_hours": float(raw.get("K") or 0.0),
-                    "date": from_serial(float(date)) if isinstance(date, (int, float)) and date > 0 else None,
-                    "phase": int(phase) if isinstance(phase, (int, float)) else None,
-                    "hours": float(hours) if isinstance(hours, (int, float)) else 0.0,
-                })
-        return rows
 
     def hours_for_job(self, job_number: str, *, phase: Optional[int] = None,
                       engineer: Optional[str] = None) -> float:
@@ -177,7 +141,7 @@ def engineer_shares(deliverables: List[Deliverable], credit_lookup,
     return {name: None for name in names}
 
 
-def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, Any]]:
+def project_rows(wb: Unit, index: TimesheetIndex) -> List[Dict[str, Any]]:
     """One row per project: effort spent, value earned and how efficient it was."""
     hours_per_mm = wb.hours_per_man_month()
     steps = {(s.type_code, s.step_no): s.credit for s in wb.credit_steps()}
@@ -257,7 +221,7 @@ def project_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, 
     return out
 
 
-def deliverable_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[str, Any]]:
+def deliverable_rows(wb: Unit, index: TimesheetIndex) -> List[Dict[str, Any]]:
     """One row per deliverable, with its credit and the hours actually booked."""
     hours_per_mm = wb.hours_per_man_month()
     steps = {(s.type_code, s.step_no): s for s in wb.credit_steps()}
@@ -315,7 +279,7 @@ def deliverable_rows(wb: WorkloadWorkbook, index: TimesheetIndex) -> List[Dict[s
 # people
 # --------------------------------------------------------------------------
 
-def engineer_workload(wb: WorkloadWorkbook, index: TimesheetIndex,
+def engineer_workload(wb: Unit, index: TimesheetIndex,
                       year: Optional[int] = None) -> Dict[str, Any]:
     """Monthly hours and utilisation per engineer."""
     engineers = {e.short_name: e for e in wb.engineers()}
@@ -396,7 +360,7 @@ def engineer_workload(wb: WorkloadWorkbook, index: TimesheetIndex,
 # portfolio
 # --------------------------------------------------------------------------
 
-def overview(wb: WorkloadWorkbook, year: Optional[int] = None,
+def overview(wb: Unit, year: Optional[int] = None,
              store: Any = None) -> Dict[str, Any]:
     """Everything the app's front page shows."""
     index = TimesheetIndex(wb, store)
@@ -436,7 +400,7 @@ def overview(wb: WorkloadWorkbook, year: Optional[int] = None,
     }
 
 
-def available_years(wb: WorkloadWorkbook, index: Optional[TimesheetIndex] = None
+def available_years(wb: Unit, index: Optional[TimesheetIndex] = None
                     ) -> List[int]:
     index = index or TimesheetIndex(wb)
     return sorted({row["date"].year for row in index.rows if row["date"]})

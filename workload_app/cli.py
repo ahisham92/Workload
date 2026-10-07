@@ -20,25 +20,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="workload_app",
         description=(
-            "Enter timesheets, projects, deliverables and tasks into the "
-            "Workload & Profit Plan workbook without touching the spreadsheet "
-            "by hand."
+            "Selecao+: plan a team's workload from its timesheets -- who is "
+            "on what, what is due, and what it earns."
         ),
     )
     parser.add_argument(
         "-d", "--data-dir", type=Path, default=None,
-        help="where accounts and workbooks live "
+        help="where accounts and units live "
              "(default: $WORKLOAD_DATA_DIR, else ./instance)",
     )
     parser.add_argument("--host", default="127.0.0.1",
                         help="interface to listen on (default: 127.0.0.1)")
     parser.add_argument("-p", "--port", type=int, default=8765,
                         help="port to listen on (default: 8765)")
-    parser.add_argument(
-        "--no-autosave", action="store_true",
-        help="keep changes in memory until Save is pressed, instead of writing "
-             "the workbook after every change",
-    )
+    # Every change is written as it is made; the flag is still accepted so an
+    # old shortcut that passes it keeps working.
+    parser.add_argument("--no-autosave", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--no-browser", action="store_true",
                         help="do not open a browser window on start")
     parser.add_argument("-q", "--quiet", action="store_true",
@@ -62,7 +60,6 @@ def main(argv=None) -> int:
     url = f"http://{args.host}:{args.port}/"
     print(f"Workload {__version__}")
     print(f"  data     : {app.data_dir}")
-    print(f"  autosave : {'on' if not args.no_autosave else 'off'}")
     print(f"  open     : {url}")
     if app.accounts.user_count() == 0:
         print()

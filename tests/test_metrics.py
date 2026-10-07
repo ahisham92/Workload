@@ -74,7 +74,7 @@ class TestAgainstTheWorkbooksOwnFigures:
 class TestProgress:
     def test_progress_is_credit_weighted_by_phase_weight(self, readonly_wb):
         lookup = readonly_wb.credit_for
-        from workload_app.workbook import Deliverable
+        from workload_app.model import Deliverable
         items = [
             Deliverable(row=1, type_code="DD", step_no=5, phase_weight=0.25),  # 100%
             Deliverable(row=2, type_code="DD", step_no=1, phase_weight=0.75),  # 10%
@@ -90,7 +90,7 @@ class TestProgress:
         assert total == 0.0
 
     def test_shares_fall_back_to_scope_weight_before_anything_is_earned(self, readonly_wb):
-        from workload_app.workbook import Deliverable
+        from workload_app.model import Deliverable
         items = [
             Deliverable(row=1, type_code="DD", step_no=None, phase_weight=0.75,
                         shares={"Ahmed": 1.0}),
