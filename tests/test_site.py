@@ -6,7 +6,7 @@ which keeps one account's work from another survives the move -- a colleague
 who opens the tab sees nothing of yours until you give it to them -- and that
 somebody who used Workload at its own address can bring their units with them.
 
-They run on the blank template, so they need no workbook of anybody's.
+They start from new, empty units, so they need no workbook of anybody's.
 """
 
 import io
@@ -189,7 +189,7 @@ class TestYoursAlone:
         folders = sorted(p.name for p in (tmp_path / "instance" / "users").iterdir())
         assert len(folders) == 2
         for folder in folders:
-            assert len(list((tmp_path / "instance" / "users" / folder).glob("*.xlsx"))) == 1
+            assert len(list((tmp_path / "instance" / "users" / folder).glob("*.db"))) == 1
 
 
 class TestGivingAccess:

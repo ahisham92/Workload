@@ -37,10 +37,10 @@ class TestWhatItLooksAt:
         assert report.ok
         assert "Ready to serve." in deployment.render(report)
 
-    def test_it_finds_the_code_and_the_template(self, outside):
+    def test_it_finds_the_code_and_the_reference_tables(self, outside):
         report = deployment.check()
         assert (report.root / "workload_app" / "app.py").is_file()
-        assert levels(report, "template") == ["ok"]
+        assert levels(report, "reference tables") == ["ok"]
         assert levels(report, "Front end complete") == ["ok"]
 
     def test_it_reports_python_and_openpyxl(self, outside):
@@ -91,14 +91,14 @@ class TestWhatItLooksAt:
 
 
 class TestTheDataDirectory:
-    def test_data_inside_the_code_is_the_mistake_that_loses_workbooks(
+    def test_data_inside_the_code_is_the_mistake_that_loses_units(
             self, monkeypatch):
         root = Path(deployment.__file__).resolve().parent.parent
         monkeypatch.setenv("WORKLOAD_DATA_DIR", str(root / "instance"))
         report = deployment.check()
         assert not report.ok
         rendered = deployment.render(report)
-        assert "A deploy" in rendered and "every workbook" in rendered
+        assert "A deploy" in rendered and "every unit" in rendered
 
     def test_the_shipped_default_is_a_warning_not_a_failure(self, monkeypatch):
         # Running from a checkout on your own machine: ./instance is fine.

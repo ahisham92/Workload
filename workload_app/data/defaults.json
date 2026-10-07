@@ -1,0 +1,462 @@
+{
+  "_about": "The reference data every new unit starts with: project types, rules of credit, the scorecard, the glossary and the non-project charge codes. A unit's own copy can be edited on Reference.",
+  "hours_per_man_month": 185.0,
+  "hours_per_day": 8.5,
+  "project_types": [
+    {
+      "code": "DD",
+      "name": "Detailed Design",
+      "basis": "Man-hour weighted deliverables",
+      "trigger": "Deliverable issue status in EDMS",
+      "portfolio_weight": 1.0,
+      "include_in_cpi": "Yes",
+      "notes": "Baseline type. Full production of drawings, models and calculations."
+    },
+    {
+      "code": "CD",
+      "name": "Concept / Preliminary Design",
+      "basis": "Stage gates",
+      "trigger": "Gate acceptance recorded in EDMS",
+      "portfolio_weight": 1.1,
+      "include_in_cpi": "Yes",
+      "notes": "High engineering content, low document count. Weighted above DD for option-development effort."
+    },
+    {
+      "code": "FS",
+      "name": "Feasibility / Master Planning",
+      "basis": "Stage gates",
+      "trigger": "Report issue and comment closeout",
+      "portfolio_weight": 1.0,
+      "include_in_cpi": "Yes",
+      "notes": "Study work ending in a report rather than a drawing set."
+    },
+    {
+      "code": "SA",
+      "name": "Specialist Analysis & Modelling",
+      "basis": "Weighted milestones",
+      "trigger": "Model, run and report milestones",
+      "portfolio_weight": 1.2,
+      "include_in_cpi": "Yes",
+      "notes": "Numerical analysis and modelling delivered in its own right: structural and seismic, hydraulic and flood, traffic, energy and daylight, geotechnical, mooring and wave. Highest weight - specialist, non-substitutable skill."
+    },
+    {
+      "code": "DR",
+      "name": "Design Review / Third-Party Check",
+      "basis": "Units complete",
+      "trigger": "Comment sheet transmittal",
+      "portfolio_weight": 0.75,
+      "include_in_cpi": "Yes",
+      "notes": "Checking another party's design. Real skill, but consumes rather than creates deliverables."
+    },
+    {
+      "code": "TD",
+      "name": "Tender Documentation",
+      "basis": "Man-hour weighted deliverables",
+      "trigger": "Tender issue and addenda closeout",
+      "portfolio_weight": 0.85,
+      "include_in_cpi": "Yes",
+      "notes": "BOQ, specifications and tender drawings assembled from completed design."
+    },
+    {
+      "code": "CS",
+      "name": "Construction Phase Support",
+      "basis": "Units complete (queries closed)",
+      "trigger": "RFI / site query response transmittal",
+      "portfolio_weight": 0.8,
+      "include_in_cpi": "Yes",
+      "notes": "Reactive scope. Measured on closed queries, not on time at desk."
+    },
+    {
+      "code": "PP",
+      "name": "Proposals & Bids",
+      "basis": "Level of effort",
+      "trigger": "Submission date",
+      "portfolio_weight": 0.7,
+      "include_in_cpi": "No",
+      "notes": "Necessary but unmeasurable against a budget. Excluded from CPI by design."
+    },
+    {
+      "code": "OH",
+      "name": "On Hold / Standby",
+      "basis": "Level of effort",
+      "trigger": "n/a - earns nothing",
+      "portfolio_weight": 0.5,
+      "include_in_cpi": "No",
+      "notes": "Dormant scope. Earns no value; time booked here should be minimal and visible."
+    }
+  ],
+  "credit_steps": [
+    {
+      "type_code": "DD",
+      "step_no": 1,
+      "step_name": "Design started",
+      "credit": 0.1,
+      "data_source": "Manual (capped)"
+    },
+    {
+      "type_code": "DD",
+      "step_no": 2,
+      "step_name": "Issued for internal check (IDC/IFR)",
+      "credit": 0.4,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "DD",
+      "step_no": 3,
+      "step_name": "Checked and back-checked",
+      "credit": 0.6,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "DD",
+      "step_no": 4,
+      "step_name": "Transmitted to client (IFA/IFC)",
+      "credit": 0.85,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "DD",
+      "step_no": 5,
+      "step_name": "Returned Code 1 / accepted",
+      "credit": 1.0,
+      "data_source": "Client return code"
+    },
+    {
+      "type_code": "CD",
+      "step_no": 1,
+      "step_name": "Design basis and criteria agreed",
+      "credit": 0.15,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "CD",
+      "step_no": 2,
+      "step_name": "Options developed",
+      "credit": 0.4,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "CD",
+      "step_no": 3,
+      "step_name": "Option selected and frozen",
+      "credit": 0.65,
+      "data_source": "Minuted decision"
+    },
+    {
+      "type_code": "CD",
+      "step_no": 4,
+      "step_name": "Concept report and drawings issued",
+      "credit": 0.9,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "CD",
+      "step_no": 5,
+      "step_name": "Client acceptance",
+      "credit": 1.0,
+      "data_source": "Client return code"
+    },
+    {
+      "type_code": "FS",
+      "step_no": 1,
+      "step_name": "Data collection complete",
+      "credit": 0.15,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "FS",
+      "step_no": 2,
+      "step_name": "Analysis complete",
+      "credit": 0.45,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "FS",
+      "step_no": 3,
+      "step_name": "Draft report issued",
+      "credit": 0.75,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "FS",
+      "step_no": 4,
+      "step_name": "Client comments closed",
+      "credit": 0.9,
+      "data_source": "Comment register"
+    },
+    {
+      "type_code": "FS",
+      "step_no": 5,
+      "step_name": "Final report issued",
+      "credit": 1.0,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "SA",
+      "step_no": 1,
+      "step_name": "Design basis and criteria agreed",
+      "credit": 0.15,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "SA",
+      "step_no": 2,
+      "step_name": "Model built and validated",
+      "credit": 0.4,
+      "data_source": "Model file / EDMS"
+    },
+    {
+      "type_code": "SA",
+      "step_no": 3,
+      "step_name": "Analysis runs complete",
+      "credit": 0.65,
+      "data_source": "Model file / EDMS"
+    },
+    {
+      "type_code": "SA",
+      "step_no": 4,
+      "step_name": "Report issued",
+      "credit": 0.9,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "SA",
+      "step_no": 5,
+      "step_name": "Comments closed",
+      "credit": 1.0,
+      "data_source": "Comment register"
+    },
+    {
+      "type_code": "DR",
+      "step_no": 1,
+      "step_name": "Documents received and logged",
+      "credit": 0.1,
+      "data_source": "EDMS receipt"
+    },
+    {
+      "type_code": "DR",
+      "step_no": 2,
+      "step_name": "Review complete internally",
+      "credit": 0.6,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "DR",
+      "step_no": 3,
+      "step_name": "Comment sheet transmitted",
+      "credit": 0.9,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "DR",
+      "step_no": 4,
+      "step_name": "Comment closeout confirmed",
+      "credit": 1.0,
+      "data_source": "Comment register"
+    },
+    {
+      "type_code": "TD",
+      "step_no": 1,
+      "step_name": "Draft prepared",
+      "credit": 0.3,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "TD",
+      "step_no": 2,
+      "step_name": "Internal check complete",
+      "credit": 0.55,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "TD",
+      "step_no": 3,
+      "step_name": "Issued for tender",
+      "credit": 0.85,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "TD",
+      "step_no": 4,
+      "step_name": "Tender queries and addenda closed",
+      "credit": 1.0,
+      "data_source": "Query register"
+    },
+    {
+      "type_code": "CS",
+      "step_no": 1,
+      "step_name": "Query received and logged",
+      "credit": 0.1,
+      "data_source": "Query register"
+    },
+    {
+      "type_code": "CS",
+      "step_no": 2,
+      "step_name": "Response prepared and checked",
+      "credit": 0.6,
+      "data_source": "EDMS status"
+    },
+    {
+      "type_code": "CS",
+      "step_no": 3,
+      "step_name": "Response transmitted",
+      "credit": 1.0,
+      "data_source": "Transmittal register"
+    },
+    {
+      "type_code": "PP",
+      "step_no": 1,
+      "step_name": "Proposal in preparation",
+      "credit": 0.5,
+      "data_source": "Manual (capped)"
+    },
+    {
+      "type_code": "PP",
+      "step_no": 2,
+      "step_name": "Proposal submitted",
+      "credit": 1.0,
+      "data_source": "Submission log"
+    },
+    {
+      "type_code": "OH",
+      "step_no": 1,
+      "step_name": "On hold - no earning",
+      "credit": 0.0,
+      "data_source": "n/a"
+    }
+  ],
+  "scorecard_factors": [
+    {
+      "key": "type_weighted_cpi",
+      "factor": "Efficiency (CPI, type-weighted)",
+      "weight": 0.3,
+      "direction": "higher",
+      "target": null,
+      "how": "Best performer scores 100; others in proportion. Earned MM is weighted by project type factor — scoring only."
+    },
+    {
+      "key": "utilisation",
+      "factor": "Utilisation vs capacity",
+      "weight": 0.2,
+      "direction": "target",
+      "target": 1.0,
+      "how": "100 when exactly on target; falls away as it deviates either side."
+    },
+    {
+      "key": "plan_adherence",
+      "factor": "Plan adherence",
+      "weight": 0.15,
+      "direction": "target",
+      "target": 1.0,
+      "how": "100 when exactly on plan; over- and under-running both lose points."
+    },
+    {
+      "key": "type_weighted_earned_mm",
+      "factor": "Earned MM delivered (type-weighted)",
+      "weight": 0.2,
+      "direction": "higher",
+      "target": null,
+      "how": "Rewards absolute value delivered, weighted by project type factor — scoring only."
+    },
+    {
+      "key": "actual_mm",
+      "factor": "Actual MM contributed",
+      "weight": 0.1,
+      "direction": "higher",
+      "target": null,
+      "how": "Rewards volume of effort carried."
+    },
+    {
+      "key": "projects_worked",
+      "factor": "Projects worked",
+      "weight": 0.05,
+      "direction": "higher",
+      "target": null,
+      "how": "Rewards breadth across the portfolio."
+    }
+  ],
+  "definitions": [
+    {
+      "field": "Planned MM",
+      "means": "The effort we SAID we would spend in this period. It comes from each project's budget spread across the months between its start and end date, so a 12 MM project running 2 years contributes 1.5 MM to each quarter.",
+      "how": "Straight-line spread of Budget across the project's start-to-end window, summed for every project touching the period."
+    },
+    {
+      "field": "Actual MM",
+      "means": "The effort we REALLY spent in this period — the man-months your team actually booked against projects in those three months (or that year).",
+      "how": "The hours booked to projects in the quarters inside the selected period, across all projects and everyone on the team, in man-months."
+    },
+    {
+      "field": "Earned MM",
+      "means": "The VALUE we delivered in this period, expressed in man-months of budget. If a project is 70% complete on a 26 MM budget, 18.2 MM of value has been earned regardless of how long it took.",
+      "how": "Budget x % Complete for each project, then spread across quarters in proportion to when the time was actually booked."
+    },
+    {
+      "field": "Profit / (Loss) in period",
+      "means": "Value delivered less effort burned, in this period only. Positive means you got more budget-value out than man-months you put in.",
+      "how": "Earned MM less Actual MM."
+    },
+    {
+      "field": "Capacity MM",
+      "means": "How much the team could deliver in this period if fully applied to projects.",
+      "how": "Each person's availability % for that year x 3 months per quarter (x4 for a full year), summed across the team."
+    },
+    {
+      "field": "Utilisation",
+      "means": "How busy the team was: how much of the available capacity was actually booked to projects.",
+      "how": "Actual MM divided by Capacity MM."
+    },
+    {
+      "field": "Plan Adherence",
+      "means": "Did we burn the effort we said we would this period?",
+      "how": "Actual MM divided by Planned MM."
+    },
+    {
+      "field": "Efficiency (CPI) — in period",
+      "means": "Value delivered per man-month spent, IN THIS PERIOD ONLY. Above 1.00 means the period converted effort into progress well.",
+      "how": "Earned MM in period divided by Actual MM in period."
+    },
+    {
+      "field": "Reads n/a, or a dash",
+      "means": "No time was booked to any project in the period, so there is nothing to divide.",
+      "how": ""
+    },
+    {
+      "field": "Far above 1.00 (say over 2.00x)",
+      "means": "A project is marked well advanced on very little booked time, so earned value dwarfs actual effort.",
+      "how": ""
+    },
+    {
+      "field": "Below 1.00",
+      "means": "More effort has been spent than value delivered. This is a genuine overrun.",
+      "how": ""
+    },
+    {
+      "field": "Swings hard between quarters",
+      "means": "Period figures are volatile by nature — one quarter of light logging moves them a long way.",
+      "how": ""
+    }
+  ],
+  "non_project_codes": [
+    {
+      "code": "HOLIDAY",
+      "meaning": "Public holiday or company closure",
+      "treat_as": "Day off"
+    },
+    {
+      "code": "LEAVE",
+      "meaning": "Annual or sick leave",
+      "treat_as": "Day off"
+    },
+    {
+      "code": "EXCUSE.PER",
+      "meaning": "Personal excuse, part of a day",
+      "treat_as": "Partial absence"
+    },
+    {
+      "code": "LATE",
+      "meaning": "Late arrival, part of a day",
+      "treat_as": "Partial absence"
+    }
+  ]
+}

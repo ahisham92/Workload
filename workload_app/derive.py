@@ -45,7 +45,6 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from . import config as cfg
 
 #: The job type of real project work. Proposals, leave, idle time and the rest
 #: are charge codes, not projects.
@@ -407,7 +406,3 @@ __all__ = [
     "short_names", "latest_by_person", "plan_projects", "needs_confirming",
     "unit_name", "describe", "is_project_work",
 ]
-
-# The register's own limits, for whoever reports on what did not fit.
-PROJECT_ROWS = cfg.PROJECT_LAST_ROW - cfg.PROJECT_FIRST_ROW + 1
-DELIVERABLE_ROWS = cfg.DELIVERABLE_LAST_ROW - cfg.DELIVERABLE_FIRST_ROW + 1

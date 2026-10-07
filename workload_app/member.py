@@ -18,10 +18,10 @@ from typing import Any, Dict, List, Optional
 
 from . import reports, tasks as task_sheet
 from .metrics import TimesheetIndex
-from .workbook import WorkloadWorkbook
+from .unit import Unit
 
 
-def build(wb: WorkloadWorkbook, engineer: str, *, kind: str = "year",
+def build(wb: Unit, engineer: str, *, kind: str = "year",
           year: Optional[int] = None, quarter: Optional[str] = None,
           index: Optional[TimesheetIndex] = None,
           store: Any = None) -> Dict[str, Any]:
@@ -112,7 +112,7 @@ def _times(value: Optional[float], share: float) -> Optional[float]:
     return None if value is None else round(value * share, 3)
 
 
-def _my_timesheet(wb: WorkloadWorkbook, engineer: str, period,
+def _my_timesheet(wb: Unit, engineer: str, period,
                   store: Any = None) -> Dict[str, Any]:
     """This person's own rows: how many, how many hours, and when."""
     year = period.year if period.kind == "year" else None
@@ -145,13 +145,11 @@ def _my_months(report: reports.ReportSet, engineer: str) -> List[Dict[str, Any]]
     return out
 
 
-def _my_tasks(wb: WorkloadWorkbook, engineer: str) -> Dict[str, Any]:
+def _my_tasks(wb: Unit, engineer: str) -> Dict[str, Any]:
     """The tasks with this person's name on them, and what they add up to."""
-    if not task_sheet.has_sheet(wb.raw):
-        return {"tasks": [], "open_hours": 0.0, "overdue": 0, "settings": None}
     settings = wb.task_settings()
     today = _dt.date.today()
-    mine = [t for t in task_sheet.read(wb.raw) if engineer in t.assignees]
+    mine = [t for t in wb.task_records() if engineer in t.assignees]
     rows = []
     open_hours = overdue = 0
     for task in mine:

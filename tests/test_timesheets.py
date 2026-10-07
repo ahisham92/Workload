@@ -5,7 +5,7 @@ import io
 
 import pytest
 
-from workload_app import config as cfg, timesheets
+from workload_app import timesheets
 from workload_app.timesheets import ImportError_
 
 
@@ -169,7 +169,9 @@ class TestSummaryAndGuards:
             parsed.rows[:1], parsed.rows, parsed.headers) == 1
 
 
-class TestWritingBack:
+class TestKeepingTheRows:
+    """Parsed rows go into the unit's own database, a person at a time."""
+
     def _rows(self, wb, count=5):
         headers = wb.timesheet_headers("Kirolos")
         rows = [a_row(FullName="Kirolos Nabil", Date=dt.date(2026, 9, day))
@@ -178,45 +180,25 @@ class TestWritingBack:
         return timesheets.parse("Kirolos", "e.xlsx", data, headers,
                                 name_pattern="*Kirolos*")
 
-    def test_replace_writes_exactly_the_new_rows(self, wb):
+    def test_replace_keeps_exactly_the_new_rows(self, wb):
         parsed = self._rows(wb)
-        result = wb.replace_timesheet("Kirolos", parsed.rows)
-        assert result["rows"] == 5
-        stored = wb.timesheet_rows("Kirolos", ["B", "C", "L", "P"])
+        assert wb.store.replace("Kirolos", parsed.records()) == 5
+        stored = wb.store.rows_for("Kirolos")
         assert len(stored) == 5
-        assert stored[0]["C"] == "Kirolos Nabil"
+        assert {r["full_name"] for r in stored} == {
+            r["full_name"] for r in parsed.records()}
+        assert {r["date"] for r in stored} == {
+            dt.date(2026, 9, day) for day in range(1, 6)}
 
-    def test_written_rows_read_back_as_the_right_types(self, wb, workbook_copy):
-        parsed = self._rows(wb, 3)
-        wb.replace_timesheet("Kirolos", parsed.rows)
-        wb.save()
-        openpyxl = pytest.importorskip("openpyxl")
-        sheet = openpyxl.load_workbook(workbook_copy)["TS Kirolos"]
-        assert sheet["L4"].value == dt.datetime(2026, 9, 1)
-        assert sheet["L4"].number_format == "yyyy\\-mm\\-dd"
-        assert sheet["P4"].value == 9.5
-        assert sheet.max_row == cfg.TS_FIRST_DATA_ROW + 2
+    def test_the_other_people_are_left_alone(self, wb):
+        before = wb.store.counts()["Ahmed"]
+        wb.store.replace("Kirolos", self._rows(wb).records())
+        assert wb.store.counts()["Ahmed"] == before
 
-    def test_the_header_row_is_never_touched(self, wb):
-        before = wb.timesheet_headers("Kirolos")
-        wb.replace_timesheet("Kirolos", self._rows(wb).rows)
-        assert wb.timesheet_headers("Kirolos") == before
-
-    def test_the_other_engineers_sheets_are_left_alone(self, wb):
-        before = len(wb.timesheet_rows("Ahmed", ["B"]))
-        wb.replace_timesheet("Kirolos", self._rows(wb).rows)
-        assert len(wb.timesheet_rows("Ahmed", ["B"])) == before
-
-    def test_more_rows_than_the_workbook_reads_are_refused(self, wb):
-        from workload_app.workbook import ValidationError
-        # The limit is whatever the stack actually reads from each sheet,
-        # not a constant -- raising the stack raises this too.
-        reads = wb.timesheet_capacity()["per_sheet_capacity"]
-        too_many = [[None] * 72] * (reads + 1)
-        with pytest.raises(ValidationError, match="more than the"):
-            wb.replace_timesheet("Kirolos", too_many)
-
-    def test_an_unknown_engineer_is_refused(self, wb):
-        from workload_app.workbook import ValidationError
-        with pytest.raises(ValidationError, match="not one of this workbook"):
-            wb.replace_timesheet("Someone", [])
+    def test_there_is_no_limit_to_how_many_rows_a_person_has(self, wb):
+        """A person's sheet once held a few thousand rows and no more."""
+        record = self._rows(wb, 1).records()[0]
+        many = [{**record, "date": dt.date(2000, 1, 1) + dt.timedelta(days=i)}
+                for i in range(30000)]
+        assert wb.store.replace("Kirolos", many) == 30000
+        assert wb.store.counts()["Kirolos"] == 30000

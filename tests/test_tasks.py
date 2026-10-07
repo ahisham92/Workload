@@ -1,4 +1,4 @@
-"""The task list: a sheet of the app's own, and the arithmetic of a working day.
+"""The task list, and the arithmetic of a working day.
 
 Nothing here may reach the model.  Several of these tests exist only to prove
 that: the workbook's own figures have to come out identical with a full task
@@ -6,49 +6,28 @@ list beside them.
 """
 
 import datetime as dt
-import xml.etree.ElementTree as ET
-import zipfile
 
 import pytest
 
-from workload_app import config as cfg, tasks
+from workload_app import tasks
 from workload_app.tasks import TaskError
 
 
 MONDAY = dt.date(2026, 9, 7)          # the anchor for every dated test below
 
 
-class TestTheSheet:
-    def test_the_sheet_is_made_on_demand(self, wb):
-        assert cfg.SHEET_TASKS not in wb.raw.sheet_names
-        wb.save_task({"name": "Draft the layout", "assignees": ["Ahmed"],
-                      "required_hours": 6})
-        assert cfg.SHEET_TASKS in wb.raw.sheet_names
-
-    def test_a_task_survives_a_save_and_reopen(self, wb, workbook_copy):
+class TestTheList:
+    def test_a_task_is_there_when_the_unit_is_opened_again(self, wb, unit_copy):
         wb.save_task({"name": "Draft the layout", "definition": "First pass GA",
                       "assignees": ["Ahmed", "Osama"], "required_hours": 9,
                       "due": "2026-09-18"})
-        wb.save()
-        from workload_app.workbook import WorkloadWorkbook
-        again = WorkloadWorkbook(workbook_copy).tasks()
+        from workload_app.unit import Unit
+        again = Unit(unit_copy).tasks()
         assert len(again) == 1
         assert again[0]["name"] == "Draft the layout"
         assert again[0]["assignees"] == ["Ahmed", "Osama"]
         assert again[0]["due"] == "2026-09-18"
         assert again[0]["hours_each"] == 4.5
-
-    def test_the_workbook_is_still_sound_with_a_task_sheet(self, wb, workbook_copy):
-        wb.save_task({"name": "Draft", "assignees": ["Ahmed"]})
-        wb.save()
-        with zipfile.ZipFile(workbook_copy) as zf:
-            for name in zf.namelist():
-                if name.endswith(".xml"):
-                    ET.fromstring(zf.read(name))
-        openpyxl = pytest.importorskip("openpyxl")
-        book = openpyxl.load_workbook(workbook_copy)
-        assert cfg.SHEET_TASKS in book.sheetnames
-        assert sum(len(book[n]._charts) for n in book.sheetnames) == 14
 
     def test_the_model_cannot_see_the_tasks(self, wb):
         """The whole point of the tab: it changes none of the figures."""
@@ -58,13 +37,6 @@ class TestTheSheet:
                       "required_hours": 400, "actual_hours": 400})
         wb.generate_weekly_meetings({"start": MONDAY.isoformat(), "weeks": 8})
         assert metrics.overview(wb, 2026)["portfolio"] == before
-
-    def test_dates_are_written_as_dates(self, wb, workbook_copy):
-        wb.save_task({"name": "Draft", "assignees": ["Ahmed"], "due": "2026-09-10"})
-        wb.save()
-        openpyxl = pytest.importorskip("openpyxl")
-        cell = openpyxl.load_workbook(workbook_copy)[cfg.SHEET_TASKS]["K3"]
-        assert cell.value == dt.datetime(2026, 9, 10)
 
 
 class TestChangingTheList:
@@ -280,6 +252,6 @@ class TestTheWeeklyMeeting:
         assert made[0]["due"] == "2026-09-09"        # the first Wednesday
 
     def test_an_unknown_project_is_refused(self, wb):
-        from workload_app.workbook import ValidationError
+        from workload_app.model import ValidationError
         with pytest.raises(ValidationError, match="not a project"):
             wb.generate_weekly_meetings({"project_number": "NOPE"})
