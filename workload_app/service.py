@@ -73,10 +73,6 @@ class WorkloadService:
 
     # -- choosing a unit -------------------------------------------------
     @property
-    def is_open(self) -> bool:
-        return self._wb is not None
-
-    @property
     def workbook(self) -> Unit:
         """The open unit, or a clear refusal if none has been chosen.
 
@@ -1569,14 +1565,6 @@ def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-
-
-def _group_by_person(rows) -> Dict[str, List[Dict[str, Any]]]:
-    """Split a flat list of timesheet rows by whose they are."""
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for row in rows:
-        grouped.setdefault(row["engineer"], []).append(row)
-    return grouped
 
 
 def _duplicates(existing: Sequence[Dict[str, Any]],

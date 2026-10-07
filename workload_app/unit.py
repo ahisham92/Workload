@@ -680,12 +680,6 @@ class Unit:
                     "ORDER BY position, code"))
         return self._cached("non_project_codes", build)
 
-    def non_project_code_list(self) -> List[Dict[str, str]]:
-        with self._connect() as db:
-            return [dict(row) for row in db.execute(
-                "SELECT code, meaning, treat_as FROM non_project_codes "
-                "ORDER BY position, code")]
-
     def holidays(self) -> List[_dt.date]:
         """Days off the unit typed in itself."""
         def build() -> List[_dt.date]:
@@ -1425,9 +1419,6 @@ class Unit:
     def timesheet_headers(self, engineer: Optional[str] = None) -> List[str]:
         """The columns of a timesheet export, which an upload is read against."""
         return list(cfg.TS_HEADERS)
-
-    def timesheet_rows_for(self, engineer: str) -> List[Dict[str, Any]]:
-        return self.store.rows_for(engineer)
 
     def data_check(self, year: Optional[int] = None, *,
                    store: Any = None) -> Dict[str, Any]:

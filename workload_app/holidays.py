@@ -289,10 +289,6 @@ def days_between(code: str, start: _dt.date, end: _dt.date,
             if h["date"] not in skipped}
 
 
-def lunar_known(year: int) -> bool:
-    return LUNAR_YEARS[0] <= year <= LUNAR_YEARS[1]
-
-
 def guess(text: str) -> Optional[str]:
     """A country from a unit's or a team's name, when one is in it."""
     words = str(text or "").lower()

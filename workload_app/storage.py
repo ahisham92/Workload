@@ -290,14 +290,6 @@ def backups_dir(data_dir: Path, user_id: int) -> Path:
     return user_dir(data_dir, user_id) / cfg.BACKUP_DIRNAME
 
 
-def usage_mb(data_dir: Path, user_id: int) -> float:
-    total = 0
-    for path in user_dir(data_dir, user_id).rglob("*"):
-        if path.is_file():
-            total += path.stat().st_size
-    return round(total / 1_048_576, 2)
-
-
 def size_mb(path: Path) -> float:
     """A unit's size on disk, its write-ahead log included."""
     total = 0
@@ -317,11 +309,3 @@ def _remove_database(path: Path) -> None:
     for each in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"),
                  Path(str(path) + "-journal")):
         each.unlink(missing_ok=True)
-
-
-def find_orphans(data_dir: Path, user_id: int, keep: Optional[set] = None) -> list:
-    """Unit files in an account's folder that no unit points at."""
-    keep = {Path(name).name for name in (keep or set())}
-    folder = user_dir(data_dir, user_id)
-    return [p for p in list(folder.glob(f"*{UNIT_SUFFIX}")) + list(folder.glob("*.xlsx"))
-            if p.name not in keep and not p.name.endswith(".timesheets.db")]

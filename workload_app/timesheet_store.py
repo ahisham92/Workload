@@ -151,11 +151,6 @@ CREATE TABLE IF NOT EXISTS slots (
 );
 """
 
-#: The columns a row is made of, in the order ``add`` expects them.
-FIELDS = ("person", "job_type", "job_number", "job_name", "full_name", "day",
-          "phase", "regular_hours", "overtime_hours", "hours", "deliverable",
-          "job_status", "grade", "unit", "source")
-
 #: Columns added after the first stores were made, and so added to those on
 #: open.  A store from before them simply has them blank.
 _LATER_COLUMNS = {

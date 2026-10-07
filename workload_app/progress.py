@@ -64,7 +64,6 @@ REVIEW_CODES: Dict[str, Dict[str, Any]] = {
     "B": {"label": "Code B — approved with comments", "floor": 0.90, "cap": 0.99},
     "C": {"label": "Code C — revise and resubmit", "floor": 0.80, "cap": 0.89},
 }
-CODE_KEYS = list(REVIEW_CODES)
 
 #: What one resubmission is worth once a code has come back.
 PER_RESUBMISSION = 0.01

@@ -1,9 +1,9 @@
-"""Where every input lives in the Workload workbook.
+"""The app's fixed settings, and where things lived in the old workbook.
 
-Everything the app writes is described here, so re-pointing the app at a
-restructured workbook is a matter of editing this file rather than hunting
-through the code.  Column letters and row ranges match the workbook as shipped:
-blue cells in Excel are the inputs, and only those appear below.
+A unit is its own database now; the cell addresses below are only read when a
+unit made in the workbook days is brought across (``legacy.py``) and by the
+downloadable copy.  The rest -- statuses, task defaults, the timesheet
+export's columns -- is what the app itself runs on.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ SHEET_RULES = "Rules of Credit"
 SHEET_CALENDAR = "Work Calendar"
 SHEET_PROFIT_PLAN = "Profit Plan"
 SHEET_PHASING = "Phasing"
-SHEET_SUPPORT_PLAN = "Support Plan"
 
 #: Paste-target sheets are found by this prefix rather than by name, so a
 #: workbook set up for another unit -- different people, different sheet names
@@ -29,7 +28,6 @@ TS_SHEET_PREFIX = "TS "
 # -- Inputs: the project register -----------------------------------------
 PROJECT_FIRST_ROW = 6
 PROJECT_LAST_ROW = 85          # the register's formulas run to row 85
-PROJECT_TOTAL_ROW = 86
 
 #: field name -> column letter, for the cells a user may type into.
 PROJECT_INPUT_COLUMNS: Dict[str, str] = {
@@ -44,28 +42,6 @@ PROJECT_INPUT_COLUMNS: Dict[str, str] = {
     "manual_percent": "O",
 }
 
-#: The fallback split, one column per engineer in Work Calendar order.  Keyed by
-#: position rather than by name so another unit's team lands in the right cells.
-PROJECT_MANUAL_SHARE_COLUMNS = ["W", "X", "Y"]
-#: Columns for a fourth engineer onwards, in free space to the right.
-PROJECT_MANUAL_SHARE_EXTRA_FIRST_COL = "AB"
-
-#: field name -> column letter, for cells the workbook calculates.
-PROJECT_CALC_COLUMNS: Dict[str, str] = {
-    "percent_complete": "G",
-    "share_ahmed": "I",
-    "share_osama": "J",
-    "share_kirolos": "K",
-    "split_check": "L",
-    "in_scope": "M",
-    "actual_mm": "P",
-    "cost_at_completion": "Q",
-    "remaining_on_hand": "R",
-    "earned_mm": "S",
-    "profit_mm": "T",
-    "cpi": "U",
-}
-
 PROJECT_STATUSES: List[str] = [
     "Active", "Not Started", "On Hold", "Finalized", "Proposal", "Cancelled",
 ]
@@ -77,10 +53,6 @@ PROJECT_IN_SCOPE_STATUSES = {"Active", "Not Started"}
 AVAILABILITY_HEADER_ROW = 90
 AVAILABILITY_FIRST_COL = "B"
 AVAILABILITY_LAST_COL = "F"
-#: The availability block, and the continuation used past the third engineer.
-AVAILABILITY_FIRST_ROW = 91
-AVAILABILITY_EXTRA_FIRST_ROW = 100
-MONTHS_PER_QUARTER_CELL = "B94"
 AS_AT_DATE_CELL = "B96"
 
 # -- Deliverables: the deliverable register --------------------------------
@@ -97,30 +69,7 @@ DELIVERABLE_INPUT_COLUMNS: Dict[str, str] = {
     "notes": "O",
 }
 
-#: Each deliverable's split, one column per engineer in Work Calendar order.
-DELIVERABLE_SHARE_COLUMNS = ["K", "L", "M"]
-#: Columns for a fourth engineer onwards.  The workbook's own formulas only
-#: know about the first three; the app reads and writes all of them.
-DELIVERABLE_SHARE_EXTRA_FIRST_COL = "AG"
-
-DELIVERABLE_CALC_COLUMNS: Dict[str, str] = {
-    "project_name": "B",
-    "step_name": "G",
-    "credit_percent": "H",
-    "weighted_progress": "I",
-    "split_check": "N",
-    "type_factor": "P",
-}
-
 # -- Deliverable Actuals ---------------------------------------------------
-#: Row aligned one-for-one with the deliverable register.
-ACTUALS_FIRST_ROW = 5
-#: The last row the sheet ships with.  The register itself runs to row 204, so
-#: the block is grown on demand when a 65th deliverable is added.
-ACTUALS_DEFAULT_LAST_ROW = 68
-#: Row that the extension clones (formulas are translated down from here).
-ACTUALS_TEMPLATE_ROW = 68
-
 ACTUALS_INPUT_COLUMNS: Dict[str, str] = {
     "ts_phase": "E",
     "actual_start": "W",
@@ -135,9 +84,6 @@ ACTUALS_DATE_FIELDS = [
     "actual_start", "actual_finish", "submitted_to_client",
     "comments_received", "resubmitted", "completed",
 ]
-
-#: Columns whose ``$X$5:$X$68`` ranges must grow with the block.
-ACTUALS_RANGE_END = ACTUALS_DEFAULT_LAST_ROW
 
 #: Proposal effort is kept on import even though no project number covers it:
 #: the Proposals sheet and the utilisation figures both need it.
@@ -159,37 +105,20 @@ RULES_COLUMNS = {
 }
 
 # -- Work Calendar ---------------------------------------------------------
-WORKING_WEEK_ROWS = list(range(6, 13))     # Sunday .. Saturday
-WORKING_WEEK_COLUMNS = {"weekday": "A", "day": "B", "working": "C"}
 HOURS_PER_DAY_CELL = "B14"
-ANALYSIS_START_CELL = "B15"
-ANALYSIS_END_CELL = "B16"
-#: The engineer block on Work Calendar, as the workbook ships it: three rows,
-#: with the next heading immediately below.
-ENGINEER_FIRST_ROW = 20
-ENGINEER_BUILT_IN_SLOTS = 3
-#: A fourth engineer onwards goes here instead, well clear of everything the
-#: workbook uses, so nothing has to be inserted and no formula shifts.
-ENGINEER_EXTRA_FIRST_ROW = 100
 ENGINEER_COLUMNS = {"short_name": "A", "pattern": "B", "available_hours": "C"}
 HOLIDAY_FIRST_ROW = 6
 HOLIDAY_LAST_ROW = 200
 HOLIDAY_COLUMNS = {"date": "E", "name": "F"}
 NON_PROJECT_CODE_ROWS = list(range(26, 30))
 NON_PROJECT_CODE_COLUMNS = {"code": "A", "meaning": "B", "treat_as": "C"}
-STOPPAGE_GAP_CELL = "B32"
 
 # -- Profit Plan -----------------------------------------------------------
 HOURS_PER_MAN_MONTH_CELL = "B5"
 PLAN_YEAR_CELL = "B6"
 
 # -- Timesheet sheets ------------------------------------------------------
-TS_HEADER_ROW = 3
 TS_FIRST_DATA_ROW = 4
-#: Columns A..BT.  Timesheet Raw reads each sheet from row 4 to row 6000.
-TS_LAST_COLUMN = "BT"
-#: Fallback only; the real limit is read from the VSTACK in the workbook.
-TS_MAX_DATA_ROW = 25000
 
 #: The columns of a BISpark timesheet export, in the order it gives them.
 #: An upload is read by header name against this list, so a column the
@@ -255,58 +184,10 @@ TS_NUMERIC_HEADERS = {
     "EAC2 Based on Cumulative Spent", "IsLatestProgressDate", "IsMaximumdate",
 }
 
-#: Style index of the ``yyyy-mm-dd`` number format used by the Date column.
-TS_DATE_STYLE = "371"
-
 BACKUP_DIRNAME = "backups"
 
-# -- Timesheet Raw: the consolidated view, and the two caps on it ----------
 SHEET_TS_RAW = "Timesheet Raw"
-TS_RAW_FIRST_DATA_ROW = 4
 
-#: ``Timesheet Raw!A4`` stacks the TS sheets with VSTACK and filters the blanks
-#: out.  The stack is read from each sheet up to this row, so it caps any one
-#: engineer's sheet.  The workbook shipped with 6000; the app raises it so an
-#: engineer's own sheet stops being the thing that runs out first.
-TS_SOURCE_DEFAULT_LAST_ROW = 6000
-TS_SOURCE_TARGET_LAST_ROW = 25000
-
-#: Every SUMIFS / MINIFS / MAXIFS that reads the consolidated view stops at this
-#: row.  Rows spilled beyond it are invisible to the whole workbook, and because
-#: the stack runs Ahmed, Osama, Kirolos, it is the last engineer's rows that
-#: silently drop off the end first.
-TS_RAW_DEFAULT_LAST_ROW = 8000
-#: What the app raises it to when asked: the same 25,000 entries the stack
-#: reads from each sheet, so one number covers the whole timesheet and nobody
-#: has to think about two limits again.
-TS_RAW_TARGET_LAST_ROW = 25000
-#: Never leave less than this much room when raising the limit for an import,
-#: so the next month's import does not have to raise it again.
-TS_RAW_GROWTH_HEADROOM = 5000
-#: Raising the limit is rounded up to a tidy multiple of this.
-TS_RAW_GROWTH_STEP = 5000
-#: How far the app will raise the limit on its own during an import.  Past this
-#: the workbook becomes slow enough in Excel that it is a decision rather than
-#: a detail, so the import is refused and says so.
-TS_RAW_AUTO_MAX = 60000
-
-#: Per-row helper formulas on the consolidated view; they have to reach as far
-#: as the cap does.
-TS_RAW_HELPER_COLUMNS = ["BU", "BV", "BW", "BX"]
-
-#: A cell whose formula names the consolidated range, used to read the cap back
-#: out of the workbook rather than assuming it.
-TS_RAW_LIMIT_PROBE = (SHEET_CALENDAR, "B34")
-
-#: Warn once free rows fall below this.
-TS_RAW_HEADROOM_WARNING = 500
-
-
-#: Proposal effort is kept on import even though no project number covers it:
-#: the Proposals sheet and the utilisation figures both need it.
-PROPOSAL_JOB_TYPES = ["2-Proposals Chargeable", "3-Proposals Regular"]
-
-# -- Reference tables ------------------------------------------------------
 #: Guards the Project Types and Rules of Credit tables against a stray edit.
 #: Not a security control -- the same cells are editable in Excel by anyone who
 #: can open the file -- so it is deliberately kept simple and in plain sight.
@@ -314,11 +195,7 @@ REFERENCE_PASSWORD = "2026"
 
 
 # -- Phasing: the quarter grid the reports are built on --------------------
-#: Row holding each column's year, its quarter label, and the period bounds.
-PHASING_YEAR_ROW = 3
-PHASING_QUARTER_ROW = 4
 PHASING_START_ROW = 5
-PHASING_END_ROW = 6
 #: Columns D..X: an opening balance column, then one per quarter.
 PHASING_FIRST_COL = "D"
 PHASING_LAST_COL = "X"
@@ -361,10 +238,7 @@ DEFINITIONS_LAST_ROW = 40
 #: it: the task list is a planning aid that sits beside the model rather than
 #: inside it, so nothing here can move a project's figures.
 SHEET_TASKS = "Tasks"
-TASKS_TITLE_CELL = "A1"
-TASKS_SETTINGS_LABEL_CELL = "R1"
 TASKS_SETTINGS_CELL = "S1"
-TASKS_HEADER_ROW = 2
 TASKS_FIRST_ROW = 3
 #: Well past a year of daily tasks for a team of this size.
 TASKS_LAST_ROW = 5000
@@ -393,12 +267,6 @@ TASK_COLUMNS: Dict[str, str] = {
     "pro_rata": "T",
 }
 
-TASK_HEADERS = [
-    "ID", "Task", "Definition", "Project", "Deliverable row", "Deliverable",
-    "Assigned to", "Required hours", "Actual hours", "Start", "Due", "Status",
-    "Kind", "Series", "Notes", "Measured", "Stage", "Review code", "Revisions",
-    "Pro rata %",
-]
 
 TASK_STATUSES = ["Not started", "In progress", "Blocked", "Done"]
 TASK_DONE_STATUS = "Done"

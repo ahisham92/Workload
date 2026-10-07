@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from collections import defaultdict
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from . import calendar_
 from . import intake
