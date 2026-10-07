@@ -76,6 +76,15 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Opened from a phone's home screen the page runs under the status bar and
+     round the notch; these are zero everywhere else. */
+  padding-top: env(safe-area-inset-top, 0px);
+}
+/* Behind the phone's status bar, the logo's navy, so the clock stays legible
+   whatever the page's own colours are. No height outside an installed app. */
+html::before {
+  content: ""; position: fixed; z-index: 100; top: 0; left: 0; right: 0;
+  height: env(safe-area-inset-top, 0px); background: #101B2D; pointer-events: none;
 }
 /* The backdrop: a team in formation on a plane that runs away from the
    viewer, faint enough that it only shows between the panels. */
@@ -102,8 +111,10 @@ p { margin: 0 0 10px; }
 /* top bar */
 .topbar {
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
-  padding: 10px 20px; background: var(--surface);
-  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
+  padding: 10px max(20px, env(safe-area-inset-right, 0px)) 10px max(20px, env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border); position: sticky;
+  top: env(safe-area-inset-top, 0px); z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 /* The mark: three months of effort under the line that is the capacity, which
@@ -132,7 +143,8 @@ p { margin: 0 0 10px; }
 /* tabs */
 .tabs {
   display: flex; gap: 2px; padding: 0 20px; background: var(--surface);
-  border-bottom: 1px solid var(--border); position: sticky; top: 53px; z-index: 19;
+  border-bottom: 1px solid var(--border); position: sticky;
+  top: calc(53px + env(safe-area-inset-top, 0px)); z-index: 19;
   overflow-x: auto;
 }
 .tab {
@@ -147,7 +159,8 @@ p { margin: 0 0 10px; }
 .tab:hover { color: var(--text); }
 .tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
 
-main { padding: 20px; max-width: 1500px; margin: 0 auto; }
+main { padding: 20px max(20px, env(safe-area-inset-right, 0px)) 20px max(20px, env(safe-area-inset-left, 0px));
+  max-width: 1500px; margin: 0 auto; }
 .view { display: none; }
 .view.is-active { display: block; }
 .view-head {
@@ -280,7 +293,7 @@ th.auto-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -
 table.is-short tr.row-more { display: none; }
 .table-more { display: flex; justify-content: center; margin: 8px 0 4px; }
 .table-more .btn { color: var(--accent); font-weight: 600; }
-.row-actions { display: flex; gap: 6px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A cell that is display:flex stops being a cell and spills out of the row. */
 td.row-actions { display: table-cell; white-space: nowrap; }
 td.row-actions > * + * { margin-left: 6px; }
@@ -635,10 +648,11 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
 
 /* -- phones -------------------------------------------------------------- */
 @media (max-width: 700px) {
-  main { padding: 16px; }
+  main { padding: 16px max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px)); }
   /* The bar wraps under the unit's name rather than sitting on top of it, and
      neither bar sticks: two stuck rows would leave little of the page. */
-  .topbar { flex-wrap: wrap; padding: 10px 16px; position: static; }
+  .topbar { flex-wrap: wrap; position: static;
+    padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px)); }
   .topbar-actions { flex: 1 1 100%; flex-wrap: wrap; }
   .brand-text p { max-width: 70vw; }
   .tabs { position: static; padding: 0 8px; }
@@ -653,15 +667,99 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
   .panel { padding: 14px; }
 }
 
+/* -- in the pocket: the tabs along the bottom on a phone ------------------ */
+/* pocket.js builds the bar from the tabs; it only shows on a narrow screen. */
+.thumb-bar, .thumb-sheet { display: none; }
+@media (max-width: 700px) {
+  body.has-thumb-bar { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+  body.has-thumb-bar .tabs { display: none; }
+  /* The top bar keeps the unit's name and whether it is saved; its buttons
+     move under More, where a thumb reaches them. */
+  body.has-thumb-bar .topbar { flex-wrap: nowrap; position: sticky; }
+  body.has-thumb-bar .topbar-actions { flex: none; }
+  body.has-thumb-bar .topbar-actions > :not(#save-state) { display: none; }
+  body.has-thumb-bar .brand > .wordmark,
+  body.has-thumb-bar .brand-divider { display: none; }
+  body.has-thumb-bar .toasts { left: 12px; right: 12px;
+    bottom: calc(78px + env(safe-area-inset-bottom, 0px)); }
+  body.has-thumb-bar .sticky-foot { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  body.thumb-sheet-open { overflow: hidden; }
+
+  .thumb-bar:not([hidden]) {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 46;
+    padding: 5px max(6px, env(safe-area-inset-right, 0px))
+      calc(5px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 18px rgba(16, 24, 40, .07);
+  }
+  .thumb-bar button {
+    appearance: none; border: 0; background: none; font: inherit; cursor: pointer;
+    color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .01em;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; min-height: 56px; padding: 4px 2px; border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-bar button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .thumb-bar .tab-icon { width: 22px; height: 22px; opacity: 1; box-sizing: content-box;
+    padding: 4px 16px; border-radius: 999px; transition: background-color .15s; }
+  .thumb-bar button.is-active { color: var(--accent); }
+  .thumb-bar button.is-active .tab-icon { background: var(--accent-soft); }
+  .thumb-bar button:active .tab-icon { background: var(--surface-2); }
+
+  .thumb-sheet:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 45; }
+  .thumb-sheet-backdrop { position: absolute; inset: 0; background: rgba(10, 14, 20, .45);
+    animation: thumb-fade .18s ease-out; }
+  .thumb-sheet-panel {
+    position: absolute; left: 0; right: 0; bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100% - 120px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--surface); border-radius: 18px 18px 0 0;
+    padding: 6px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+    box-shadow: 0 -12px 40px rgba(10, 14, 20, .25);
+    animation: thumb-up .2s ease-out;
+  }
+  .thumb-sheet-grip { width: 38px; height: 4px; border-radius: 4px; background: var(--border);
+    margin: 4px auto 12px; }
+  .thumb-sheet-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px; margin-bottom: 10px; }
+  .thumb-tile {
+    appearance: none; font: inherit; cursor: pointer; color: var(--text);
+    background: var(--surface-2); border: 1px solid transparent; border-radius: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 14px 4px 11px; font-size: 12.5px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-tile .tab-icon { width: 24px; height: 24px; opacity: 1; color: var(--accent); }
+  .thumb-tile.is-active { border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); }
+  .thumb-sheet-list { display: flex; flex-direction: column; }
+  .thumb-sheet-row {
+    appearance: none; font: inherit; cursor: pointer; text-align: left; color: var(--text);
+    background: none; border: 0; border-top: 1px solid var(--border);
+    padding: 14px 4px; font-size: 15px; text-decoration: none; display: block; width: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-install { color: var(--accent); font-weight: 600; }
+  .thumb-sheet-hint { margin: 0 4px 8px; color: var(--muted); font-size: 13px; }
+}
+@keyframes thumb-up { from { transform: translateY(24px); opacity: 0; } }
+@keyframes thumb-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .thumb-sheet-panel, .thumb-sheet-backdrop { animation: none; }
+}
+
 /* -- print / save as PDF ------------------------------------------------- */
 @page { size: A4 landscape; margin: 12mm; }
 
 @media print {
   /* Print the report and nothing else: no chrome, no navigation, no controls. */
   .topbar, .tabs, .no-print, .toasts, .modal-backdrop, #chooser,
+  .thumb-bar, .thumb-sheet,
   #view-overview, #view-timesheets, #view-projects, #view-reference { display: none !important; }
   body { background: #fff; color: #000; }
-  body::before, body::after { display: none; }
+  body::before, body::after, html::before { display: none; }
+  body { padding-top: 0; padding-bottom: 0; }
   main { padding: 0; max-width: none; }
   .view { display: none; }
   .view.is-active { display: block; }

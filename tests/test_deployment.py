@@ -165,7 +165,8 @@ class TestWhatToPasteIntoTheHost:
     def test_the_static_mappings_point_at_files_that_exist(self, outside):
         mappings = deployment.static_files()
         assert {m["url"] for m in mappings} == {
-            "/app.css", "/app.js", "/member.js", "/charts.js", "/tables.js"}
+            "/app.css", "/app.js", "/member.js", "/charts.js", "/tables.js",
+            "/pocket.js"}
         for mapping in mappings:
             assert Path(mapping["path"]).is_file()
 
