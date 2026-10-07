@@ -825,7 +825,14 @@ async function deleteTeam(team) {
 */
 
 async function loadAdmin() {
-  state.admin = await api('/api/admin/users');
+  // An open password list is fetched again with the accounts, or a reset or
+  // a new account would still show the old password, or none.
+  const [admin, passwords] = await Promise.all([
+    api('/api/admin/users'),
+    state.passwords ? api('/api/admin/passwords') : null,
+  ]);
+  state.admin = admin;
+  if (passwords) state.passwords = passwords.passwords || {};
   renderAdmin();
 }
 
