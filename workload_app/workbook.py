@@ -1713,7 +1713,11 @@ class WorkloadWorkbook:
             dates: List[_dt.date] = []
             bad_names = 0
             pattern = engineers.get(short_name)
-            regex = _pattern_to_regex(pattern.pattern if pattern else f"*{short_name}*")
+            # Somebody with rows but no place on Work Calendar was matched by
+            # their full name when they were imported; there is no pattern to
+            # hold them to, and they are listed below rather than counted here.
+            regex = (None if pattern is None and stored else
+                     _pattern_to_regex(pattern.pattern if pattern else f"*{short_name}*"))
             for row in rows:
                 booked = row["hours"]
                 hours += booked
@@ -1724,7 +1728,8 @@ class WorkloadWorkbook:
                     in_year_rows += 1
                     in_year_hours += booked
                 name = row["full_name"]
-                if not (isinstance(name, str) and regex.match(name)):
+                if regex is not None and not (isinstance(name, str)
+                                              and regex.match(name)):
                     bad_names += 1
             total_rows += len(rows)
             total_hours += hours
@@ -1758,6 +1763,8 @@ class WorkloadWorkbook:
                     continue
                 unknown_codes[code] = unknown_codes.get(code, 0) + 1
 
+        outside = [name for name, rows in held.items()
+                   if rows and name not in engineers]
         if total_rows == 0:
             verdict = "No timesheet data - import each engineer's export."
         elif unmatched:
@@ -1765,6 +1772,8 @@ class WorkloadWorkbook:
                 f"Check names: {unmatched:,} row(s) do not match the engineer "
                 "patterns on Work Calendar."
             )
+        elif outside:
+            verdict = outside_message(outside)
         else:
             verdict = "All rows matched to an engineer."
 
@@ -1793,6 +1802,7 @@ class WorkloadWorkbook:
             "capacity": capacity_report,
             "capacity_warnings": capacity_warnings,
             "per_engineer": per_engineer,
+            "people_outside_workbook": outside,
             "unknown_job_numbers": sorted(
                 ({"code": k, "rows": v} for k, v in unknown_codes.items()),
                 key=lambda item: -item["rows"],
@@ -1964,3 +1974,16 @@ def _pattern_to_regex(pattern: str) -> "re.Pattern":
     """Turn an Excel wildcard pattern such as ``*Ahmed*`` into a regex."""
     parts = [re.escape(part) for part in pattern.split("*")]
     return re.compile("^" + ".*".join(parts) + "$", re.IGNORECASE)
+
+
+def outside_message(names: Sequence[str]) -> str:
+    """What it means to have rows but no place in the workbook, in a line."""
+    who = ", ".join(names)
+    many = len(names) != 1
+    return (
+        f"{len(names)} {'people are' if many else 'person is'} past the "
+        f"{cfg.MAX_ENGINEERS} places the workbook has for a team: {who}. "
+        "Their hours count toward the projects and in Resourcing, but they "
+        "have no KPI line and no share of a deliverable until that limit is "
+        "raised."
+    )
