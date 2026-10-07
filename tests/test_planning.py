@@ -276,6 +276,86 @@ class TestWhenToAskForPeople:
         assert span[1][0] == dt.date(2026, 10, 12)
 
 
+def drawing_list(rows, name="Drawing list"):
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "DWG register"
+    sheet.append(["Project drawing register"])
+    sheet.append(["JOB NO", "Package", "Dwg No", "Drawing Title", "Rev", "Purpose",
+                  "Date Issued", "Client Code", "Date Returned"])
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return {"filename": f"{name}.xlsx",
+            "content_base64": base64.b64encode(buffer.getvalue()).decode()}
+
+
+def jetty_drawings(issued=4, approved=0, total=10):
+    rows = []
+    for i in range(total):
+        sent = i < issued
+        code = "1" if i < approved else ""
+        rows.append(["N1-0100D", "Detailed design", f"N1-ST-{i + 1:03d}", f"Pile layout {i + 1}",
+                     "B" if sent else "A", "IFC" if sent else "In progress",
+                     dt.date(2026, 9, 20 + i) if sent else None, code,
+                     dt.date(2026, 10, 2) if code else None])
+    return rows
+
+
+class TestTheDrawingList:
+    def test_the_template_reads_back_and_its_starter_rows_are_skipped(self, unit):
+        from workload_app import drawing_list as module
+        template = unit.drawing_list_template()
+        data = base64.b64decode(template["content_base64"])
+        assert module.read(data) == []
+        sheet = openpyxl.load_workbook(io.BytesIO(data))["Drawing list"]
+        assert [c.value for c in sheet[1]][:3] == ["Job Number", "Deliverable", "Drawing No."]
+        assert {sheet.cell(r, 1).value for r in range(2, 5)} == {
+            "N1-0100D", "N2-0100D", "N3-0100D"}
+
+    def test_counts_and_drawings_done_come_from_the_list(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(
+            jetty_drawings() + [["ZZ-9999", "", "X-1", "Stray", "A", "", None, "", None]])]})
+        assert result["matched"] == 10
+        assert result["unmatched"] == [{"job_number": "ZZ-9999", "deliverable": "",
+                                        "drawings": 1}]
+        project = next(p for p in result["drawings"]["projects"] if p["number"] == "N1-0100D")
+        assert project["total"] == 10 and project["done"] == 4
+        # Four drawings really done is a rate, confirmed project or not.
+        assert project["hours_per_drawing"] == pytest.approx(18 * 15 / 4, rel=0.01)
+        assert result["proposals"] == []
+
+    def test_all_sent_is_offered_as_sent_and_one_tap_applies_it(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(jetty_drawings(issued=10))]})
+        proposal = result["proposals"][0]
+        assert proposal["change"]["submitted_to_client"] == "2026-09-29"
+        assert proposal["change"]["step_no"] == 4               # transmitted to client
+        unit.apply_drawing_list({"rows": [proposal["row"]]})
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N1-0100D")
+        assert deliverable.submitted_to_client == dt.date(2026, 9, 29)
+        assert deliverable.step_no == 4
+        plan = unit.submissions()
+        assert all(i["project_number"] != "N1-0100D" for i in plan["items"])
+        waiting = plan["waiting"][0]
+        assert waiting["project_number"] == "N1-0100D" and waiting["days"] == 8
+        assert waiting["list"]["issued"] == 10
+
+    def test_every_drawing_code_a_is_accepted(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(
+            jetty_drawings(issued=10, approved=10))]})
+        change = result["proposals"][0]["change"]
+        assert change["completed"] == "2026-10-02" and change["step_no"] == 5
+        assert change["comments_received"] == "2026-10-02"
+
+    def test_a_file_that_is_not_a_drawing_list_is_refused(self, unit):
+        from workload_app.drawing_list import DrawingListError
+        with pytest.raises(DrawingListError):
+            unit.import_drawing_list({"files": [export("x", booking(
+                "A B", "P2", "U", "N1-0100D", 1, "D", 8))]})
+
+
 class TestWorkComing:
     def _berths(self, unit):
         return next(t for t in unit.store.teams() if t["name"] == "BERTHS")["id"]

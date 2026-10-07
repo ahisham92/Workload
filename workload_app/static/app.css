@@ -1148,3 +1148,16 @@ tr.row-done .task-name { text-decoration: line-through; }
 .quick-add .num-input { width: 8em; }
 .quick-add .quick-add-options input.job-input { flex: 0 0 7em; width: 7em; font-size: 14px; }
 .inline-date { display: inline-flex; align-items: center; gap: 4px; }
+
+/* The drawing list: a template, an upload, and what it moves on. */
+.view-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.file-btn { position: relative; overflow: hidden; cursor: pointer; }
+.file-btn input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.drawing-list { grid-column: 1 / -1; min-width: 0; }
+.drawing-list .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.list-results { margin-top: 8px; }
+.list-proposals { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--accent-soft); border-left: 3px solid var(--accent); }
+.list-proposals .panel-head { align-items: center; }
+.plain-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.list-results .list-proposals { margin-top: 12px; }

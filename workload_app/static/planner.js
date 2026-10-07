@@ -608,7 +608,7 @@ async function overviewNeeds() {
           + (d.deliverables_without ? `. ${d.deliverables_without} deliverable(s) have no count yet.` : '.')))
         : el('div', { class: 'finding' },
           el('b', {}, 'Drawings'),
-          el('p', { class: 'muted' }, 'Give each deliverable its number of drawings on Projects, and done, left and hours a drawing follow everywhere.'))));
+          el('p', { class: 'muted' }, 'Upload the team\'s drawing list on Projects (or give each deliverable its count), and done, left and hours a drawing follow everywhere.'))));
 }
 
 /* -- today ------------------------------------------------------------- */
@@ -1062,6 +1062,7 @@ function renderSubmissions() {
   };
   const counts = data.counts;
   setChildren($('#planner-body'),
+    proposalsBlock(data.from_list, () => loadSubmissions({ quiet: true })),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
         el('div', {},
@@ -1105,10 +1106,125 @@ function renderSubmissions() {
                   title: item.basis === 'overdue' ? `The register said ${item.register_date}` : '' }, text),
                   item.step_name ? el('span', { class: 'muted small' }, ` ${item.step_name}`) : null),
                 el('td', { class: 'num' }, item.hours_left === null ? '—' : fmt.hours(item.hours_left)),
-                el('td', { class: 'num' }, item.drawings === null || item.drawings === undefined ? '—' : fmt.int(item.drawings)),
+                el('td', { class: 'num' }, item.list ? `${fmt.int(item.list.issued)} of ${fmt.int(item.list.total)} out`
+                  : item.drawings === null || item.drawings === undefined ? '—' : fmt.int(item.drawings)),
                 el('td', {}, item.people.join(', ') || '—'));
             }))))
-        : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')));
+        : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')),
+    waitingPanel(data));
+}
+
+/** Sent and nothing back yet: the client's turn, oldest first, to chase. */
+function waitingPanel(data) {
+  const waiting = data.waiting || [];
+  if (!waiting.length) return null;
+  return el('section', { class: 'panel' },
+    el('h3', {}, `Waiting for comments (${waiting.length})`),
+    el('p', { class: 'muted' }, 'Sent to the client and nothing back yet. The oldest are the ones to chase.'),
+    el('ul', { class: 'request-list' }, waiting.map((w) => el('li', { class: `request ${w.days > 21 ? 'is-late' : ''}` },
+      el('span', { class: 'request-time' }, `sent ${shortDate(w.sent)}`),
+      el('span', { class: 'request-what' }, el('span', { class: 'code' }, `${w.project_number} `), el('b', {}, w.name),
+        el('span', { class: 'muted small' }, ` · ${w.days} day${w.days === 1 ? '' : 's'}`
+          + (w.list ? ` · ${w.list.issued} drawing(s)` : w.drawings ? ` · ${w.drawings} drawing(s)` : ''))),
+      el('span')))));
+}
+
+/* -- the drawing list --------------------------------------------------- */
+
+function saveFile(result) {
+  const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }));
+  const link = el('a', { href: url, download: result.filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function changeText(change) {
+  const parts = [];
+  if (change.submitted_to_client) parts.push(`sent ${shortDate(change.submitted_to_client)}`);
+  if (change.comments_received) parts.push(`comments back ${shortDate(change.comments_received)}`);
+  if (change.completed) parts.push(`accepted ${shortDate(change.completed)}`);
+  if (change.step_name) parts.push(`step: ${change.step_name}`);
+  return parts.join(' · ');
+}
+
+/** What the drawing list says the register should, and one tap to apply it. */
+function proposalsBlock(proposals, after) {
+  if (!proposals || !proposals.length) return null;
+  return el('div', { class: 'list-proposals' },
+    el('div', { class: 'panel-head' },
+      el('b', {}, `The drawing list moves ${proposals.length} deliverable(s) on`),
+      el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => {
+        try {
+          const result = await api('/api/drawing-list/apply', { method: 'POST',
+            body: { rows: proposals.map((p) => p.row) } });
+          if (result.save) markSaved(result.save);
+          toast(`${result.applied} deliverable(s) updated from the drawing list.`, 'ok');
+          plan.submissions = null;
+          if (after) await after();
+        } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+      } }, 'Apply')),
+    el('ul', { class: 'plain-list' }, proposals.map((p) => el('li', {},
+      el('span', { class: 'code' }, `${p.project_number} `), el('b', {}, p.name), ': ',
+      changeText(p.change), el('span', { class: 'muted small' }, ` — ${p.why}`)))));
+}
+
+/** Projects > Drawing list: the template, the upload, and what it changed. */
+function openDrawingList() {
+  const results = el('div', { class: 'list-results' });
+  const input = el('input', { type: 'file', accept: '.xlsx,.xlsm', multiple: true });
+  const show = (result) => {
+    const d = result.drawings || {};
+    setChildren(results,
+      el('p', {}, el('b', {}, `${fmt.int(result.matched)} drawing(s) on ${result.deliverables.length} deliverable(s).`),
+        ` ${fmt.int(Math.round(d.done || 0))} of ${fmt.int(d.total || 0)} done across the unit`
+        + (d.hours_per_drawing ? `, ${fmt.hours(d.hours_per_drawing)} h a drawing.` : '.')),
+      result.deliverables.length ? el('div', { class: 'table-wrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, el('th', {}, 'Deliverable'), el('th', { class: 'num' }, 'Drawings'),
+          el('th', { class: 'num' }, 'Gone out'), el('th', { class: 'num' }, 'A'),
+          el('th', { class: 'num' }, 'B'), el('th', { class: 'num' }, 'C'))),
+        el('tbody', {}, result.deliverables.map((e) => el('tr', {},
+          el('td', {}, el('span', { class: 'code' }, `${e.project_number} `), e.name),
+          el('td', { class: 'num' }, fmt.int(e.total)), el('td', { class: 'num' }, fmt.int(e.issued)),
+          el('td', { class: 'num' }, fmt.int(e.code_a)), el('td', { class: 'num' }, fmt.int(e.code_b)),
+          el('td', { class: 'num' }, fmt.int(e.code_c))))))) : null,
+      result.unmatched.length ? el('p', { class: 'muted small' },
+        'Not matched to a deliverable: ', result.unmatched.map((u) =>
+          `${u.job_number}${u.deliverable ? ` / ${u.deliverable}` : ''} (${u.drawings})`).join(', '),
+        '. Check the job number, and give the deliverable\'s name as on Projects or its phase number.') : null,
+      proposalsBlock(result.proposals, async () => {
+        setChildren(results, el('p', {}, 'Applied. The register and the submissions plan are up to date.'));
+        if (typeof refreshAll === 'function') await refreshAll();
+      }));
+  };
+  input.addEventListener('change', async () => {
+    if (!input.files.length) return;
+    setChildren(results, el('p', { class: 'muted' }, 'Reading…'));
+    try {
+      const result = await api('/api/drawing-list', { method: 'POST',
+        body: { files: await filesBase64([...input.files]) } });
+      show(result);
+      if (typeof refreshAll === 'function') refreshAll();
+    } catch (error) {
+      setChildren(results, el('p', { class: 'v-bad' }, (error.errors || [error.message]).join(' ')));
+    }
+    input.value = '';
+  });
+  openPanel('Drawing list', el('div', { class: 'drawing-list' },
+    el('p', {}, 'Upload the drawing list the team keeps — one row a drawing — and each deliverable\'s drawing count, '
+      + 'how many have gone to the client and the codes that came back are read from it. '
+      + 'Any list with headings like Job Number, Drawing No., Status, Issued and Code will do.'),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn', type: 'button', onclick: async () => {
+        try { saveFile(await api('/api/drawing-list/template')); } catch (error) {
+          toast((error.errors || [error.message]).join(' '), 'bad'); }
+      } }, 'Download the template'),
+      el('label', { class: 'btn btn-primary file-btn' }, 'Upload a drawing list', input)),
+    results));
 }
 
 /* -- wiring -------------------------------------------------------------- */
@@ -1123,6 +1239,8 @@ function fillTeams(teams) {
 }
 
 function wirePlanner() {
+  const listButton = $('#btn-drawing-list');
+  if (listButton) listButton.addEventListener('click', openDrawingList);
   const team = $('#planner-team');
   if (!team) return;
   team.addEventListener('change', (e) => {

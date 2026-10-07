@@ -103,12 +103,17 @@ def summary(deliverable_rows: Sequence[Dict[str, Any]],
             drawing_counts: Mapping[int, int],
             project_rows: Sequence[Dict[str, Any]],
             roster: Sequence[Dict[str, Any]],
-            measured: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+            measured: Optional[Iterable[str]] = None,
+            issued: Optional[Mapping[int, int]] = None) -> Dict[str, Any]:
     """Every drawing figure the app shows, worked out once.
 
     ``deliverable_rows`` and ``project_rows`` are the metrics the rest of the
     app already computes, so progress here is the same progress as everywhere.
+    Where the drawing list says how many drawings of a deliverable have gone
+    to the client (``issued``), that is the number done, not an estimate from
+    progress -- and a project with such a count is measured, confirmed or not.
     """
+    issued = dict(issued or {})
     people = {p["name"]: p for p in roster}
     projects = {p["number"]: p for p in project_rows}
 
@@ -117,19 +122,24 @@ def summary(deliverable_rows: Sequence[Dict[str, Any]],
         lambda: {"total": 0.0, "done": 0.0, "left": 0.0, "deliverables": 0})
     per_person: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {"done": 0.0, "left": 0.0})
+    listed: set = set()
     for item in deliverable_rows:
         count = drawing_counts.get(item["row"])
         if count is None:
             continue
         credit = min(1.0, max(0.0, item.get("credit") or 0.0))
-        done = count * credit
+        counted = item["row"] in issued
+        done = min(count, issued[item["row"]]) if counted else count * credit
         left = count - done
+        if counted:
+            listed.add(item["project_number"])
         per_deliverable.append({
             "row": item["row"],
             "project_number": item["project_number"],
             "name": item["name"],
             "drawings": count,
             "progress": credit,
+            "from_list": counted,
             "done": _r(done),
             "left": _r(left),
         })
@@ -148,7 +158,7 @@ def summary(deliverable_rows: Sequence[Dict[str, Any]],
     # whose progress somebody has confirmed count: on one the timesheets set
     # up, progress is a placeholder, and hours over a placeholder is not a
     # rate anybody should plan people from.
-    measured = set(measured) if measured is not None else None
+    measured = set(measured) | listed if measured is not None else None
     hours_all = hours_drafting = done_all = 0.0
     project_out = []
     for number, totals in per_project.items():
