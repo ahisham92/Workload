@@ -76,6 +76,30 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Opened from a phone's home screen the page runs under the status bar and
+     round the notch; these are zero everywhere else. */
+  padding-top: env(safe-area-inset-top, 0px);
+}
+/* Behind the phone's status bar, the logo's navy, so the clock stays legible
+   whatever the page's own colours are. No height outside an installed app. */
+html::before {
+  content: ""; position: fixed; z-index: 100; top: 0; left: 0; right: 0;
+  height: env(safe-area-inset-top, 0px); background: #101B2D; pointer-events: none;
+}
+/* The backdrop: a team in formation on a plane that runs away from the
+   viewer, faint enough that it only shows between the panels. */
+body::before {
+  content: ""; position: fixed; z-index: -1; pointer-events: none;
+  left: -30vw; right: -30vw; bottom: -6vh; height: 78vh;
+  background: var(--accent); opacity: .085;
+  -webkit-mask: url(formation-bg.svg) center bottom / 100% 100% no-repeat;
+  mask: url(formation-bg.svg) center bottom / 100% 100% no-repeat;
+  transform: perspective(700px) rotateX(62deg); transform-origin: 50% 100%;
+}
+body::after {
+  /* Fades the far edge of the plane into the page. */
+  content: ""; position: fixed; z-index: -1; pointer-events: none;
+  inset: 0; background: linear-gradient(to bottom, var(--bg) 30%, transparent 75%);
 }
 h1, h2, h3 { margin: 0; font-weight: 600; }
 h1 { font-size: 16px; }
@@ -87,14 +111,25 @@ p { margin: 0 0 10px; }
 /* top bar */
 .topbar {
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
-  padding: 10px 20px; background: var(--surface);
-  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
+  padding: 10px max(20px, env(safe-area-inset-right, 0px)) 10px max(20px, env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border); position: sticky;
+  top: env(safe-area-inset-top, 0px); z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 /* The mark: three months of effort under the line that is the capacity, which
    is the one picture this whole app draws. Inline SVG so it is sharp at any
    size and takes its two colours from the theme. */
 .mark { display: block; width: 32px; height: 32px; flex: none; }
+/* The logo is one file, logo.svg, so a new one is a file swap. */
+.logo { display: block; width: 34px; height: 34px; flex: none; border-radius: 9px;
+  object-fit: contain; }
+.logo-lg { width: 48px; height: 48px; border-radius: 12px; }
+.wordmark { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.brand > .wordmark { font-size: 17px; }
+/* The orange of the star in the logo. */
+.wordmark-plus { color: #FF5A1F; margin-left: 1px; }
+.brand-divider { width: 1px; align-self: stretch; background: var(--border); margin: 2px 2px; }
 .mark svg { display: block; width: 100%; height: 100%; }
 .mark-bg { fill: var(--accent); }
 /* The surface colour, so the bars read light on blue in daylight and dark on
@@ -108,7 +143,8 @@ p { margin: 0 0 10px; }
 /* tabs */
 .tabs {
   display: flex; gap: 2px; padding: 0 20px; background: var(--surface);
-  border-bottom: 1px solid var(--border); position: sticky; top: 53px; z-index: 19;
+  border-bottom: 1px solid var(--border); position: sticky;
+  top: calc(53px + env(safe-area-inset-top, 0px)); z-index: 19;
   overflow-x: auto;
 }
 .tab {
@@ -123,7 +159,8 @@ p { margin: 0 0 10px; }
 .tab:hover { color: var(--text); }
 .tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
 
-main { padding: 20px; max-width: 1500px; margin: 0 auto; }
+main { padding: 20px max(20px, env(safe-area-inset-right, 0px)) 20px max(20px, env(safe-area-inset-left, 0px));
+  max-width: 1500px; margin: 0 auto; }
 .view { display: none; }
 .view.is-active { display: block; }
 .view-head {
@@ -135,6 +172,7 @@ main { padding: 20px; max-width: 1500px; margin: 0 auto; }
 /* buttons */
 .btn {
   appearance: none; font: inherit; font-weight: 500; cursor: pointer;
+  white-space: nowrap;
   border-radius: var(--radius); padding: 7px 13px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
 }
@@ -255,7 +293,7 @@ th.auto-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -
 table.is-short tr.row-more { display: none; }
 .table-more { display: flex; justify-content: center; margin: 8px 0 4px; }
 .table-more .btn { color: var(--accent); font-weight: 600; }
-.row-actions { display: flex; gap: 6px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A cell that is display:flex stops being a cell and spills out of the row. */
 td.row-actions { display: table-cell; white-space: nowrap; }
 td.row-actions > * + * { margin-left: 6px; }
@@ -498,6 +536,45 @@ tr.clickable:hover { background: var(--accent-soft); }
 td.spark-cell { width: 130px; min-width: 120px; }
 td.spark-cell .sparkline { width: 120px; height: 26px; }
 
+/* -- the team in formation ------------------------------------------------ */
+.formation-panel { overflow: hidden; }
+.formation-key { justify-content: flex-end; }
+.formation-wrap .chart-scroll { margin: 4px -6px 0; }
+.formation { width: 100%; max-height: 560px; }
+.formation .plane { fill: var(--accent-soft); stroke: var(--border); stroke-width: 1.5; }
+.formation .plane-grid line { stroke: var(--accent); stroke-opacity: .14; stroke-width: 1; }
+.formation .row-label { fill: var(--muted); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; }
+.formation .link { stroke: var(--accent); stroke-opacity: .45; stroke-width: 2.5; fill: none;
+  stroke-linecap: round; }
+.formation .lane-line { stroke: var(--accent); stroke-opacity: .35; stroke-width: 1.5;
+  stroke-dasharray: 6 6; }
+.formation .lane-label { fill: var(--accent); font-size: 13px; font-weight: 600; }
+.formation .shadow { fill: #000; opacity: .12; }
+.formation .ring-track { fill: var(--surface); stroke: var(--surface-2); stroke-width: 5; }
+.formation .ring { fill: none; stroke-width: 5; stroke-linecap: round; stroke: var(--muted); }
+.formation .ring-ok { stroke: var(--ok); }
+.formation .ring-warn { stroke: var(--warn); }
+.formation .ring-bad { stroke: var(--bad); }
+.formation .disc { stroke: var(--surface); stroke-width: 2; }
+.formation .initials { fill: #fff; font-weight: 700; pointer-events: none; }
+.formation .person-name { fill: var(--text); font-size: 13px; font-weight: 600;
+  paint-order: stroke; stroke: var(--accent-soft); stroke-width: 4px; stroke-linejoin: round; }
+.formation .person-caption { font-size: 12px; font-weight: 600; fill: var(--muted);
+  paint-order: stroke; stroke: var(--accent-soft); stroke-width: 4px; stroke-linejoin: round;
+  font-variant-numeric: tabular-nums; }
+.formation .person-caption.v-ok { fill: var(--ok); }
+.formation .person-caption.v-warn { fill: var(--warn); }
+.formation .person-caption.v-bad { fill: var(--bad); }
+.formation .pickable { cursor: pointer; }
+.formation .pickable:hover .disc, .formation .pickable:focus .disc { filter: brightness(1.12); }
+.formation .pickable:focus { outline: none; }
+.formation .pickable:focus .ring-track { stroke: var(--accent); }
+.ring-swatch { border-radius: 50%; background: none; border: 3px solid var(--muted); }
+.ring-swatch.ring-ok { border-color: var(--ok); }
+.ring-swatch.ring-warn { border-color: var(--warn); }
+.ring-swatch.ring-bad { border-color: var(--bad); }
+
 .summary-grid { display: grid; gap: 18px; margin-bottom: 4px;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
 .summary-grid:empty { display: none; }
@@ -571,17 +648,105 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
 
 /* -- phones -------------------------------------------------------------- */
 @media (max-width: 700px) {
-  main { padding: 16px; }
+  main { padding: 16px max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px)); }
   /* The bar wraps under the unit's name rather than sitting on top of it, and
      neither bar sticks: two stuck rows would leave little of the page. */
-  .topbar { flex-wrap: wrap; padding: 10px 16px; position: static; }
+  .topbar { flex-wrap: wrap; position: static;
+    padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px)); }
   .topbar-actions { flex: 1 1 100%; flex-wrap: wrap; }
   .brand-text p { max-width: 70vw; }
   .tabs { position: static; padding: 0 8px; }
   .tab { padding: 10px 10px; }
   /* A chart keeps a readable size and scrolls inside its panel instead. */
   .chart-scroll .chart { min-width: 560px; }
+  /* The formation is wide; on a phone it scrolls, with names large enough to read. */
+  .chart-scroll .formation { min-width: 640px; }
+  .formation .person-name, .formation .lane-label { font-size: 17px; }
+  .formation .person-caption { font-size: 15px; }
+  .formation .row-label { font-size: 14px; }
   .panel { padding: 14px; }
+}
+
+/* -- in the pocket: the tabs along the bottom on a phone ------------------ */
+/* pocket.js builds the bar from the tabs; it only shows on a narrow screen. */
+.thumb-bar, .thumb-sheet { display: none; }
+@media (max-width: 700px) {
+  body.has-thumb-bar { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+  body.has-thumb-bar .tabs { display: none; }
+  /* The top bar keeps the unit's name and whether it is saved; its buttons
+     move under More, where a thumb reaches them. */
+  body.has-thumb-bar .topbar { flex-wrap: nowrap; position: sticky; }
+  body.has-thumb-bar .topbar-actions { flex: none; }
+  body.has-thumb-bar .topbar-actions > :not(#save-state) { display: none; }
+  body.has-thumb-bar .brand > .wordmark,
+  body.has-thumb-bar .brand-divider { display: none; }
+  body.has-thumb-bar .toasts { left: 12px; right: 12px;
+    bottom: calc(78px + env(safe-area-inset-bottom, 0px)); }
+  body.has-thumb-bar .sticky-foot { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  body.thumb-sheet-open { overflow: hidden; }
+
+  .thumb-bar:not([hidden]) {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 46;
+    padding: 5px max(6px, env(safe-area-inset-right, 0px))
+      calc(5px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 18px rgba(16, 24, 40, .07);
+  }
+  .thumb-bar button {
+    appearance: none; border: 0; background: none; font: inherit; cursor: pointer;
+    color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .01em;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; min-height: 56px; padding: 4px 2px; border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-bar button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .thumb-bar .tab-icon { width: 22px; height: 22px; opacity: 1; box-sizing: content-box;
+    padding: 4px 16px; border-radius: 999px; transition: background-color .15s; }
+  .thumb-bar button.is-active { color: var(--accent); }
+  .thumb-bar button.is-active .tab-icon { background: var(--accent-soft); }
+  .thumb-bar button:active .tab-icon { background: var(--surface-2); }
+
+  .thumb-sheet:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 45; }
+  .thumb-sheet-backdrop { position: absolute; inset: 0; background: rgba(10, 14, 20, .45);
+    animation: thumb-fade .18s ease-out; }
+  .thumb-sheet-panel {
+    position: absolute; left: 0; right: 0; bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100% - 120px); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--surface); border-radius: 18px 18px 0 0;
+    padding: 6px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+    box-shadow: 0 -12px 40px rgba(10, 14, 20, .25);
+    animation: thumb-up .2s ease-out;
+  }
+  .thumb-sheet-grip { width: 38px; height: 4px; border-radius: 4px; background: var(--border);
+    margin: 4px auto 12px; }
+  .thumb-sheet-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px; margin-bottom: 10px; }
+  .thumb-tile {
+    appearance: none; font: inherit; cursor: pointer; color: var(--text);
+    background: var(--surface-2); border: 1px solid transparent; border-radius: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 14px 4px 11px; font-size: 12.5px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-tile .tab-icon { width: 24px; height: 24px; opacity: 1; color: var(--accent); }
+  .thumb-tile.is-active { border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); }
+  .thumb-sheet-list { display: flex; flex-direction: column; }
+  .thumb-sheet-row {
+    appearance: none; font: inherit; cursor: pointer; text-align: left; color: var(--text);
+    background: none; border: 0; border-top: 1px solid var(--border);
+    padding: 14px 4px; font-size: 15px; text-decoration: none; display: block; width: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .thumb-install { color: var(--accent); font-weight: 600; }
+  .thumb-sheet-hint { margin: 0 4px 8px; color: var(--muted); font-size: 13px; }
+}
+@keyframes thumb-up { from { transform: translateY(24px); opacity: 0; } }
+@keyframes thumb-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .thumb-sheet-panel, .thumb-sheet-backdrop { animation: none; }
 }
 
 /* -- print / save as PDF ------------------------------------------------- */
@@ -590,8 +755,11 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
 @media print {
   /* Print the report and nothing else: no chrome, no navigation, no controls. */
   .topbar, .tabs, .no-print, .toasts, .modal-backdrop, #chooser,
+  .thumb-bar, .thumb-sheet,
   #view-overview, #view-timesheets, #view-projects, #view-reference { display: none !important; }
   body { background: #fff; color: #000; }
+  body::before, body::after, html::before { display: none; }
+  body { padding-top: 0; padding-bottom: 0; }
   main { padding: 0; max-width: none; }
   .view { display: none; }
   .view.is-active { display: block; }
@@ -733,6 +901,8 @@ tr.row-done .task-name { text-decoration: line-through; }
 /* -- signing in ----------------------------------------------------------- */
 .login-page { display: grid; place-items: center; min-height: 100vh;
   padding: 24px; }
+.login-page::before { opacity: .14; }
+.login-page::after { background: linear-gradient(to bottom, var(--bg) 15%, transparent 60%); }
 .login-card { background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 26px 28px;
   width: 100%; max-width: 420px; }
