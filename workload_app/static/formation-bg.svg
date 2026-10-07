@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <!-- The page's backdrop: a plane with a team on it, used as a mask and
+       tilted into perspective by app.css. Only its shape matters. -->
+  <g stroke="#000" stroke-width="2" fill="none">
+    <path d="M0 0H1200M0 100H1200M0 200H1200M0 300H1200M0 400H1200M0 500H1200M0 600H1200M0 700H1200M0 800H1200"/>
+    <path d="M0 0V800M100 0V800M200 0V800M300 0V800M400 0V800M500 0V800M600 0V800M700 0V800M800 0V800M900 0V800M1000 0V800M1100 0V800M1200 0V800"/>
+  </g>
+  <g stroke="#000" stroke-width="5" fill="none" stroke-linecap="round">
+    <path d="M500 160 L330 360 L250 600 M700 160 L870 360 L950 600 M330 360 L600 360 L870 360 M600 360 L600 600 M500 160 L700 160 M250 600 L600 600 L950 600"/>
+  </g>
+  <g fill="#000">
+    <circle cx="500" cy="160" r="22"/>
+    <circle cx="700" cy="160" r="22"/>
+    <circle cx="330" cy="360" r="26"/>
+    <circle cx="600" cy="360" r="26"/>
+    <circle cx="870" cy="360" r="26"/>
+    <circle cx="250" cy="600" r="30"/>
+    <circle cx="600" cy="600" r="30"/>
+    <circle cx="950" cy="600" r="30"/>
+  </g>
+</svg>

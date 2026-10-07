@@ -146,7 +146,7 @@ class TestStaticAndRouting:
         with get(server, "/") as response:
             assert response.status == 200
             body = response.read()
-            assert b"Workload" in body and b"view-overview" in body
+            assert b"Selecao+" in body and b"view-overview" in body
 
     @pytest.mark.parametrize("path", ["/app.css", "/app.js"])
     def test_assets_are_served(self, server, path):
