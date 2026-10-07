@@ -1571,9 +1571,9 @@ async function renderNightly() {
   setChildren(box, el('div', { class: stale ? 'msg msg-warn' : 'msg msg-ok' },
     `${stale ? 'Nothing new since' : 'Last import'} ${at}: ${fmt.int(last.rows)} rows from `
     + `${(last.people || []).length} people, up to ${fmt.date(last.last_date)}.`
-    + (stale ? ' Check that your PC was on.' : ''),
+    + (stale ? ' Check that your PC has been on and connected to Dar.' : ''),
     (last.late || []).length
-      ? el('div', { class: 'small' }, `No fresh export from ${last.late.join(', ')}: was their PC off?`)
+      ? el('div', { class: 'small' }, `No fresh export from ${last.late.join(', ')}: their PC has not been on the Dar network.`)
       : null));
 }
 
