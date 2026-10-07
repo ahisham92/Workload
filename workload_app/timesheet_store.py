@@ -30,6 +30,40 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .model import stored_date
 
+#: Bumped by every write to the unit's file, by whichever worker makes it, so
+#: another worker -- or this one -- knows what it read before is out of date.
+REVISION_KEY = "unit.revision"
+#: Bumped by the database itself whenever a timesheet row is written.
+ROWS_REVISION_KEY = "unit.rows_revision"
+
+
+def note_change(db: sqlite3.Connection) -> bool:
+    """Bump the revision, in the same transaction, if ``db`` changed anything."""
+    if not db.total_changes:
+        return False
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (?, '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        (REVISION_KEY,))
+    return True
+
+
+class Row(dict):
+    """One timesheet row as the calculations see it, and cannot change.
+
+    The rows are read once per revision and shared by every figure worked out
+    from them; a calculation that wrote into one would quietly change the
+    next one's answer, so it is refused instead.
+    """
+
+    __slots__ = ()
+
+    def _refuse(self, *args, **kwargs):
+        raise TypeError("timesheet rows are shared; copy one with dict(row) to change it")
+
+    __setitem__ = __delitem__ = update = pop = popitem = setdefault = clear = _refuse
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rows (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,7 +185,16 @@ CREATE TABLE IF NOT EXISTS slots (
     end        TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-"""
+""" + "".join(f"""
+-- Counts the writes to the timesheet rows alone, whoever makes them, so the
+-- rows read before can be kept through every other kind of change.
+CREATE TRIGGER IF NOT EXISTS rows_written_{event.lower()} AFTER {event} ON rows
+BEGIN
+    INSERT OR REPLACE INTO settings (key, value) VALUES ('{ROWS_REVISION_KEY}',
+        COALESCE((SELECT CAST(value AS INTEGER) FROM settings
+                  WHERE key = '{ROWS_REVISION_KEY}'), 0) + 1);
+END;
+""" for event in ("INSERT", "UPDATE", "DELETE"))
 
 #: Columns added after the first stores were made, and so added to those on
 #: open.  A store from before them simply has them blank.
@@ -177,6 +220,10 @@ class TimesheetStore:
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        #: Set by the unit this store belongs to: ``memo(key, build)`` keeps a
+        #: value until the next write, and ``changed()`` is told of each write.
+        self.memo = None
+        self.changed = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(SCHEMA)
@@ -192,11 +239,15 @@ class TimesheetStore:
         # More than one web worker may have this open at once.
         db.execute("PRAGMA journal_mode = WAL")
         db.execute("PRAGMA busy_timeout = 15000")
+        wrote = False
         try:
             yield db
+            wrote = note_change(db)
             db.commit()
         finally:
             db.close()
+        if wrote and self.changed is not None:
+            self.changed()
 
     # -- writing ---------------------------------------------------------
     def replace(self, person: str, rows: Sequence[Dict[str, Any]], *,
@@ -256,28 +307,38 @@ class TimesheetStore:
 
     # -- reading ---------------------------------------------------------
     def all_rows(self) -> List[Dict[str, Any]]:
-        """Every row, shaped the way the calculations expect them."""
+        """Every row, shaped the way the calculations expect them.
+
+        Read once until the next write when the store belongs to a unit; the
+        rows themselves cannot be changed (see :class:`Row`).
+        """
+        if self.memo is None:
+            return list(self._read_rows())
+        return list(self.memo("rows", self._read_rows))
+
+    def _read_rows(self) -> Tuple[Row, ...]:
         with self._connect() as db:
+            db.row_factory = None
             rows = db.execute(
                 "SELECT person, job_type, job_number, job_name, full_name, "
                 "day, phase, regular_hours, overtime_hours, hours, "
                 "deliverable, job_status, grade FROM rows"
             ).fetchall()
-        return [{
-            "engineer": row["person"],
-            "job_type": row["job_type"],
-            "job_number": row["job_number"],
-            "job_name": row["job_name"],
-            "full_name": row["full_name"],
-            "date": stored_date(row["day"]),
-            "phase": row["phase"],
-            "regular_hours": row["regular_hours"],
-            "overtime_hours": row["overtime_hours"],
-            "hours": row["hours"],
-            "deliverable": row["deliverable"],
-            "job_status": row["job_status"],
-            "grade": row["grade"],
-        } for row in rows]
+        dates: Dict[Any, Optional[_dt.date]] = {}
+        out = []
+        for (person, job_type, job_number, job_name, full_name, day, phase,
+             regular, overtime, hours, deliverable, job_status, grade) in rows:
+            # A few hundred distinct days stand for thousands of rows.
+            try:
+                date = dates[day]
+            except KeyError:
+                date = dates[day] = stored_date(day)
+            out.append(Row(
+                engineer=person, job_type=job_type, job_number=job_number,
+                job_name=job_name, full_name=full_name, date=date, phase=phase,
+                regular_hours=regular, overtime_hours=overtime, hours=hours,
+                deliverable=deliverable, job_status=job_status, grade=grade))
+        return tuple(out)
 
     def rows_for(self, person: str) -> List[Dict[str, Any]]:
         return [row for row in self.all_rows() if row["engineer"] == person]

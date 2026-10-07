@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import base64
 import functools
+import gzip
+import hashlib
 import json
 import mimetypes
+import re
 import threading
 import traceback
 import uuid
@@ -65,6 +68,9 @@ class Request:
     site: Optional[Dict[str, Any]] = None
     #: Where Workload is mounted (``/workload``), or empty at the root.
     mount: str = ""
+    #: The browser's ``Accept-Encoding`` and ``If-None-Match`` headers.
+    accept_encoding: str = ""
+    if_none_match: str = ""
 
 
 @dataclass
@@ -78,6 +84,93 @@ class Response:
     def json(cls, status: int, data: Any, headers=None) -> "Response":
         return cls(status, json.dumps(data, default=str).encode("utf-8"),
                    headers=list(headers or []))
+
+
+# -- delivery ---------------------------------------------------------------
+
+#: Only these are worth compressing, and only when bigger than this.
+_COMPRESSIBLE = ("application/json", "text/", "application/javascript",
+                 "image/svg+xml", "application/manifest+json")
+_COMPRESS_FROM = 1024
+#: The page's own scripts and styles, as the HTML names them.
+_ASSET_REF = re.compile(r'((?:src|href)=")([\w./-]+\.(?:js|css))(")')
+
+
+class _Asset:
+    """One file of the app's own, read once, with its version."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.stamp = _stamp(path)
+        self.body = path.read_bytes()
+        self.version = hashlib.sha256(self.body).hexdigest()[:12]
+        self.etag = f'"{self.version}"'
+        self._page: Optional[bytes] = None
+
+    def versioned_page(self) -> bytes:
+        """The HTML, with ``?v=<version>`` on each script and style it names,
+        so a browser keeps them until they change."""
+        if self._page is None:
+            def versioned(match: "re.Match") -> str:
+                ref = (STATIC_DIR / match.group(2)).resolve()
+                if not str(ref).startswith(str(STATIC_DIR.resolve())) or not ref.is_file():
+                    return match.group(0)
+                return (f"{match.group(1)}{match.group(2)}"
+                        f"?v={_static(ref).version}{match.group(3)}")
+            self._page = _ASSET_REF.sub(
+                versioned, self.body.decode("utf-8")).encode("utf-8")
+        return self._page
+
+
+_assets: Dict[Path, _Asset] = {}
+_assets_lock = threading.Lock()
+
+
+def _stamp(path: Path) -> Tuple[int, int]:
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _static(path: Path) -> _Asset:
+    """A static file, re-read only when it changes on disk (a deploy)."""
+    with _assets_lock:
+        asset = _assets.get(path)
+    if asset is None or asset.stamp != _stamp(path):
+        asset = _Asset(path)
+        with _assets_lock:
+            _assets[path] = asset
+            # A page's versions follow the files it names.
+            for other in _assets.values():
+                other._page = None
+    return asset
+
+
+#: Compressed bodies of static files, by their content, so each is
+#: compressed once.
+_gzipped: "OrderedDict[str, bytes]" = OrderedDict()
+
+
+def _compressed(response: Response, request: Request) -> Response:
+    """The response gzipped, when the browser takes it and it is worth it."""
+    if (len(response.body) < _COMPRESS_FROM
+            or "gzip" not in request.accept_encoding.lower()
+            or not response.content_type.startswith(_COMPRESSIBLE)
+            or any(name.lower() == "content-encoding" for name, _ in response.headers)):
+        return response
+    etag = next((value for name, value in response.headers
+                 if name.lower() == "etag"), None)
+    body = _gzipped.get(etag) if etag else None
+    if body is None:
+        body = gzip.compress(response.body, compresslevel=6, mtime=0)
+        if etag:
+            with _assets_lock:
+                _gzipped[etag] = body
+                while len(_gzipped) > 64:
+                    _gzipped.popitem(last=False)
+    response.body = body
+    response.headers = list(response.headers) + [
+        ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+    return response
 
 
 @dataclass
@@ -205,7 +298,7 @@ class WorkloadApp:
             message = f"{type(exc).__name__}: {exc}"
             response = Response.json(HTTPStatus.INTERNAL_SERVER_ERROR,
                                      {"error": message, "errors": [message]})
-        return self._with_cookies(response, ctx)
+        return _compressed(self._with_cookies(response, ctx), request)
 
     def _handle_api(self, request: Request, ctx: Context) -> Response:
         handler, captured, access = self._match(request.method, request.path)
@@ -260,8 +353,21 @@ class WorkloadApp:
             return Response(HTTPStatus.NOT_FOUND, b"Not found",
                             "text/plain; charset=utf-8")
         content_type, _ = mimetypes.guess_type(str(target))
-        return Response(HTTPStatus.OK, target.read_bytes(),
-                        content_type or "application/octet-stream")
+        content_type = content_type or "application/octet-stream"
+        asset = _static(target)
+        if target.suffix == ".html":
+            # A page depends on who is asking, so it is never kept; the
+            # scripts and styles it names carry their version, so they are.
+            return Response(HTTPStatus.OK, asset.versioned_page(), content_type)
+        # sw.js must be checked each time, or a phone keeps an old worker.
+        lasting = (request.query.get("v") == [asset.version]
+                   and target.name != "sw.js")
+        headers = [("ETag", asset.etag), ("Cache-Control",
+                   "public, max-age=31536000, immutable" if lasting
+                   else "no-cache")]
+        if asset.etag in [tag.strip() for tag in request.if_none_match.split(",")]:
+            return Response(HTTPStatus.NOT_MODIFIED, b"", content_type, headers)
+        return Response(HTTPStatus.OK, asset.body, content_type, headers)
 
     def _match(self, method: str, path: str):
         wanted = [p for p in path.strip("/").split("/") if p != ""]
