@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS rows (
     regular_hours   REAL NOT NULL DEFAULT 0,
     overtime_hours  REAL NOT NULL DEFAULT 0,
     hours           REAL NOT NULL DEFAULT 0,
+    deliverable     TEXT NOT NULL DEFAULT '',   -- what the phase is called
+    job_status      TEXT NOT NULL DEFAULT '',
+    grade           TEXT NOT NULL DEFAULT '',
     source          TEXT NOT NULL DEFAULT '',   -- the file it came from
     imported_at     TEXT NOT NULL
 );
@@ -76,7 +79,16 @@ CREATE INDEX IF NOT EXISTS people_team ON people(team_id);
 
 #: The columns a row is made of, in the order ``add`` expects them.
 FIELDS = ("person", "job_type", "job_number", "job_name", "full_name", "day",
-          "phase", "regular_hours", "overtime_hours", "hours", "source")
+          "phase", "regular_hours", "overtime_hours", "hours", "deliverable",
+          "job_status", "grade", "source")
+
+#: Columns added after the first stores were made, and so added to those on
+#: open.  A store from before them simply has them blank.
+_LATER_COLUMNS = {
+    "deliverable": "TEXT NOT NULL DEFAULT ''",
+    "job_status": "TEXT NOT NULL DEFAULT ''",
+    "grade": "TEXT NOT NULL DEFAULT ''",
+}
 
 
 #: "leave this column alone", so a save can change one field without being
@@ -109,6 +121,10 @@ class TimesheetStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(SCHEMA)
+            have = {row["name"] for row in db.execute("PRAGMA table_info(rows)")}
+            for column, kind in _LATER_COLUMNS.items():
+                if column not in have:
+                    db.execute(f"ALTER TABLE rows ADD COLUMN {column} {kind}")
 
     @contextmanager
     def _connect(self):
@@ -154,13 +170,17 @@ class TimesheetStore:
                 float(row.get("regular_hours") or 0.0),
                 float(row.get("overtime_hours") or 0.0),
                 float(row.get("hours") or 0.0),
+                str(row.get("deliverable") or ""),
+                str(row.get("job_status") or ""),
+                str(row.get("grade") or ""),
                 str(row.get("source") or source),
                 stamp,
             ))
         db.executemany(
             "INSERT INTO rows (person, job_type, job_number, job_name, "
             "full_name, day, phase, regular_hours, overtime_hours, hours, "
-            "source, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "deliverable, job_status, grade, source, imported_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             payload)
         return len(payload)
 
@@ -180,7 +200,8 @@ class TimesheetStore:
         with self._connect() as db:
             rows = db.execute(
                 "SELECT person, job_type, job_number, job_name, full_name, "
-                "day, phase, regular_hours, overtime_hours, hours FROM rows"
+                "day, phase, regular_hours, overtime_hours, hours, "
+                "deliverable, job_status, grade FROM rows"
             ).fetchall()
         return [{
             "engineer": row["person"],
@@ -193,6 +214,9 @@ class TimesheetStore:
             "regular_hours": row["regular_hours"],
             "overtime_hours": row["overtime_hours"],
             "hours": row["hours"],
+            "deliverable": row["deliverable"],
+            "job_status": row["job_status"],
+            "grade": row["grade"],
         } for row in rows]
 
     def rows_for(self, person: str) -> List[Dict[str, Any]]:
@@ -216,6 +240,13 @@ class TimesheetStore:
         with self._connect() as db:
             return [row["person"] for row in db.execute(
                 "SELECT DISTINCT person FROM rows ORDER BY person")]
+
+    def names_by_full_name(self) -> Dict[str, str]:
+        """Whose rows each full name on an export has gone to so far."""
+        with self._connect() as db:
+            return {row["full_name"]: row["person"] for row in db.execute(
+                "SELECT full_name, person, COUNT(*) AS n FROM rows "
+                "WHERE full_name <> '' GROUP BY full_name, person ORDER BY n")}
 
     def date_range(self) -> Tuple[Optional[_dt.date], Optional[_dt.date]]:
         with self._connect() as db:
