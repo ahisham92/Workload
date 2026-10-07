@@ -474,6 +474,8 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
 | `workload_app/static/tables.js` | Every table sorts by its headings and starts short |
+| `workload_app/static/pocket.js` | On a phone: the tabs as a bar along the bottom, and adding the app to the home screen |
+| `workload_app/static/manifest.json`, `sw.js`, `offline.html` | What lets a phone keep Selecao+ on its home screen and open it full screen |
 | `workload_app/server.py` | The local HTTP transport |
 | `workload_app/wsgi.py` | The transport a host uses (PythonAnywhere) |
 | `workload_app/admin.py` | Making accounts from a console |

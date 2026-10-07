@@ -165,6 +165,24 @@ class TestStaticAndRouting:
             assert error.code in (400, 404)
 
 
+class TestOnAPhone:
+    def test_a_phone_can_keep_it_on_the_home_screen(self, empty_server):
+        # The manifest, its icons and the worker are fetched before anyone
+        # signs in, so the sign-in page can be installed too.
+        with urllib.request.urlopen(str(empty_server) + "/manifest.json") as response:
+            manifest = json.load(response)
+        assert manifest["name"] == "Selecao+"
+        assert manifest["display"] == "standalone"
+        assert any(icon["purpose"] == "maskable" for icon in manifest["icons"])
+        for icon in manifest["icons"]:
+            with urllib.request.urlopen(str(empty_server) + "/" + icon["src"]) as response:
+                assert response.status == 200
+        with urllib.request.urlopen(str(empty_server) + "/sw.js") as response:
+            assert "javascript" in response.headers["Content-Type"]
+        with urllib.request.urlopen(str(empty_server) + "/offline.html") as response:
+            assert b"No connection" in response.read()
+
+
 class TestReads:
     def test_status(self, server):
         status, body = call(server, "/api/status")
