@@ -71,6 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
     units.add_argument("username", nargs="?", default=None,
                        help="omit for every account")
 
+    link = sub.add_parser(
+        "link", help="tie an account to its owner's sign-in on the surrounding "
+                     "site, when Workload is a tab of one")
+    link.add_argument("username")
+    link.add_argument("site_id", nargs="?", default=None,
+                      help="the site's identifier for that person; leave out "
+                           "to unlink")
+    link.add_argument("--login", default=None,
+                      help="what they sign in to the site with, for show")
+
     checker = sub.add_parser(
         "check", help="is this installation ready to serve, and what should "
                       "the host's WSGI file say?")
@@ -121,6 +131,34 @@ def _list(db: Accounts, data_dir: Path, args) -> int:
         marker = "admin" if user["is_admin"] else "     "
         print(f"{user['username']:<{width}}  {user['role']:<7}  {marker}  "
               f"{user['units'] or 0} unit(s)  last seen {user['last_seen'] or 'never'}")
+    return 0
+
+
+def _link(db: Accounts, data_dir: Path, args) -> int:
+    user = next((u for u in db.users() if u["username"] == args.username), None)
+    if user is None:
+        print(f"error: no account called {args.username}", file=sys.stderr)
+        return 2
+    if args.site_id:
+        # Somebody who opened the Workload tab before this was run was given
+        # an empty account of their own. It is in the way.
+        placeholder = db.site_user(args.site_id)
+        if placeholder and placeholder["id"] != user["id"]:
+            db.link_site(placeholder["id"], None)
+            if db.remove_if_empty(placeholder["id"]):
+                storage.remove_user_files(data_dir, placeholder["id"])
+            else:
+                db.link_site(placeholder["id"], args.site_id,
+                             placeholder["site_login"])
+                print(f"error: that sign-in already has units here as "
+                      f"{placeholder['username']}.", file=sys.stderr)
+                return 2
+    linked = db.link_site(user["id"], args.site_id, args.login)
+    if linked["site_key"]:
+        print(f"{linked['username']} is now reached by signing in to the site"
+              + (f" as {linked['site_login']}." if linked["site_login"] else "."))
+    else:
+        print(f"{linked['username']} is no longer linked to a site sign-in.")
     return 0
 
 
@@ -296,6 +334,7 @@ COMMANDS = {
     "add": _add,
     "list": _list,
     "password": _password,
+    "link": _link,
     "remove": _remove,
     "import": _import,
     "check": _check,

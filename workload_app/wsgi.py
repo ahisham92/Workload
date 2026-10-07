@@ -21,6 +21,9 @@ from urllib.parse import parse_qs
 from .app import Request, Response, WorkloadApp, parse_cookies
 from .service import MAX_UPLOAD_BYTES
 
+#: Where a site that mounts Workload says who is asking. See ``Request.site``.
+SITE_KEY = "workload.site"
+
 #: One application per worker process.  Each holds its own parsed workbooks and
 #: re-reads a file whenever another worker has written it.
 _app: Optional[WorkloadApp] = None
@@ -69,6 +72,7 @@ def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
 
     # Behind the host's proxy the connection to the browser is the one that
     # matters: it decides whether the session cookie may be marked Secure.
+    site = environ.get(SITE_KEY)
     forwarded = environ.get("HTTP_X_FORWARDED_PROTO", "").split(",")[0].strip()
     secure = (forwarded or environ.get("wsgi.url_scheme", "http")).lower() == "https"
 
@@ -79,6 +83,11 @@ def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
         body=body,
         cookies=parse_cookies(environ.get("HTTP_COOKIE")),
         secure=secure,
+        # Set by a site that mounts Workload and has already signed the person
+        # in. A browser cannot set it: everything a request brings arrives
+        # under HTTP_*, and this key is not one of those.
+        site=site if isinstance(site, dict) and site.get("id") not in (None, "") else None,
+        mount=str(environ.get("SCRIPT_NAME") or "").rstrip("/"),
     )
 
 

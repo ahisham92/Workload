@@ -66,8 +66,13 @@ function toned(value, kind, format = num) {
   return el('span', { class: cls ? `v-${cls}` : '' }, format(value));
 }
 
+/* Where this page is served from. At an address of its own that is the root
+   and BASE is empty; as one tab of a larger site it is "/workload", and every
+   request below has to be made under it rather than at the site's root. */
+const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -75,7 +80,7 @@ async function api(path, options = {}) {
   let payload = {};
   try { payload = await response.json(); } catch { /* empty body */ }
   if (!response.ok) {
-    if (response.status === 401) window.location.href = '/login.html';
+    if (response.status === 401) window.location.href = `${BASE}/login.html`;
     const error = new Error(payload.error || `Request failed (${response.status})`);
     error.errors = payload.errors || [error.message];
     throw error;
@@ -334,8 +339,16 @@ async function submitPassword() {
 
 (async function start() {
   $('#btn-signout').addEventListener('click', async () => {
+    if (state.site) {
+      try {
+        if (state.site.logout) await fetch(state.site.logout, { method: 'POST' });
+      } finally {
+        window.location.href = state.site.home;
+      }
+      return;
+    }
     try { await api('/api/auth/logout', { method: 'POST' }); } finally {
-      window.location.href = '/login.html';
+      window.location.href = `${BASE}/login.html`;
     }
   });
   $('#btn-print').addEventListener('click', () => window.print());
@@ -356,8 +369,17 @@ async function submitPassword() {
 
   try {
     const who = await api('/api/auth/me');
-    if (!who.user) { window.location.href = '/login.html'; return; }
+    if (!who.user) { window.location.href = `${BASE}/login.html`; return; }
     state.me = who.user;
+    state.site = who.site || null;
+    if (state.site) {
+      // The password is the site's, and so is the way back to everything else.
+      $('#btn-password').hidden = true;
+      const home = $('#site-home');
+      home.hidden = false;
+      home.href = state.site.home;
+      home.textContent = `← ${state.site.label}`;
+    }
     await load();
   } catch (error) {
     document.body.prepend(el('div', { class: 'msg msg-bad', style: 'margin:20px' },

@@ -10,6 +10,11 @@ The rule that makes the site private is short enough to state in one line:
 every route below is either public, or resolves a session cookie to an account
 and works only inside that account's own row of the database and its own folder
 of workbooks.
+
+**As one tab of a larger site.**  Mounted inside another site, Workload does no
+signing in of its own: the site hands over who is asking (``Request.site``) and
+that is the account.  Nothing else about the rule above changes -- the account
+is found a different way, and then sees exactly what it always did.
 """
 
 from __future__ import annotations
@@ -52,6 +57,13 @@ class Request:
     body: Dict[str, Any] = field(default_factory=dict)
     cookies: Dict[str, str] = field(default_factory=dict)
     secure: bool = False
+    #: Who the surrounding site says is asking, when Workload is mounted in
+    #: one: ``{"id", "login", "name", "home", "label", "logout"}`` -- the
+    #: site's own identifier for them, and what they sign in with.  Only the code
+    #: that mounts Workload can set this -- a browser cannot.
+    site: Optional[Dict[str, Any]] = None
+    #: Where Workload is mounted (``/workload``), or empty at the root.
+    mount: str = ""
 
 
 @dataclass
@@ -74,6 +86,7 @@ class Context:
     service: Optional[WorkloadService] = None
     token: Optional[str] = None
     secure: bool = False
+    site: Optional[Dict[str, Any]] = None
     set_cookie: Optional[str] = None
     clear_cookie: bool = False
 
@@ -98,6 +111,10 @@ class WorkloadApp:
         self.autosave = autosave
         #: user id -> their open workbook, most recently used last.
         self._services: "OrderedDict[int, WorkloadService]" = OrderedDict()
+        #: Set by a site that mounts Workload: a call returning the people who
+        #: can sign in to it, as ``[{"id", "login", "name"}]``.  Access to a
+        #: unit is given by picking one of them.
+        self.site_people: Optional[Callable[[], List[Dict[str, Any]]]] = None
         self.routes = self._build_routes()
 
     # -- the services one account at a time ------------------------------
@@ -183,6 +200,11 @@ class WorkloadApp:
         if request.method not in {"GET", "HEAD"}:
             raise ApiError(HTTPStatus.METHOD_NOT_ALLOWED, "Method not allowed.")
         self._authenticate(request, ctx)
+        home = (request.mount or "") + "/"
+        if request.site is not None and ctx.user is None:
+            return Response(HTTPStatus.FORBIDDEN,
+                            b"Your sign-in has no email address Workload can use.",
+                            "text/plain; charset=utf-8")
         name = "index.html" if request.path in ("/", "") else request.path.lstrip("/")
         # The app shell is behind the login: an unknown visitor is given the
         # sign-in page and nothing else, and a team member is given their own
@@ -194,7 +216,7 @@ class WorkloadApp:
                 name = "member.html"
         if name == "login.html" and ctx.user is not None:
             return Response(HTTPStatus.SEE_OTHER, b"",
-                            "text/plain; charset=utf-8", [("Location", "/")])
+                            "text/plain; charset=utf-8", [("Location", home)])
         if name == "index.html" and ctx.user and ctx.user["role"] == ROLE_MEMBER:
             name = "member.html"
         target = (STATIC_DIR / name).resolve()
@@ -224,8 +246,51 @@ class WorkloadApp:
         return None, [], "public"
 
     def _authenticate(self, request: Request, ctx: Context) -> None:
+        if request.site is not None:
+            # The site has signed this person in; a cookie of Workload's own
+            # is not consulted at all, so an old one cannot outrank the site.
+            ctx.site = request.site
+            ctx.user = self._site_user(request.site)
+            return
         ctx.token = request.cookies.get(SESSION_COOKIE)
         ctx.user = self.accounts.session_user(ctx.token)
+
+    def _site_user(self, site: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The account for whoever the site says is asking.
+
+        Somebody arriving for the first time is given an account of their own
+        with nothing in it: they can start units, and they can see nobody
+        else's. Somebody a manager has given access to arrives as that team
+        member and sees their own page.
+        """
+        key = site.get("id")
+        login = str(site.get("login") or "").strip()
+        name = str(site.get("name") or "").strip()
+        try:
+            user = self.accounts.site_user(key)
+            if user is None:
+                try:
+                    user = self.accounts.create_site_user(
+                        key, login=login, display_name=name)
+                except AccountError:
+                    # Another worker made it between the look and the insert.
+                    user = self.accounts.site_user(key)
+        except AccountError:
+            return None
+        if user is None:
+            return None
+        if login and user["site_login"] != login:
+            # They sign in with something else now. Same person, same units.
+            self.accounts.set_site_login(user["id"], login)
+            user["site_login"] = login
+        if user["role"] == ROLE_MEMBER and not self.accounts.memberships(user["id"]):
+            # Every unit they were shown has been taken away again. Rather
+            # than leave them at a page with nothing on it for good, they are
+            # an ordinary account once more and may start a unit of their own.
+            self.accounts.set_role(user["id"], ROLE_MANAGER)
+            self._services.pop(user["id"], None)
+            user = self.accounts.user(user["id"])
+        return user
 
     def _with_cookies(self, response: Response, ctx: Context) -> Response:
         if ctx.set_cookie:
@@ -243,6 +308,9 @@ class WorkloadApp:
     # ------------------------------------------------------------------
 
     def login(self, ctx: Context, query, body) -> Dict[str, Any]:
+        if ctx.site is not None:
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "You are signed in through the site already.")
         user = self.accounts.verify(body.get("username", ""),
                                     body.get("password", ""))
         if user is None:
@@ -253,6 +321,9 @@ class WorkloadApp:
         return {"user": user}
 
     def logout(self, ctx: Context, query, body) -> Dict[str, Any]:
+        if ctx.site is not None:
+            # Signing out is the site's to do; the page goes there next.
+            return {"signed_out": False, "logout": ctx.site.get("logout")}
         self.accounts.end_session(ctx.token)
         if ctx.user:
             service = self._services.pop(ctx.user["id"], None)
@@ -263,12 +334,68 @@ class WorkloadApp:
 
     def whoami(self, ctx: Context, query, body) -> Dict[str, Any]:
         """Public, so the login page can ask whether anyone is signed in."""
-        return {
+        answer = {
             "user": ctx.user,
             "any_accounts": self.accounts.user_count() > 0,
         }
+        if ctx.site is not None:
+            if ctx.user:
+                self.accounts.seen(ctx.user["id"])
+            answer["site"] = {
+                "home": ctx.site.get("home") or "/",
+                "label": ctx.site.get("label") or "Home",
+                "logout": ctx.site.get("logout") or "",
+                "login": (ctx.user or {}).get("site_login"),
+            }
+        return answer
+
+    def link_existing(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """Bring an account from before Workload moved into the site.
+
+        Whoever used Workload at its own address has units under a username
+        and password. Typing those once, here, ties that account to the
+        sign-in they use now, and its units are simply there from then on.
+        The files do not move and nothing is copied.
+        """
+        if ctx.site is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is nothing to link here.")
+        old = self.accounts.verify(body.get("username", ""),
+                                   body.get("password", ""))
+        if old is None:
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           "That username and password do not match a "
+                           "Workload account.")
+        current = ctx.user
+        if old["id"] == current["id"]:
+            return {"user": current, "linked": False}
+        if old["site_key"]:
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           "That Workload account already belongs to another "
+                           "sign-in on this site.")
+        if self.accounts.units(current["id"]) \
+                or self.accounts.memberships(current["id"]):
+            raise ApiError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "You already have units here under this sign-in, and two "
+                "accounts cannot be folded into one. Download those units, "
+                "delete them, and try again -- then upload them into the "
+                "account you bring across.")
+        key, login = current["site_key"], current["site_login"]
+        service = self._services.pop(current["id"], None)
+        if service is not None:
+            service.close()
+        self.accounts.link_site(current["id"], None)
+        if self.accounts.remove_if_empty(current["id"]):
+            storage.remove_user_files(self.data_dir, current["id"])
+        user = self.accounts.link_site(old["id"], key, login)
+        ctx.user = user
+        return {"user": user, "linked": True,
+                "units": len(self.accounts.units(user["id"]))}
 
     def change_password(self, ctx: Context, query, body) -> Dict[str, Any]:
+        if ctx.site is not None:
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "Your password is the site's; change it there.")
         if self.accounts.verify(ctx.user["username"],
                                 body.get("current_password", "")) is None:
             raise ApiError(HTTPStatus.FORBIDDEN,
@@ -555,11 +682,30 @@ class WorkloadApp:
 
     def team_access(self, ctx: Context, query, body) -> Dict[str, Any]:
         unit = self._open_unit_or_refuse(ctx)
-        return {
+        answer = {
             "unit": {"id": unit["id"], "name": unit["name"]},
             "members": self.accounts.unit_members(unit["id"]),
             "engineers": ctx.service.workbook.engineer_names(),
         }
+        if ctx.site is not None:
+            mine = ctx.user.get("site_key")
+            answer["site"] = {
+                "people": sorted(
+                    (p for p in self._people().values() if p["id"] != mine),
+                    key=lambda p: (p["name"] or p["login"]).lower()),
+            }
+        return answer
+
+    def _people(self) -> Dict[str, Dict[str, str]]:
+        """Who can sign in to the site, by the site's identifier for them."""
+        out: Dict[str, Dict[str, str]] = {}
+        for person in (self.site_people() if self.site_people else []):
+            key = str(person.get("id") if person.get("id") is not None else "").strip()
+            if key:
+                out[key] = {"id": key,
+                            "login": str(person.get("login") or "").strip(),
+                            "name": str(person.get("name") or "").strip()}
+        return out
 
     def grant_access(self, ctx: Context, query, body) -> Dict[str, Any]:
         """Give one person a read-only account for their own figures."""
@@ -568,6 +714,8 @@ class WorkloadApp:
         if engineer not in ctx.service.workbook.engineer_names():
             raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
                            f"{engineer!r} is not on this unit's team.")
+        if ctx.site is not None:
+            return self._grant_site_access(ctx, unit, engineer, body)
 
         username = str(body.get("username") or "").strip().lower()
         existing = next((u for u in self.accounts.users()
@@ -593,6 +741,50 @@ class WorkloadApp:
                             engineer=engineer, granted_by=ctx.user["id"])
         return {"user": user, "engineer": engineer,
                 "password": password}          # shown once, never stored
+
+    def _grant_site_access(self, ctx: Context, unit: Dict[str, Any],
+                           engineer: str, body) -> Dict[str, Any]:
+        """Give access to somebody who signs in to the site.
+
+        There is no password to hand over: they sign in to the site as they
+        always do, open Workload, and land on their own page.
+        """
+        key = accounts_module.clean_site_key(body.get("person"))
+        if key == ctx.user.get("site_key"):
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           "That is your own sign-in; you already see the "
+                           "whole unit.")
+        known = self._people().get(key)
+        if known is None:
+            raise ApiError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "That is not somebody who can open Workload on this site. Ask "
+                "the administrator to make them an account with Workload "
+                "ticked, then give them access here.")
+        who = known["name"] or known["login"] or engineer
+
+        existing = self.accounts.site_user(key)
+        if existing is None:
+            user = self.accounts.create_site_user(
+                key, login=known["login"], display_name=who, role=ROLE_MEMBER)
+        elif existing["role"] != ROLE_MEMBER:
+            if existing["is_admin"] or self.accounts.units(existing["id"]):
+                raise ApiError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    f"{who} runs units of their own here; an account that "
+                    f"manages units cannot also be given one person's view.")
+            # They opened Workload before anybody had given them anything, so
+            # they were made an empty account of their own. Nothing is lost by
+            # making that account the team member it was meant to be.
+            self._services.pop(existing["id"], None)
+            self.accounts.set_role(existing["id"], ROLE_MEMBER)
+            user = self.accounts.user(existing["id"])
+        else:
+            user = existing
+
+        self.accounts.grant(user_id=user["id"], unit_id=unit["id"],
+                            engineer=engineer, granted_by=ctx.user["id"])
+        return {"user": user, "engineer": engineer, "password": None}
 
     def revoke_access(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
         unit = self._open_unit_or_refuse(ctx)
@@ -663,6 +855,7 @@ class WorkloadApp:
             ("POST", "/api/auth/login", self.login, "public"),
             ("POST", "/api/auth/logout", self.logout, "public"),
             ("POST", "/api/auth/password", self.change_password, "user"),
+            ("POST", "/api/auth/link", self.link_existing, "manager"),
 
             # -- administration
             ("GET", "/api/admin/users", self.list_users, "admin"),
