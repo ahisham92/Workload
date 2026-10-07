@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Create and manage the accounts that can sign in.",
     )
     parser.add_argument("--data-dir", type=Path, default=None,
-                        help="where accounts and workbooks live "
+                        help="where accounts and units live "
                              "(default: $WORKLOAD_DATA_DIR, else ./instance)")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -50,21 +50,23 @@ def build_parser() -> argparse.ArgumentParser:
     password.add_argument("username")
     password.add_argument("--password", default=None)
 
-    remove = sub.add_parser("remove", help="delete an account and its workbooks")
+    remove = sub.add_parser("remove", help="delete an account and its units")
     remove.add_argument("username")
     remove.add_argument("--yes", action="store_true", help="do not ask")
 
     adopt = sub.add_parser(
-        "import", help="put an existing workbook into an account as a unit")
+        "import", help="make a unit in an account from an old Workload workbook")
     adopt.add_argument("username")
     adopt.add_argument("workbook", type=Path)
     adopt.add_argument("--name", default="", help="the unit's name")
 
     restore = sub.add_parser(
-        "restore", help="put a workbook into a unit that already exists")
+        "restore", help="put a kept copy of a unit (or an old workbook) in "
+                        "place of what a unit holds now")
     restore.add_argument("username")
     restore.add_argument("unit", help="the unit's name, or its id")
-    restore.add_argument("workbook", type=Path)
+    restore.add_argument("workbook", type=Path, metavar="copy",
+                         help="a .db copy from the backups folder, or a workbook")
 
     units = sub.add_parser(
         "units", help="what each unit actually holds: rows, hours, projects")
@@ -184,7 +186,7 @@ def _remove(db: Accounts, data_dir: Path, args) -> int:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
     if not args.yes:
-        answer = input(f"Delete {user['username']} and every workbook they have? "
+        answer = input(f"Delete {user['username']} and every unit they have? "
                        f"[y/N] ")
         if answer.strip().lower() not in {"y", "yes"}:
             print("Left alone.")
@@ -203,19 +205,23 @@ def _import(db: Accounts, data_dir: Path, args) -> int:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
     source = Path(args.workbook).expanduser()
-    try:
-        library.validate(source)
-    except library.NotAWorkbook as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    if not source.is_file():
+        print(f"error: {source} is not there", file=sys.stderr)
         return 2
     unit = db.create_unit(user["id"], args.name or source.stem, "")
-    path = storage.save_upload(data_dir, user["id"], unit["id"],
-                               source.read_bytes())
+    try:
+        result = storage.import_workbook(data_dir, user["id"], unit["id"],
+                                         source.read_bytes())
+    except (library.NotAWorkbook, ValueError) as exc:
+        db.delete_unit(user["id"], unit["id"])
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    path = result["path"]
     with db._connect() as connection:                  # noqa: SLF001 - same package
         connection.execute("UPDATE units SET filename = ? WHERE id = ?",
                            (path.name, unit["id"]))
     print(f"{source.name} is now {user['username']}'s unit {unit['name']!r}.")
-    print(f"  stored at {path}")
+    print(f"  stored at {path}; the workbook itself is not kept or read again")
     return 0
 
 
@@ -241,31 +247,30 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
     if not source.is_file():
         print(f"error: {source} is not there", file=sys.stderr)
         return 2
+    # A unit still on its old workbook is brought across first, so the copy
+    # kept of what it had is a database like every other copy.
+    storage.bring_across(data_dir, user["id"], unit["id"], unit["filename"])
     try:
-        library.validate(source)
-    except library.NotAWorkbook as exc:
+        result = storage.replace_unit_file(data_dir, user["id"], unit["id"],
+                                           source.read_bytes())
+    except (library.NotAWorkbook, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-
-    result = storage.replace_unit_file(data_dir, user["id"], unit["id"],
-                                       source.read_bytes())
     with db._connect() as connection:                  # noqa: SLF001 - same package
         connection.execute("UPDATE units SET filename = ? WHERE id = ?",
                            (result["path"].name, unit["id"]))
     print(f"{unit['name']!r} now holds {source.name} "
           f"({source.stat().st_size / 1_048_576:.1f} MB).")
     if result["backup"]:
-        print(f"  the file it had is kept as {result['backup'].name}")
-    print("  its timesheet rows are read from the new workbook on the next open")
+        print(f"  what it had is kept as {result['backup'].name}")
     return 0
 
 
 def _units(db: Accounts, data_dir: Path, args) -> int:
     """Say what is in each unit, straight from the files, for when the app
     looks empty and the question is whether the data is gone or unreachable."""
-    from . import metrics, storage
-    from .timesheet_store import TimesheetStore
-    from .workbook import WorkloadWorkbook
+    from . import legacy
+    from .unit import Unit
 
     users = db.users()
     if args.username:
@@ -282,26 +287,28 @@ def _units(db: Accounts, data_dir: Path, args) -> int:
             if not path.is_file():
                 print("    THE FILE IS MISSING")
                 continue
-            print(f"    {path}  {path.stat().st_size / 1_048_576:.1f} MB")
+            print(f"    {path}  {storage.size_mb(path):.1f} MB")
+            if legacy.is_workbook(path):
+                print("    still an old workbook: it becomes the unit's own "
+                      "database the first time it is opened")
+                continue
             try:
-                wb = WorkloadWorkbook(path)
+                wb = Unit(path, seed=False)
             except Exception as exc:
                 print(f"    cannot be opened: {exc}")
                 continue
-            store = TimesheetStore(path.with_suffix(".timesheets.db"))
-            on_sheets = metrics.TimesheetIndex.from_workbook(wb)
+            store = wb.store
             print(f"    projects {len(wb.projects())}, "
                   f"deliverables {len(wb.deliverables())}, "
-                  f"engineers {', '.join(wb.ts_sheets()) or 'none'}")
-            print(f"    timesheet rows: {len(on_sheets):,} on the sheets, "
-                  f"{store.count():,} in the database")
+                  f"team {', '.join(wb.engineer_names()) or 'nobody yet'}")
+            print(f"    timesheet rows: {store.count():,}")
             if store.count():
                 print(f"      per person: {store.counts()}")
                 low, high = store.date_range()
                 print(f"      {low} to {high}, "
                       f"{sum(r['hours'] for r in store.all_rows()):,.1f} hours")
-        backups = storage.backups_dir(data_dir, user["id"])
-        kept = sorted(backups.glob("*.xlsx")) if backups.is_dir() else []
+        kept = storage.backups_dir(data_dir, user["id"])
+        kept = sorted(kept.glob("*")) if kept.is_dir() else []
         print(f"  backups: {len(kept)}"
               + (f", newest {kept[-1].name}" if kept else ""))
     return 0

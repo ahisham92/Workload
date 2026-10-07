@@ -1,13 +1,12 @@
 """A unit set up from nothing but timesheet exports.
 
-These run against the blank template that ships with the app, so unlike most
-of the suite they need no private workbook: the exports are the input.
+These start from a new, empty unit, so unlike most of the suite they need no
+private workbook: the exports are the input.
 """
 
 import base64
 import datetime as dt
 import io
-import shutil
 
 import pytest
 
@@ -71,9 +70,7 @@ def team_exports():
 
 @pytest.fixture
 def blank(tmp_path):
-    target = tmp_path / "unit.xlsx"
-    shutil.copy(storage.template_path(), target)
-    return WorkloadService(target)
+    return WorkloadService(storage.new_unit(tmp_path, 1, "unit-one"))
 
 
 class TestReadingTheTeamOutOfTheExports:
@@ -84,7 +81,8 @@ class TestReadingTheTeamOutOfTheExports:
         assert all(p["new"] for p in staged["people"])
         assert staged["unit_name"] == "Marine Structures"
 
-    def test_the_template_placeholders_give_way_to_real_people(self, blank):
+    def test_the_team_is_the_people_on_the_exports(self, blank):
+        assert blank.workbook.engineer_names() == []
         blank.import_exports(team_exports())
         assert sorted(blank.workbook.engineer_names()) == ["Ahmed", "Osama"]
         team = {e["short_name"]: e for e in blank.workbook.team()}
@@ -102,36 +100,37 @@ class TestReadingTheTeamOutOfTheExports:
         again = blank.stage_exports(team_exports()[1:])
         assert [p["new"] for p in again["people"]] == [False]
 
-    def test_a_department_bigger_than_the_workbook(self, blank):
+    def test_a_department_of_any_size_joins_the_team(self, blank):
+        """A unit was once held to twelve people; the rest had no place."""
         crowd = [row(f"Person{n} Surname", "N25185-0100D", D(2026, 8, 1), 8)
-                 for n in range(14)]
-        result = blank.import_exports([export(crowd, "department.xlsx")])
-        assert len(result["people_added"]) == 14
-        assert len(blank.workbook.engineer_names()) == 12
-        assert len(blank.store.people_with_rows()) == 14
+                 for n in range(40)]
+        staged = blank.stage_exports([export(crowd, "department.xlsx")])
+        assert staged["people_outside_workbook"] == []
+        result = blank.apply_exports(staged["token"])
+        assert len(result["people_added"]) == 40
+        assert len(blank.workbook.engineer_names()) == 40
+        assert result["people_outside_workbook"] == []
+        assert result["data_check"]["rows_not_matching_pattern"] == 0
+        index = metrics.TimesheetIndex(blank.workbook, blank.store)
+        assert index.hours_for_job("N25185-0100D") == pytest.approx(40 * 8)
         again = blank.stage_exports([export(crowd, "department.xlsx")])
         assert not any(p["new"] for p in again["people"])
 
-    def test_nobody_past_the_workbook_goes_unmentioned(self, blank):
-        crowd = [row(f"Person{n} Surname", "N25185-0100D", D(2026, 8, 1), 8)
-                 for n in range(14)]
-        staged = blank.stage_exports([export(crowd, "department.xlsx")])
-        outside = staged["people_outside_workbook"]
-        assert outside == ["Person12", "Person13"]
-        assert any("Person12, Person13" in w for w in staged["warnings"])
+    def test_somebody_taken_off_the_team_is_still_mentioned(self, blank):
+        blank.import_exports(team_exports())
+        blank.workbook.remove_engineer("Osama")
+        staged = blank.stage_exports(team_exports())
+        assert staged["people_outside_workbook"] == ["Osama"]
+        assert any("not on the team: Osama" in w for w in staged["warnings"])
 
         result = blank.apply_exports(staged["token"])
-        assert result["people_outside_workbook"] == outside
+        assert result["people_outside_workbook"] == ["Osama"]
         check = result["data_check"]
-        assert check["people_outside_workbook"] == outside
-        assert "Person12, Person13" in check["verdict"]
-        assert check["rows_not_matching_pattern"] == 0
+        assert check["people_outside_workbook"] == ["Osama"]
+        assert "Osama" in check["verdict"]
         # Their hours are not lost: the project counts them.
         index = metrics.TimesheetIndex(blank.workbook, blank.store)
-        assert index.hours_for_job("N25185-0100D") == pytest.approx(14 * 8)
-
-        again = blank.stage_exports([export(crowd, "department.xlsx")])
-        assert again["people_outside_workbook"] == outside
+        assert index.hours_for_job("N25185-0100D") == pytest.approx(16 + 24)
 
     def test_a_team_that_fits_has_nobody_outside(self, blank):
         staged = blank.stage_exports(team_exports())

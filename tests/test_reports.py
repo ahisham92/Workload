@@ -234,14 +234,14 @@ class TestScorecardFactorsComeFromTheWorkbook:
         assert after["ranking"][0]["engineer"] == "Osama"
 
     def test_weights_that_do_not_total_one_hundred_are_refused(self, wb):
-        from workload_app.workbook import ValidationError
+        from workload_app.model import ValidationError
         factors = wb.scorecard_factors()
         factors[0]["weight"] = 0.9
         with pytest.raises(ValidationError, match="not 100%"):
             wb.save_scorecard_factors(factors)
 
     def test_a_target_factor_needs_a_target(self, wb):
-        from workload_app.workbook import ValidationError
+        from workload_app.model import ValidationError
         factors = wb.scorecard_factors()
         for factor in factors:
             if factor["direction"] == "target":
