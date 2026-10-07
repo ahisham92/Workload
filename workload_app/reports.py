@@ -10,7 +10,7 @@ views can drift apart.
 The definitions are the workbook's own:
 
 * **planned MM** per project per quarter -- the budget spread across the
-  project's dates, unless a value is typed into the Phasing override block;
+  project's dates, unless a figure is typed in for that quarter;
 * **actual MM** -- timesheet hours in the quarter, over hours per man-month;
 * **earned MM** in a quarter -- the project's total earned value, split across
   quarters in proportion to the effort actually spent in each;
@@ -29,10 +29,15 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import config as cfg, progress, tasks as task_sheet
+from . import config as cfg, progress
 from .metrics import TimesheetIndex, is_proposal_code, project_rows
-from .workbook import WorkloadWorkbook, iso
-from .xlsx_io import col_to_index, index_to_col
+from .model import iso, today
+from .unit import Unit
+
+#: Capacity is counted in man-months: three to a quarter.
+MONTHS_PER_QUARTER = 3.0
+#: How far past the plan year a project's end date may stretch the quarters.
+YEARS_AHEAD_AT_MOST = 10
 
 
 def _round(value: Optional[float], places: int = 3) -> Optional[float]:
@@ -54,7 +59,11 @@ def _safe(numerator: Optional[float], denominator: Optional[float]
 
 @dataclass
 class Quarter:
-    """One column of the Phasing grid."""
+    """One quarter the reports count in, or the opening balance before them.
+
+    ``column`` is the quarter's key: the ISO date it starts on, or
+    ``"opening"`` for everything before the first quarter.
+    """
     column: str
     label: str
     year: Optional[int]
@@ -100,26 +109,30 @@ class Period:
         }
 
 
-def read_quarters(wb: WorkloadWorkbook) -> List[Quarter]:
-    """The Phasing grid: an opening column, then one column per quarter."""
-    raw = wb.raw
-    out: List[Quarter] = []
-    for index in range(col_to_index(cfg.PHASING_FIRST_COL),
-                       col_to_index(cfg.PHASING_LAST_COL) + 1):
-        column = index_to_col(index)
-        start = raw.get_date(cfg.SHEET_PHASING, f"{column}{cfg.PHASING_START_ROW}")
-        end = raw.get_date(cfg.SHEET_PHASING, f"{column}{cfg.PHASING_END_ROW}")
-        if start is None or end is None:
-            continue
-        year = raw.get_number(cfg.SHEET_PHASING, f"{column}{cfg.PHASING_YEAR_ROW}")
-        label = raw.get_text(cfg.SHEET_PHASING, f"{column}{cfg.PHASING_QUARTER_ROW}")
-        opening = year is None or not label or label.lower() == "opening"
-        out.append(Quarter(
-            column=column,
-            label=label or "Opening",
-            year=int(year) if year else None,
-            start=start, end=end, opening=opening,
-        ))
+def read_quarters(wb: Unit) -> List[Quarter]:
+    """An opening balance, then one quarter at a time.
+
+    The quarters run over the years the unit keeps availability for, and on
+    to the year the last project ends, so nothing planned falls off the end.
+    """
+    years = set(wb.availability_years()) | {wb.plan_year()}
+    last = max(years)
+    for project in wb.projects():
+        if project.end and project.end.year > last:
+            last = min(project.end.year, wb.plan_year() + YEARS_AHEAD_AT_MOST)
+    first = min(years)
+    out: List[Quarter] = [Quarter(
+        column="opening", label="Opening", year=first - 1,
+        start=_dt.date(1899, 12, 31), end=_dt.date(first - 1, 12, 31),
+        opening=True)]
+    for year in range(first, last + 1):
+        for number in range(4):
+            start = _dt.date(year, 3 * number + 1, 1)
+            end = (_dt.date(year + 1, 1, 1) if number == 3
+                   else _dt.date(year, 3 * number + 4, 1)) - _dt.timedelta(days=1)
+            out.append(Quarter(column=start.isoformat(),
+                               label=f"Q{number + 1}-{year % 100:02d}",
+                               year=year, start=start, end=end))
     return out
 
 
@@ -180,7 +193,7 @@ class ReportSet:
         }
 
 
-def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
+def build(wb: Unit, kind: str = "year", year: Optional[int] = None,
           quarter: Optional[str] = None,
           index: Optional[TimesheetIndex] = None) -> ReportSet:
     """Compute every report figure for one period, in a single pass."""
@@ -189,7 +202,7 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
     if year is None and kind != "all":
         year = wb.plan_year()
     period = resolve_period(quarters, kind, year, quarter)
-    as_at = wb.raw.get_date(cfg.SHEET_INPUTS, cfg.AS_AT_DATE_CELL) or _dt.date.today()
+    as_at = _as_at(wb)
     hours_per_mm = wb.hours_per_man_month()
     engineers = wb.engineer_names()
 
@@ -225,7 +238,7 @@ def build(wb: WorkloadWorkbook, kind: str = "year", year: Optional[int] = None,
 
 # -- per project -----------------------------------------------------------
 
-def _type_factors(wb: WorkloadWorkbook) -> Dict[str, float]:
+def _type_factors(wb: Unit) -> Dict[str, float]:
     """Each project's weighted average project-type factor."""
     weights = {t.code: (t.portfolio_weight if t.portfolio_weight is not None else 1.0)
                for t in wb.project_types()}
@@ -242,15 +255,14 @@ def _type_factors(wb: WorkloadWorkbook) -> Dict[str, float]:
     }
 
 
-def _planned_overrides(wb: WorkloadWorkbook, quarters: Sequence[Quarter]
+def _planned_overrides(wb: Unit, quarters: Sequence[Quarter]
                        ) -> Dict[Tuple[str, str], float]:
     """Typed-in planned MM, which beats the spread from the project's dates."""
     out: Dict[Tuple[str, str], float] = {}
-    raw = wb.raw
-    for offset, project in enumerate(wb.projects()):
-        row = cfg.PHASING_OVERRIDE_FIRST_ROW + (project.row - cfg.PROJECT_FIRST_ROW)
+    typed = wb.phasing_overrides()
+    for project in wb.projects():
         for quarter in quarters:
-            value = raw.get_number(cfg.SHEET_PHASING, f"{quarter.column}{row}")
+            value = typed.get(project.number, {}).get(quarter.column)
             if value is not None:
                 out[(project.number, quarter.column)] = value
     return out
@@ -310,8 +322,9 @@ def _project_in_period(wb, index, lifetime, period, quarters, overrides,
     }
 
 
-def _as_at(wb: WorkloadWorkbook) -> _dt.date:
-    return wb.raw.get_date(cfg.SHEET_INPUTS, cfg.AS_AT_DATE_CELL) or _dt.date.today()
+def _as_at(wb: Unit) -> _dt.date:
+    """The date the reports are counted to: frozen if the unit says so."""
+    return wb.as_at() or today()
 
 
 def _parse(value: Optional[str]) -> Optional[_dt.date]:
@@ -370,10 +383,10 @@ def _hours_in(index: TimesheetIndex, number: str, period: Period,
 
 # -- team and people -------------------------------------------------------
 
-def _capacity(wb: WorkloadWorkbook, period: Period, as_at: _dt.date
+def _capacity(wb: Unit, period: Period, as_at: _dt.date
               ) -> Dict[str, Dict[str, float]]:
     """Capacity per engineer for the period, and pro-rated to the as-at date."""
-    months = wb.raw.get_number(cfg.SHEET_INPUTS, cfg.MONTHS_PER_QUARTER_CELL) or 3.0
+    months = MONTHS_PER_QUARTER
     out: Dict[str, Dict[str, float]] = {}
     for engineer in wb.engineers():
         full = 0.0
@@ -427,10 +440,7 @@ def _add_rework(per_engineer: Dict[str, Dict[str, Any]], wb, engineers) -> None:
     as one approved first time and is not the same piece of work, and this is
     the only number in the KPIs that knows the difference.
     """
-    try:
-        stats = progress.rework(task_sheet.read(wb.raw), engineers)
-    except Exception:                       # pragma: no cover - a workbook
-        return                              # without a Tasks sheet
+    stats = progress.rework(wb.task_records(), engineers)
     for name, entry in stats.items():
         if name in per_engineer:
             per_engineer[name].update({
@@ -494,7 +504,7 @@ def _per_engineer(projects, engineers, capacity, wb, index, period
     return out
 
 
-def _by_status(wb: WorkloadWorkbook, projects) -> List[Dict[str, Any]]:
+def _by_status(wb: Unit, projects) -> List[Dict[str, Any]]:
     """The portfolio split by project status -- the part-to-whole view."""
     out: List[Dict[str, Any]] = []
     for status in cfg.PROJECT_STATUSES:
@@ -540,7 +550,7 @@ def _quarterly(wb, index, quarters, engineers, hours_per_mm
 
 
 def _delivery_mix(wb, index, hours_per_mm, period) -> List[Dict[str, Any]]:
-    """Where the delivered hours came from in this period -- team, and support.
+    """Where the delivered hours came from in this period.
 
     Counted over the chosen period like everything else on the page, so the mix
     cannot quietly be a decade of history sitting beside a single year's KPIs.
@@ -552,10 +562,6 @@ def _delivery_mix(wb, index, hours_per_mm, period) -> List[Dict[str, Any]]:
     )
     rows = [{"source": "This team (from timesheet)", "hours": _round(team_hours, 1),
              "man_months": _round(team_hours / hours_per_mm if hours_per_mm else 0)}]
-    for label, cell in (("Bengaluru support", "B40"), ("Draftsman support", "B48")):
-        hours = wb.raw.get_number(cfg.SHEET_SUPPORT_PLAN, cell) or 0.0
-        rows.append({"source": label, "hours": _round(hours, 1),
-                     "man_months": _round(hours / hours_per_mm if hours_per_mm else 0)})
     total = sum(r["hours"] or 0.0 for r in rows)
     for row in rows:
         row["share"] = _round(_safe(row["hours"], total), 4)

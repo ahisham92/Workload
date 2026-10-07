@@ -4,10 +4,10 @@ import datetime as dt
 
 import pytest
 
-from workload_app import config as cfg
-from workload_app.workbook import (
+from workload_app.model import (
     ValidationError, as_date, as_fraction, as_number, as_text,
 )
+from workload_app.unit import Unit
 
 
 class TestCoercion:
@@ -51,7 +51,7 @@ class TestReading:
         assert readonly_wb.credit_for("CD", 3) == 0.65
         assert readonly_wb.credit_for("DD", 9) is None
 
-    def test_engineers_come_from_the_work_calendar(self, readonly_wb):
+    def test_engineers_come_across_from_the_workbook(self, readonly_wb):
         engineers = {e.short_name: e for e in readonly_wb.engineers()}
         assert set(engineers) == {"Ahmed", "Osama", "Kirolos"}
         assert engineers["Ahmed"].pattern == "*Ahmed*"
@@ -73,17 +73,24 @@ class TestProjects:
         data.update(overrides)
         return data
 
-    def test_add_uses_the_first_free_row(self, wb):
+    def test_add_gives_the_project_a_row_of_its_own(self, wb):
+        rows = {p.row for p in wb.projects()}
         project = wb.add_project(self._valid())
-        assert cfg.PROJECT_FIRST_ROW <= project.row <= cfg.PROJECT_LAST_ROW
+        assert project.row not in rows
         assert wb.project("TEST-0100D").name == "Test project"
-        assert wb.dirty
+        assert not wb.dirty, "every change is written as it is made"
 
-    def test_add_survives_a_save_and_reopen(self, wb, workbook_copy):
+    def test_add_is_there_when_the_unit_is_opened_again(self, wb, unit_copy):
         wb.add_project(self._valid())
-        wb.save()
-        from workload_app.workbook import WorkloadWorkbook
-        assert WorkloadWorkbook(workbook_copy).project("TEST-0100D").budget_mm == 4.0
+        assert Unit(unit_copy).project("TEST-0100D").budget_mm == 4.0
+
+    def test_there_is_no_limit_to_the_register(self, wb):
+        """A unit was once held to eighty projects."""
+        before = len(wb.projects())
+        for index in range(60):
+            wb.add_project(self._valid(number=f"MANY-{index:04d}D",
+                                       name=f"Project {index}"))
+        assert len(wb.projects()) == before + 60
 
     def test_percentages_round_trip(self, wb):
         wb.add_project(self._valid(manual_percent="35%"))
@@ -106,7 +113,7 @@ class TestProjects:
 
     def test_duplicate_numbers_are_rejected(self, wb):
         wb.add_project(self._valid())
-        with pytest.raises(ValidationError, match="already on Inputs row"):
+        with pytest.raises(ValidationError, match="already in the register"):
             wb.add_project(self._valid(name="Another"))
 
     def test_update_can_rename_and_carries_the_deliverables_with_it(self, wb):
@@ -157,7 +164,7 @@ class TestDeliverables:
         data.update(overrides)
         return data
 
-    def test_add_writes_both_sheets(self, wb):
+    def test_add_stores_everything_given(self, wb):
         self._project(wb)
         deliverable = wb.add_deliverable(self._valid())
         stored = wb.deliverable(deliverable.row)
@@ -202,66 +209,34 @@ class TestDeliverables:
         wb.add_deliverable(self._valid(name="Detail", phase_weight="60"))
         assert wb.weight_by_project()["TEST-0100D"] == pytest.approx(1.0)
 
-    def test_delete_clears_the_actuals_row_too(self, wb):
+    def test_delete_removes_it(self, wb):
         self._project(wb)
         deliverable = wb.add_deliverable(self._valid())
         wb.delete_deliverable(deliverable.row)
         assert wb.deliverable(deliverable.row) is None
-        assert wb.raw.get_value(
-            cfg.SHEET_ACTUALS, f"E{deliverable.row}") is None
+
+    def test_a_deleted_row_is_never_handed_out_again(self, wb):
+        """Drawing counts and planned work are keyed by the row."""
+        self._project(wb)
+        first = wb.add_deliverable(self._valid())
+        wb.delete_deliverable(first.row)
+        second = wb.add_deliverable(self._valid())
+        assert second.row > first.row
 
 
-class TestActualsCapacity:
-    """The actuals block ships full, so a 65th deliverable has to grow it."""
+class TestNoLimitToDeliverables:
+    """A unit was once held to the sixty-four rows its workbook shipped with."""
 
-    def test_it_starts_exactly_full(self, readonly_wb):
-        assert readonly_wb.actuals_last_row() == cfg.ACTUALS_DEFAULT_LAST_ROW
-        assert len(readonly_wb.deliverables()) == (
-            cfg.ACTUALS_DEFAULT_LAST_ROW - cfg.ACTUALS_FIRST_ROW + 1)
-
-    def test_adding_a_deliverable_grows_the_block(self, wb):
+    def test_more_deliverables_than_the_workbook_held_can_be_added(self, wb):
         wb.add_project({"number": "TEST-0100D", "name": "T", "budget_mm": 1,
                         "status": "Active"})
-        deliverable = wb.add_deliverable({
-            "project_number": "TEST-0100D", "name": "Phase", "type_code": "FS",
-            "phase_weight": 1, "step_no": 1, "share_ahmed": 1, "ts_phase": 1,
-        })
-        assert deliverable.row == cfg.ACTUALS_DEFAULT_LAST_ROW + 1
-        assert wb.actuals_last_row() == deliverable.row
-
-    def test_the_grown_rows_carry_translated_formulas(self, wb, workbook_copy):
-        wb.add_project({"number": "TEST-0100D", "name": "T", "budget_mm": 1,
-                        "status": "Active"})
-        row = wb.add_deliverable({
-            "project_number": "TEST-0100D", "name": "Phase", "type_code": "FS",
-            "phase_weight": 1, "step_no": 1, "share_ahmed": 1, "ts_phase": 1,
-        }).row
-        wb.save()
-        openpyxl = pytest.importorskip("openpyxl")
-        sheet = openpyxl.load_workbook(workbook_copy)["Deliverable Actuals"]
-        assert f"Deliverables!$A{row}" in str(sheet[f"A{row}"].value)
-        # the shared formula in column H must have become an explicit one
-        assert str(sheet[f"H{row}"].value).startswith("=IF(OR($A")
-        # and every range anchored to the old last row must have grown
-        assert f"$A$5:$A${row}" in str(sheet["AJ5"].value)
-
-    def test_growing_the_block_leaves_the_workbook_readable(self, wb, workbook_copy):
-        wb.add_project({"number": "TEST-0100D", "name": "T", "budget_mm": 1,
-                        "status": "Active"})
-        wb.add_deliverable({
-            "project_number": "TEST-0100D", "name": "Phase", "type_code": "FS",
-            "phase_weight": 1, "step_no": 1, "share_ahmed": 1, "ts_phase": 1,
-        })
-        wb.save()
-        import xml.etree.ElementTree as ET
-        import zipfile
-        with zipfile.ZipFile(workbook_copy) as zf:
-            for name in zf.namelist():
-                if name.endswith(".xml"):
-                    ET.fromstring(zf.read(name))
-        openpyxl = pytest.importorskip("openpyxl")
-        book = openpyxl.load_workbook(workbook_copy)
-        assert sum(len(book[n]._charts) for n in book.sheetnames) == 14
+        for index in range(80):
+            wb.add_deliverable({
+                "project_number": "TEST-0100D", "name": f"Phase {index}",
+                "type_code": "FS", "phase_weight": 1 / 80, "step_no": 1,
+                "share_ahmed": 1, "ts_phase": 1,
+            })
+        assert len(wb.deliverables()) == 64 + 80
 
 
 class TestChecks:
@@ -285,57 +260,31 @@ class TestChecks:
             "project_number": "TEST-0100D", "name": "Phase", "type_code": "FS",
             "phase_weight": "100", "step_no": 1, "share_ahmed": 1,
         })
-        assert any("no TS Phase" in i["message"] for i in wb.register_issues())
+        assert any("no timesheet phase" in i["message"] for i in wb.register_issues())
 
-    def test_data_check_matches_the_work_calendar_block(self, readonly_wb):
+    def test_data_check_counts_every_row(self, readonly_wb):
         check = readonly_wb.data_check()
         assert check["rows"] == 7682
         assert check["rows_not_matching_pattern"] == 0
-        assert check["verdict"] == "All rows matched to an engineer."
+        assert check["verdict"] == "All rows matched to somebody on the team."
         assert set(check["per_engineer"]) == {"Ahmed", "Osama", "Kirolos"}
 
 
 class TestAnotherUnitsTeam:
-    """Nothing may assume who the engineers are, or how many there are.
-
-    A workbook set up for a different discipline names different people and
-    different paste-target sheets; the app has to read both from the file.
-    """
+    """Nothing may assume who the engineers are, or how many there are."""
 
     @pytest.fixture
-    def renamed(self, workbook_copy):
-        from workload_app.xlsx_io import Workbook
-        from workload_app.workbook import WorkloadWorkbook
+    def renamed(self, wb):
+        for old, new in [("Ahmed", "Nadia"), ("Osama", "Tarek"), ("Kirolos", "Mina")]:
+            wb.update_engineer(old, {"short_name": new})
+        return wb
 
-        raw = Workbook(workbook_copy)
-        swaps = [("Ahmed", "Nadia"), ("Osama", "Tarek"), ("Kirolos", "Mina")]
-        for row, (_old, new) in zip((20, 21, 22), swaps):
-            raw.sheet(cfg.SHEET_CALENDAR).set_value(f"A{row}", new)
-            raw.sheet(cfg.SHEET_CALENDAR).set_value(f"B{row}", f"*{new}*")
-        for row, (_old, new) in zip((91, 92, 93), swaps):
-            raw.sheet(cfg.SHEET_INPUTS).set_value(f"A{row}", new)
-        workbook_xml = raw._entries["xl/workbook.xml"].decode()
-        sheet = raw.sheet(cfg.SHEET_TS_RAW)
-        for old, new in swaps:
-            workbook_xml = workbook_xml.replace(f'name="TS {old}"', f'name="TS {new}"')
-            sheet.xml = sheet.xml.replace(f"'TS {old}'!", f"'TS {new}'!")
-        raw._entries["xl/workbook.xml"] = workbook_xml.encode()
-        raw.save()
-        return WorkloadWorkbook(workbook_copy)
-
-    def test_the_engineers_come_from_the_workbook(self, renamed):
+    def test_the_engineers_are_the_new_names(self, renamed):
         assert renamed.engineer_names() == ["Nadia", "Tarek", "Mina"]
 
-    def test_the_paste_targets_are_found_by_name(self, renamed):
-        assert dict(renamed.ts_sheets()) == {
-            "Nadia": "TS Nadia", "Tarek": "TS Tarek", "Mina": "TS Mina"}
-
-    def test_the_stack_order_follows_the_formula(self, renamed):
-        assert renamed.timesheet_capacity()["stack_order"] == [
-            "Nadia", "Tarek", "Mina"]
-
     def test_splits_are_keyed_by_the_new_names(self, renamed):
-        assert set(renamed.deliverables()[0].shares) == {"Nadia", "Tarek", "Mina"}
+        assert set(renamed.deliverables()[0].shares) <= {"Nadia", "Tarek", "Mina"}
+        assert renamed.deliverables()[0].shares
 
     def test_a_split_is_validated_against_the_new_names(self, renamed):
         renamed.add_project({"number": "U2-0100D", "name": "T", "budget_mm": 1,
@@ -413,7 +362,7 @@ class TestProjectWithItsDeliverables:
                  if d.project_number == "SET-0100D"}
         assert after == rows
 
-    def test_dropping_one_clears_its_row_on_both_sheets(self, wb):
+    def test_dropping_one_removes_it(self, wb):
         wb.save_project_with_deliverables(None, self.PROJECT, [
             self._item(name="Keep", phase_weight=0.5),
             self._item(name="Drop", phase_weight=0.5),
@@ -422,7 +371,7 @@ class TestProjectWithItsDeliverables:
         result = wb.save_project_with_deliverables(
             "SET-0100D", self.PROJECT, [self._item(name="Keep", phase_weight=1.0)])
         assert result["removed"] == 1
-        assert wb.raw.get_value(cfg.SHEET_ACTUALS, f"E{dropped.row}") is None
+        assert wb.deliverable(dropped.row) is None
 
 
 class TestReferenceTables:
@@ -459,10 +408,12 @@ class TestReferenceTables:
         wb.save_reference(types, steps)
         assert wb.credit_for("DD", 5) is None
 
-    def test_more_rows_than_the_sheet_holds_are_refused(self, wb):
+    def test_there_is_no_limit_to_the_project_types(self, wb):
         types = [t.__dict__ for t in wb.project_types()]
-        with pytest.raises(ValidationError, match="room for"):
-            wb.save_reference(types * 3, None)
+        extra = [{**types[0], "code": f"X{index}", "name": f"Extra {index}"}
+                 for index in range(30)]
+        wb.save_reference(types + extra, None)
+        assert len(wb.project_types()) == len(types) + 30
 
     def test_a_duplicate_type_code_is_refused(self, wb):
         types = [t.__dict__ for t in wb.project_types()]
@@ -512,6 +463,3 @@ class TestTheDataCheckByYear:
         codes = {u["code"] for u in whole}
         assert {u["code"] for u in year} <= codes
 
-    def test_the_capacity_report_still_sees_every_row(self, readonly_wb):
-        year = readonly_wb.data_check(2026)
-        assert year["capacity"]["rows_used"] == year["all_time_rows"]

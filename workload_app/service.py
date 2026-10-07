@@ -1,9 +1,9 @@
-"""One open workbook, and every change that can be made to it.
+"""One open unit, and every change that can be made to it.
 
-The service is the app's working memory: it holds the workbook a person has
-open, serialises access to it, and turns each request into a domain call.  It
-knows nothing about HTTP, and nothing about who is logged in -- one account's
-service instance simply never sees another account's file.
+The service is the app's working memory: it holds the unit a person has open,
+serialises access to it, and turns each request into a domain call.  It knows
+nothing about HTTP, and nothing about who is logged in -- one account's service
+instance simply never sees another account's unit.
 """
 
 from __future__ import annotations
@@ -11,25 +11,24 @@ from __future__ import annotations
 import base64
 import datetime as _dt
 import json
-import os
 import threading
+import traceback
 import uuid
-from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
-import re
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, config as cfg, daily, derive,
                drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
-               incoming, intake, library, metrics, needs as needs_module,
+               incoming, intake, metrics, needs as needs_module,
                people as people_module, submissions as submissions_module,
                planner as planner_module, progress, reports,
                tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
-from .workbook import ValidationError, WorkloadWorkbook, iso, outside_message
+from .model import ValidationError, iso, today as _model_today
+from .unit import Unit, outside_message
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 #: How far ahead the Planner lists who will be away.
@@ -50,207 +49,115 @@ class ApiError(Exception):
         self.errors = errors or [message]
 
 
-@contextmanager
-def _file_lock(path: Optional[Path]):
-    """Hold a workbook exclusively while it is written.
-
-    Advisory, and only where the platform has it: on a host this stops two
-    workers writing the same file at once, and on Windows it does nothing,
-    which is the same as today.
-    """
-    if path is None:
-        yield
-        return
-    try:
-        import fcntl
-    except ImportError:                                # pragma: no cover
-        yield
-        return
-    lock_path = Path(str(path) + ".lock")
-    handle = None
-    try:
-        handle = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
-    finally:
-        if handle is not None:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-            finally:
-                os.close(handle)
-
-
 class WorkloadService:
-    """Holds the chosen workbook, if one is open yet, and serialises access."""
+    """Holds the chosen unit, if one is open yet, and serialises access."""
 
     def __init__(self, path: Optional[Path] = None, *, autosave: bool = True):
         self.path: Optional[Path] = None
         self.unit: Optional[Dict[str, Any]] = None
+        #: Kept for the callers that pass it; every change is written at once.
         self.autosave = autosave
         self._lock = threading.RLock()
-        self._wb: Optional[WorkloadWorkbook] = None
+        self._wb: Optional[Unit] = None
         self._staged: Dict[str, Any] = {}
         self._unlocked = False
-        self._stack_raised_to: Optional[int] = None
-        self._file_stamp = None
-        #: The unit's timesheet rows, which no longer live in the workbook.
+        #: The unit's timesheet rows and planning tables, in the same file.
         self._store: Optional[TimesheetStore] = None
-        #: A member's view of somebody else's workbook never writes to it.
+        #: A member's view of somebody else's unit never changes it.
         self.read_only = False
+        #: Takes a dated copy of the unit, before a change that replaces a lot
+        #: at once; the app knows where copies go, so it hands this in.
+        self.keep_copy: Optional[Callable[[], Any]] = None
         if path is not None:
             self.open(path)
 
-    # -- choosing a workbook ---------------------------------------------
+    # -- choosing a unit -------------------------------------------------
     @property
     def is_open(self) -> bool:
         return self._wb is not None
 
     @property
-    def workbook(self) -> WorkloadWorkbook:
-        """The open workbook, or a clear refusal if none has been chosen."""
+    def workbook(self) -> Unit:
+        """The open unit, or a clear refusal if none has been chosen.
+
+        Still called ``workbook`` because so much calls it that; it has not
+        been one for a while.
+        """
         if self._wb is None:
             raise ApiError(
                 HTTPStatus.CONFLICT,
-                "No workbook is open. Choose your Workload file first.",
+                "No unit is open. Choose one of your units first.",
             )
         return self._wb
 
     def open(self, path: Union[str, Path], *,
              unit: Optional[Dict[str, Any]] = None,
-             read_only: bool = False) -> Dict[str, Any]:
-        """Open a workbook file, and remember which unit it is.
+             read_only: bool = False,
+             keep_copy: Optional[Callable[[], Any]] = None) -> Dict[str, Any]:
+        """Open a unit's database, and remember which unit it is.
 
-        ``read_only`` is for a member looking at their manager's workbook:
-        nothing is written to it, not even the widening the app would otherwise
-        do on the way in.
+        ``read_only`` is for a member looking at their manager's unit: nothing
+        is written to it.
         """
         with self._lock:
-            resolved = library.validate(Path(path))
-            if self._wb is not None and self._wb.dirty:
-                self._save_locked()
-            self._wb = WorkloadWorkbook(resolved)
+            resolved = Path(path)
+            if not resolved.is_file():
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               "That unit's data is missing.")
+            self._wb = Unit(resolved)
             self.path = resolved
             self.unit = unit
             self.read_only = read_only
+            self.keep_copy = keep_copy
             self._staged.clear()
             self._unlocked = False
-            self._store = TimesheetStore(resolved.with_suffix(".timesheets.db"))
-            if not read_only:
-                self._adopt_workbook_rows()
-            self._stack_raised_to = None if read_only else self._widen_stack()
-            self._stamp()
+            self._store = self._wb.store
             return self.status()
 
-    def _index(self, wb: WorkloadWorkbook) -> "metrics.TimesheetIndex":
+    def _index(self, wb: Unit) -> "metrics.TimesheetIndex":
         return metrics.TimesheetIndex(wb, self._store)
 
     @property
     def store(self) -> "TimesheetStore":
-        """The unit's timesheet rows.  Opening a workbook always makes one."""
+        """The unit's timesheet rows."""
         if self._store is None:
             raise ApiError(HTTPStatus.CONFLICT,
-                           "No workbook is open. Choose your Workload file first.")
+                           "No unit is open. Choose one of your units first.")
         return self._store
-
-    def _adopt_workbook_rows(self) -> int:
-        """Move a workbook's own rows into the store, once, on first open.
-
-        A unit that was built before the store existed has its history on the
-        TS sheets. Reading it there still works, but nothing new should be
-        written there, so the rows come across the first time the unit is
-        opened and the sheets are left exactly as they are -- if this turns out
-        to be wrong, the workbook is still the record.
-        """
-        store = self._store
-        wb = self._wb
-        if store is None or wb is None or not store.is_empty():
-            return 0
-        moved = 0
-        for person, rows in _group_by_person(
-                metrics.TimesheetIndex.from_workbook(wb)).items():
-            moved += store.replace(person, rows, source="the workbook")
-        return moved
 
     def close(self) -> Dict[str, Any]:
         with self._lock:
-            if self._wb is not None and self._wb.dirty:
-                self._save_locked()
             self._wb = None
             self.path = None
             self.unit = None
             self._store = None
             self.read_only = False
+            self.keep_copy = None
             self._unlocked = False
-            self._stack_raised_to = None
             self._staged.clear()
             return self.status()
 
-    # -- the file underneath ---------------------------------------------
-    #
-    # A hosted app runs in more than one worker process, and each one holds its
-    # own parsed copy of a workbook.  Two rules keep them honest: a writer
-    # takes an exclusive lock on the file, and a reader that finds the file
-    # changed underneath it re-reads before answering.
-
-    def _stamp(self) -> None:
-        self._file_stamp = self._current_stamp()
-
-    def _current_stamp(self):
-        try:
-            stat = self.path.stat() if self.path else None
-        except OSError:
-            return None
-        return (stat.st_mtime_ns, stat.st_size) if stat else None
-
     def refresh(self) -> None:
-        """Re-read the workbook if another worker has written it since."""
+        """Forget what was read if another worker has written the unit since."""
         with self._lock:
-            if self._wb is None or self.path is None:
-                return
-            if self._wb.dirty:
-                # Our own unsaved work is newer than anything on disk.
-                return
-            if self._current_stamp() != self._file_stamp:
-                self._wb.reload()
-                self._staged.clear()
-                self._stamp()
+            if self._wb is not None:
+                self._wb.refresh()
 
-    # -- helpers ---------------------------------------------------------
-    def _widen_stack(self) -> Optional[int]:
-        """Deepen the per-sheet stack as soon as a workbook is opened.
-
-        The workbook ships reading 6,000 rows from each monthly sheet, and that
-        is the limit an engineer's own sheet reaches first.  Widening it is a
-        one-line change to the VSTACK with no recalculation cost -- unlike the
-        consolidated limit -- so it is done here rather than offered as a
-        button nobody would have a reason to decline.
-        """
-        wb = self._wb
-        if wb is None:
-            return None
-        report = wb.timesheet_capacity()
-        if not report["source_is_short"]:
-            return None
-        target = report["suggested_source_last_row"]
-        wb.extend_timesheet_capacity(source_last_row=target)
-        if self.autosave:
-            self._save_locked()
-        return target
+    def _copy_first(self) -> None:
+        """A dated copy of the unit before a change that replaces a lot."""
+        if self.keep_copy is None or self.read_only:
+            return
+        try:
+            self.keep_copy()
+        except Exception:                  # pragma: no cover - a copy is a
+            traceback.print_exc()          # nicety, never a reason to refuse
 
     def _commit(self) -> Dict[str, Any]:
-        if self.autosave:
-            return self._save_locked()
-        return {"saved": False, "pending": True}
-
-    def _save_locked(self) -> Dict[str, Any]:
-        """Write the workbook with the file held exclusively."""
+        """Every change is written as it is made; this says so."""
         if self.read_only:
             raise ApiError(HTTPStatus.FORBIDDEN,
-                           "This workbook is open for reading only.")
-        with _file_lock(self.path):
-            result = self.workbook.save()
-        self._stamp()
-        return result
+                           "This unit is open for reading only.")
+        return {"saved": True}
 
     def _known_job_numbers(self) -> set:
         wb = self.workbook
@@ -262,6 +169,7 @@ class WorkloadService:
             if self._wb is None:
                 return {"open": False, "workbook": None, "unit": None,
                         "autosave": self.autosave}
+            counts = self._wb.summary()
             return {
                 "open": True,
                 "unit": self.unit,
@@ -271,13 +179,11 @@ class WorkloadService:
                 "workbook_name": self.path.name,
                 "folder": str(self.path.parent),
                 "autosave": self.autosave,
-                "unsaved_changes": self._wb.dirty,
-                "sheets": self._wb.raw.sheet_names,
-                "projects": len(self._wb.projects()),
-                "deliverables": len(self._wb.deliverables()),
-                "actuals_last_row": self._wb.actuals_last_row(),
-                "capacity": self._wb.timesheet_capacity(),
-                "stack_raised_to": self._stack_raised_to,
+                "unsaved_changes": False,
+                "projects": counts["projects"],
+                "deliverables": counts["deliverables"],
+                "timesheet_rows": counts["rows"],
+                "tasks": counts["tasks"],
                 "backups": str(self.path.parent / cfg.BACKUP_DIRNAME),
             }
 
@@ -311,7 +217,6 @@ class WorkloadService:
             return {
                 "deliverables": [d.to_dict() for d in wb.deliverables()],
                 "metrics": metrics.deliverable_rows(wb, index),
-                "actuals_last_row": wb.actuals_last_row(),
             }
 
     # -- the team --------------------------------------------------------
@@ -320,9 +225,7 @@ class WorkloadService:
             wb = self.workbook
             return {
                 "engineers": wb.team(),
-                "years": sorted(wb._availability_years().values()),
-                "max_engineers": cfg.MAX_ENGINEERS,
-                "built_in_slots": cfg.ENGINEER_BUILT_IN_SLOTS,
+                "years": wb.availability_years(),
             }
 
     def add_engineer(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -339,6 +242,8 @@ class WorkloadService:
 
     def remove_engineer(self, engineer: str) -> Dict[str, Any]:
         with self._lock:
+            self.workbook._require_engineer(engineer)    # noqa: SLF001
+            self._copy_first()
             result = self.workbook.remove_engineer(engineer)
             result["save"] = self._commit()
             return result
@@ -458,16 +363,13 @@ class WorkloadService:
             return result
 
     def save(self) -> Dict[str, Any]:
+        """Nothing to do: kept so an old screen's Save button still answers."""
         with self._lock:
-            if self._wb is None:
-                return {"saved": False}
-            return self._save_locked()
+            return {"saved": self._wb is not None}
 
     def reload(self) -> Dict[str, Any]:
         with self._lock:
             self.workbook.reload()
-            self._staged.clear()
-            self._stamp()
             return self.status()
 
     # -- timesheets ------------------------------------------------------
@@ -475,11 +377,11 @@ class WorkloadService:
                         *, registered_only: bool = True) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
-            if engineer not in wb.ts_sheets():
+            if engineer not in wb.engineer_names():
                 raise ApiError(
                     HTTPStatus.BAD_REQUEST,
-                    f"{engineer!r} is not one of this workbook's engineers "
-                    f"({', '.join(wb.ts_sheets())}).",
+                    f"{engineer!r} is not on this unit's team "
+                    f"({', '.join(wb.engineer_names())}).",
                 )
             engineers = {e.short_name: e for e in wb.engineers()}
             pattern = engineers[engineer].pattern if engineer in engineers else None
@@ -490,9 +392,8 @@ class WorkloadService:
                 registered_only=registered_only,
                 keep_job_types=cfg.PROPOSAL_JOB_TYPES,
             )
-            existing = self._existing_rows(engineer)
-            duplicates = timesheets.find_duplicates(
-                existing, parsed.rows, parsed.headers) if parsed.rows else 0
+            existing = self.store.rows_for(engineer)
+            duplicates = _duplicates(existing, parsed.records()) if parsed.rows else 0
             token = uuid.uuid4().hex
             self._staged[token] = parsed
             payload = parsed.to_dict()
@@ -500,15 +401,6 @@ class WorkloadService:
             payload["existing_rows"] = len(existing)
             payload["duplicate_rows_if_appended"] = duplicates
             return payload
-
-    def _existing_rows(self, engineer: str) -> List[List[Any]]:
-        from .xlsx_io import col_to_index, index_to_col
-        width = col_to_index(cfg.TS_LAST_COLUMN)
-        columns = [index_to_col(i) for i in range(1, width + 1)]
-        return [
-            [row.get(col) for col in columns]
-            for row in self.workbook.timesheet_rows(engineer, columns)
-        ]
 
     def apply_timesheet(self, token: str, mode: str) -> Dict[str, Any]:
         with self._lock:
@@ -532,6 +424,8 @@ class WorkloadService:
             wb = self.workbook
             records = parsed.records()
             store = self.store
+            if mode == "replace":
+                self._copy_first()
             # No room to make and no limit to raise: the rows go to the store,
             # which has neither.
             written = (store.append(parsed.engineer, records)
@@ -566,7 +460,7 @@ class WorkloadService:
             if not files:
                 raise ApiError(HTTPStatus.BAD_REQUEST,
                                "Choose at least one timesheet export.")
-            headers = wb.timesheet_headers(next(iter(wb.ts_sheets())))
+            headers = wb.timesheet_headers()
             parsed: List[ParsedTimesheet] = []
             errors: List[str] = []
             warnings: List[str] = []
@@ -636,6 +530,8 @@ class WorkloadService:
                     "Mode must be 'replace' (the monthly routine) or 'append'.")
             wb = self.workbook
             store = self.store
+            if mode == "replace":
+                self._copy_first()
             # Grades only for people the establishment does not know yet, so
             # a grade somebody set by hand is never undone by an import.
             graded = {p["name"] for p in store.people()}
@@ -655,12 +551,12 @@ class WorkloadService:
                 if grade and person not in graded:
                     store.save_person(person, grade=grade)
 
-            placed = people_module.teams_from_timesheets(
+            teams = people_module.teams_from_timesheets(
                 store, lambda: uuid.uuid4().hex[:12])
             projects = self._add_derived_projects()
             placed = set(wb.engineer_names())
             result = {
-                "teams_from_timesheets": placed,
+                "teams_from_timesheets": teams,
                 "rows_written": written,
                 "rows_in_unit": store.count(),
                 "mode": mode,
@@ -708,8 +604,8 @@ class WorkloadService:
                     for e in engineers if e.pattern]
         established = set(self.store.people_with_rows()) | {
             p["name"] for p in self.store.people()}
-        # Past the workbook's twelve, a person has no pattern to match, so the
-        # rows they already have say who they are.
+        # Somebody with rows but no place on the team has no pattern to
+        # match, so the rows they already have say who they are.
         seen = self.store.names_by_full_name()
         out: Dict[str, Dict[str, Any]] = {}
         unknown: List[str] = []
@@ -721,70 +617,32 @@ class WorkloadService:
                 unknown.append(full)
             else:
                 out[full] = {"name": hit, "new": False}
-        taken = {e.short_name for e in engineers
-                 if not _placeholder(e.short_name)} | established
+        taken = {e.short_name for e in engineers} | established
         for full, short in derive.short_names(unknown, taken).items():
             out[full] = {"name": short, "new": True}
         return out
 
     def _set_up_people(self, people: Dict[str, Dict[str, Any]]) -> List[str]:
-        """Give everyone new a place in the workbook, while it has room.
-
-        The blank template's placeholders -- Engineer 1, 2 and 3 -- are taken
-        over first, so a unit set up from timesheets has its own people in
-        them rather than three empty names beside them.
-        """
+        """Put everybody new on the team.  There is no limit to how many."""
         wb = self.workbook
-        holding = set(self.store.people_with_rows())
-        spare = [e.short_name for e in wb.engineers()
-                 if _placeholder(e.short_name) and e.short_name not in holding]
-        added: List[str] = []
-        for full, info in people.items():
-            if not info["new"]:
-                continue
-            # A full month, every year: what the template gives a placeholder,
-            # and what the timesheets cannot say otherwise.
-            body = {"short_name": info["name"], "pattern": full,
-                    "available_hours": wb.hours_per_man_month(),
-                    "availability": {year: 1.0 for year in
-                                     wb._availability_years().values()}}
-            if spare:
-                wb.update_engineer(spare.pop(0), body)
-            elif len(wb.engineers()) < cfg.MAX_ENGINEERS:
-                wb.add_engineer(body)
-            # Past the workbook's twelve, a person is on the roster and in
-            # Resourcing from their rows alone. They are not dropped: the
-            # import and the data check both name them (_without_a_place).
-            added.append(info["name"])
-        # Placeholders still unused once real people are in: remove them, so
-        # nobody is ranked against "Engineer 3".
-        real = [e for e in wb.engineers() if not _placeholder(e.short_name)]
-        if real:
-            for name in spare:
-                wb.remove_engineer(name)
-        return added
+        years = wb.availability_years()
+        return wb.add_engineers([
+            # A full month, every year: what the timesheets cannot say
+            # otherwise, and easy to change on Team.
+            {"short_name": info["name"], "pattern": full,
+             "available_hours": wb.hours_per_man_month(),
+             "availability": {year: 1.0 for year in years}}
+            for full, info in people.items() if info["new"]])
 
     def _without_a_place(self, people: Dict[str, Dict[str, Any]]) -> List[str]:
-        """Who these people include that the workbook will have no room for.
+        """Who in these exports would have hours here but no place on the team.
 
-        The same count _set_up_people makes: unused placeholders first, then
-        the room left under the cap, in the order the files name people.
-        Anybody already here without a place stays without one.
+        Everybody new is given one, so this is only somebody already holding
+        rows here who was taken off the team.
         """
-        wb = self.workbook
-        engineers = wb.engineers()
-        placed = {e.short_name for e in engineers}
-        holding = set(self.store.people_with_rows())
-        room = sum(1 for e in engineers
-                   if _placeholder(e.short_name) and e.short_name not in holding)
-        room += max(0, cfg.MAX_ENGINEERS - len(engineers))
-        out: List[str] = []
-        for info in people.values():
-            if info["new"] and room > 0:
-                room -= 1
-            elif info["new"] or info["name"] not in placed:
-                out.append(info["name"])
-        return out
+        placed = set(self.workbook.engineer_names())
+        return [info["name"] for info in people.values()
+                if not info["new"] and info["name"] not in placed]
 
     def _plan(self, records: Sequence[Dict[str, Any]]) -> Dict[str, List]:
         """The projects these rows add, and which would not fit."""
@@ -795,10 +653,8 @@ class WorkloadService:
         # everybody who booked it, not only this batch.
         rows += [r for r in self.store.all_rows()
                  if r["engineer"] not in staged_people]
-        engineers = [e.short_name for e in wb.engineers()
-                     if not _placeholder(e.short_name)] or []
         engineers = list(dict.fromkeys(
-            engineers + sorted({r["engineer"] for r in rows})))[:cfg.MAX_ENGINEERS]
+            wb.engineer_names() + sorted({r["engineer"] for r in rows})))
         plans = derive.plan_projects(
             rows,
             existing=[p.number for p in wb.projects()],
@@ -806,18 +662,8 @@ class WorkloadService:
             credit_steps=wb.reference()["credit_steps"],
             hours_per_mm=wb.hours_per_man_month() or 0.0,
         )
-        room_projects = derive.PROJECT_ROWS - len(wb.projects())
-        room_deliverables = derive.DELIVERABLE_ROWS - len(wb.deliverables())
-        fits, left_out = [], []
-        for plan in plans:
-            need = len(plan["deliverables"])
-            if room_projects >= 1 and room_deliverables >= need:
-                fits.append(plan)
-                room_projects -= 1
-                room_deliverables -= need
-            else:
-                left_out.append(plan)
-        return {"fits": fits, "left_out": left_out}
+        # Every project fits: the register has no last row any more.
+        return {"fits": list(plans), "left_out": []}
 
     def _add_derived_projects(self) -> Dict[str, Any]:
         wb = self.workbook
@@ -847,9 +693,8 @@ class WorkloadService:
 
     # -- teams and people ------------------------------------------------
     #
-    # The establishment lives in the unit's database, not the workbook: a head
-    # of department has more people than the workbook's twelve slots, and they
-    # move between teams far more often than a workbook wants to be rewritten.
+    # The establishment: which team each person is in, and their grade.  A
+    # head of department has many people, and they move between teams often.
 
     def roster(self) -> Dict[str, Any]:
         with self._lock:
@@ -1095,7 +940,7 @@ class WorkloadService:
             wb, rows, roster["people"], roster["teams"])
         return {
             "rows": rows,
-            "tasks": task_sheet.read(wb.raw),
+            "tasks": wb.task_records(),
             "roster": roster["people"],
             "teams": roster["teams"],
             "config": config,
@@ -1165,8 +1010,8 @@ class WorkloadService:
             for move in moves:
                 if move["kind"] == "task" and move["to"] not in engineers:
                     raise planner_module.PlanError([
-                        f"{move['to']} has no place in the workbook's task list "
-                        f"yet, so a task cannot be given to them. Hand them a "
+                        f"{move['to']} is not on the team yet, so a task cannot "
+                        f"be given to them. Add them on Team, or hand them a "
                         f"share of the project instead."])
             saved_projects, saved_tasks = 0, 0
             for move in moves:
@@ -1365,11 +1210,11 @@ class WorkloadService:
             except ValueError as exc:
                 errors.append(str(exc))
             off = set(choice["off"])
-            for iso in body.get("skip") or []:
+            for typed in body.get("skip") or []:
                 try:
-                    off.add(_dt.date.fromisoformat(str(iso)).isoformat())
+                    off.add(_dt.date.fromisoformat(str(typed)).isoformat())
                 except ValueError:
-                    errors.append(f"{iso!r} is not a date.")
+                    errors.append(f"{typed!r} is not a date.")
             if body.get("restore"):
                 off = set()
             if errors:
@@ -1469,7 +1314,7 @@ class WorkloadService:
     def finish_request(self, task_id: int) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
-            task = next((t for t in task_sheet.read(wb.raw) if t.id == task_id), None)
+            task = next((t for t in wb.task_records() if t.id == task_id), None)
             if task is None:
                 raise ApiError(HTTPStatus.NOT_FOUND, "There is no such request.")
             data = task.to_dict()
@@ -1489,7 +1334,7 @@ class WorkloadService:
                 deliverables=deliverables,
                 project_rows=metrics.project_rows(wb, index),
                 projects=wb.projects(), rows=rows,
-                tasks=task_sheet.read(wb.raw),
+                tasks=wb.task_records(),
                 config=self._calendar(wb, rows, roster["people"], roster["teams"])[0],
                 hours_per_mm=wb.hours_per_man_month(),
                 drawing_counts=drawings_module.counts(self.store, deliverables),
@@ -1573,22 +1418,6 @@ class WorkloadService:
             result["save"] = self._commit()
             return result
 
-    def extend_capacity(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        with self._lock:
-            wb = self.workbook
-            current = wb.timesheet_capacity()
-            raw = body.get("raw_last_row")
-            source = body.get("source_last_row")
-            if not raw and not source:
-                raw = current["suggested_raw_last_row"]
-            result = wb.extend_timesheet_capacity(
-                raw_last_row=int(raw) if raw else None,
-                source_last_row=int(source) if source else None,
-            )
-            result["save"] = self._commit()
-            result["capacity"] = wb.timesheet_capacity()
-            return result
-
     # -- tasks -----------------------------------------------------------
     def tasks(self) -> Dict[str, Any]:
         """The list, the load it puts on the team, and what a task may refer to."""
@@ -1621,7 +1450,7 @@ class WorkloadService:
                                   "floor": rule["floor"], "cap": rule["cap"]}
                                  for key, rule in progress.REVIEW_CODES.items()],
                 "rework": progress.rework(
-                    task_sheet.read(wb.raw), wb.engineer_names()),
+                    wb.task_records(), wb.engineer_names()),
                 "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday",
                              "Friday", "Saturday", "Sunday"],
             }
@@ -1679,13 +1508,7 @@ class WorkloadService:
 
 def _today():
     """Today, which the tests can pin with ``WORKLOAD_TODAY``."""
-    pinned = os.environ.get("WORKLOAD_TODAY")
-    if pinned:
-        try:
-            return _dt.date.fromisoformat(pinned)
-        except ValueError:
-            pass
-    return _dt.date.today()
+    return _model_today()
 
 
 def _year(query: Dict[str, List[str]]) -> Optional[int]:
@@ -1708,14 +1531,6 @@ def _int(value: str) -> int:
         return int(value)
     except ValueError:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{value!r} is not a row number.")
-
-
-_PLACEHOLDER = re.compile(r"^Engineer \d+$")
-
-
-def _placeholder(name: str) -> bool:
-    """One of the blank template's stand-ins rather than a real person."""
-    return bool(_PLACEHOLDER.match(name or ""))
 
 
 def _decode(content: Any) -> bytes:
@@ -1762,3 +1577,16 @@ def _group_by_person(rows) -> Dict[str, List[Dict[str, Any]]]:
     for row in rows:
         grouped.setdefault(row["engineer"], []).append(row)
     return grouped
+
+
+def _duplicates(existing: Sequence[Dict[str, Any]],
+                incoming: Sequence[Dict[str, Any]]) -> int:
+    """How many incoming rows are already held: same job, day, phase and hours.
+
+    Only meaningful when appending; the monthly routine replaces instead.
+    """
+    def key(row: Dict[str, Any]):
+        return (row.get("job_number"), row.get("date"), row.get("phase"),
+                round(float(row.get("hours") or 0.0), 4))
+    seen = {key(row) for row in existing}
+    return sum(1 for row in incoming if key(row) in seen)
