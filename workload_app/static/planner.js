@@ -79,7 +79,7 @@ async function openPlanner({ quiet = false } = {}) {
   } else if (plan.view === 'people') {
     try {
       plan.needs = plan.needs || await api('/api/needs');
-      setChildren($('#planner-body'), renderNeeds(plan.needs));
+      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
     } catch (error) {
       if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
     }
@@ -229,8 +229,8 @@ function stat(label, value, toneName) {
 function renderNeeds(needs) {
   if (!needs) return null;
   const alerts = needs.alerts || [];
-  const level = { now: 'bad', soon: 'warn', room: 'ok', ok: 'ok' };
-  const label = { now: 'ask now', soon: 'ask soon', room: 'room', ok: 'fine' };
+  const level = { now: 'bad', soon: 'warn', cover: 'warn', room: 'ok', ok: 'ok' };
+  const label = { now: 'ask now', soon: 'ask soon', cover: 'hand over', room: 'room', ok: 'fine' };
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
       el('div', {},
@@ -250,6 +250,70 @@ function renderNeeds(needs) {
         a.kind === 'need' ? needWeeks(needs, a) : null)))
       : el('p', { class: 'muted' }, 'Nobody to forecast for yet.'),
     needsFootnote(needs));
+}
+
+const COMING_STATUS = {
+  'waiting': ['warn', 'starts later'], 'due to start': ['warn', 'nobody booking yet'],
+  'started': ['ok', 'being booked'], 'used up': ['muted', 'hours used up — at its pace now'],
+  'taken over': ['muted', 'on its own figures now'],
+};
+
+/** A project just assigned: one line, and the forecast above counts it. */
+function workComing(needs) {
+  if (!needs) return null;
+  const coming = needs.coming || [];
+  const today = needs.today;
+  const name = el('input', { type: 'text', placeholder: 'Project just assigned, e.g. Safaga berth 3',
+    'aria-label': 'Project', class: 'grow' });
+  const job = el('input', { type: 'text', placeholder: 'Job no.', 'aria-label': 'Job number',
+    class: 'job-input' });
+  const team = el('select', { 'aria-label': 'Team' },
+    el('option', { value: '' }, (needs.teams || []).length ? 'Which team?' : 'The unit'),
+    ...(needs.teams || []).map((t) => el('option', { value: t.id }, t.name)));
+  const hours = el('input', { type: 'number', min: '1', step: '10', placeholder: 'Hours',
+    'aria-label': 'Rough hours', class: 'num-input' });
+  const start = el('input', { type: 'date', 'aria-label': 'Starts', value: today });
+  const end = el('input', { type: 'date', 'aria-label': 'Ends' });
+  const add = async () => {
+    if (!name.value.trim() && !job.value.trim()) { name.focus(); return; }
+    if (!Number(hours.value)) { hours.focus(); return; }
+    try {
+      const result = await api('/api/planned-work', { method: 'POST', body: {
+        name: name.value, job_number: job.value, team_id: team.value,
+        hours: hours.value, start: start.value, end: end.value } });
+      plan.needs = result.needs;
+      toast(`${result.name} is in the forecast from ${shortDate(result.start)} to ${shortDate(result.end)}.`, 'ok');
+      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+    } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  return el('section', { class: 'panel' },
+    el('h3', {}, 'Work coming'),
+    el('p', { class: 'muted' },
+      'A project just assigned, before anybody books to it. Its rough hours are spread from start to end and counted above; '
+      + 'what gets booked to its job number is taken off, and once it is confirmed on Projects its own figures take over.'),
+    el('div', { class: 'quick-add' }, name,
+      el('div', { class: 'quick-add-options' }, job, team, hours,
+        el('label', { class: 'inline-date' }, el('span', { class: 'muted small' }, 'from'), start),
+        el('label', { class: 'inline-date' }, el('span', { class: 'muted small' }, 'to'), end),
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: add }, 'Add'))),
+    coming.length ? el('ul', { class: 'request-list' }, coming.map((c) => {
+      const [tone, text] = COMING_STATUS[c.status] || ['muted', c.status];
+      return el('li', { class: 'request' },
+        el('span', { class: 'request-time' }, `${shortDate(c.start)} – ${shortDate(c.end)}`),
+        el('span', { class: 'request-what' }, el('b', {}, c.name),
+          el('span', { class: 'muted small' }, [c.job_number && c.job_number !== c.name ? c.job_number : '',
+            c.team_name, `${fmt.hours(c.hours)} h`, c.booked ? `${fmt.hours(c.booked)} h booked` : '']
+            .filter(Boolean).map((t) => ` · ${t}`).join('')),
+          ' ', el('span', { class: `pill pill-${tone}` }, text)),
+        el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          try {
+            const result = await api(`/api/planned-work/${c.id}/remove`, { method: 'POST' });
+            plan.needs = result.needs;
+            setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+          } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+        } }, 'Remove'));
+    })) : null);
 }
 
 /** The weeks behind an ask, as a strip of small bars: work against people. */
@@ -544,7 +608,7 @@ async function overviewNeeds() {
           + (d.deliverables_without ? `. ${d.deliverables_without} deliverable(s) have no count yet.` : '.')))
         : el('div', { class: 'finding' },
           el('b', {}, 'Drawings'),
-          el('p', { class: 'muted' }, 'Give each deliverable its number of drawings on Projects, and done, left and hours a drawing follow everywhere.'))));
+          el('p', { class: 'muted' }, 'Upload the team\'s drawing list on Projects (or give each deliverable its count), and done, left and hours a drawing follow everywhere.'))));
 }
 
 /* -- today ------------------------------------------------------------- */
@@ -610,7 +674,92 @@ function renderDay() {
 
 /* -- who is away ---------------------------------------------------------- */
 
-const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar' };
+const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar',
+  holiday: 'public holiday' };
+const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function weekText(days) {
+  if (!days || !days.length) return '';
+  // Written from the first day of the run, so Sunday to Thursday reads as such.
+  const order = [6, 0, 1, 2, 3, 4, 5];
+  const sorted = order.filter((d) => days.includes(d));
+  const startsSunday = days.includes(6) && !days.includes(5);
+  const list = startsSunday ? sorted : sorted.filter((d) => d !== 6).concat(days.includes(6) ? [6] : []);
+  return `${WEEKDAY[list[0]]}–${WEEKDAY[list[list.length - 1]]}`;
+}
+
+async function saveHolidays(body, message) {
+  try {
+    const result = await api('/api/holidays', { method: 'PUT', body });
+    if (result.save) markSaved(result.save);
+    if (message) toast(message, 'ok');
+    plan.needs = null;
+    await loadDay({ quiet: true });
+    return result;
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+    return null;
+  }
+}
+
+/** Public holidays: the unit's country, chosen once, and a team elsewhere. */
+async function openHolidays() {
+  let view;
+  try { view = await api('/api/holidays'); } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad'); return;
+  }
+  const options = [{ value: '', label: 'None' },
+    ...view.countries.map((c) => ({ value: c.code, label: c.name }))];
+  const fields = [{ name: 'unit', label: 'The unit keeps the holidays of', type: 'select',
+    options, full: true, value: view.unit || '' }];
+  for (const team of view.teams) {
+    fields.push({ name: `team:${team.id}`, label: `${team.name}`, type: 'select',
+      hint: 'only if it is somewhere else',
+      options: [{ value: '', label: 'Same as the unit' }, ...options.slice(1)], value: team.country });
+  }
+  fields.push({ name: 'use_week', label: 'Working week', type: 'select', full: true,
+    options: [{ value: '', label: `Keep ${weekText(view.work_days)}` },
+      { value: '1', label: 'Use the country\'s own working week' }] });
+  if (view.off.length) {
+    fields.push({ name: 'restore', label: 'Days taken off the built-in list', type: 'select', full: true,
+      hint: view.off.map(shortDate).join(', '),
+      options: [{ value: '', label: 'Keep them off' }, { value: '1', label: 'Put them back' }] });
+  }
+  openModal('Public holidays', fields, async () => {
+    const values = modalValues();
+    const teams = {};
+    for (const team of view.teams) teams[team.id] = values[`team:${team.id}`] || '';
+    const result = await api('/api/holidays', { method: 'PUT', body: {
+      unit: values.unit || '', teams, use_week: Boolean(values.use_week),
+      restore: Boolean(values.restore) } });
+    if (result.save) markSaved(result.save);
+    toast(result.holidays.unit ? `Public holidays: ${result.holidays.unit_name}.` : 'No public holidays.', 'ok');
+    plan.needs = null;
+    await loadDay({ quiet: true });
+  });
+}
+
+/** Asked once, until somebody answers: whose public holidays to keep. */
+function holidayPrompt(data) {
+  const h = data.holidays;
+  if (!h || h.chosen) return null;
+  const choices = (h.countries || []).map((c) => el('option', { value: c.code }, c.name));
+  const pick = el('select', { 'aria-label': 'Country' }, el('option', { value: '' }, 'Choose a country'), ...choices);
+  if (h.unit) pick.value = h.unit;
+  const week = el('input', { type: 'checkbox', checked: true });
+  return el('div', { class: 'holiday-prompt' },
+    el('span', {}, h.unit ? `Public holidays look like ${h.unit_name}'s.` : 'Which country\'s public holidays does this unit keep?'),
+    pick,
+    el('label', { class: 'check-chip' }, week, el('span', {}, 'and its working week')),
+    el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => {
+      if (!pick.value) { pick.focus(); return; }
+      saveHolidays({ unit: pick.value, use_week: week.checked },
+        `Public holidays: ${pick.options[pick.selectedIndex].text}.`);
+    } }, h.unit ? 'Yes' : 'Use'),
+    el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => openHolidays() },
+      'Teams elsewhere…'));
+}
+
 
 function awayWhen(a) {
   return a.start === a.end ? shortDate(a.start) : `${shortDate(a.start)} – ${shortDate(a.end)}`;
@@ -642,15 +791,28 @@ function awayPanel(data) {
   const away = data.away || [];
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
-      el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+      el('div', {},
+        el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+        data.holidays && data.holidays.chosen ? el('p', { class: 'muted small' },
+          data.holidays.unit ? `Public holidays: ${data.holidays.unit_name}` : 'No public holidays chosen',
+          ...(data.holidays.teams || []).filter((t) => t.country).map((t) =>
+            `; ${t.name}: ${(data.holidays.countries.find((c) => c.code === t.country) || {}).name || t.country}`),
+          '. ',
+          el('button', { class: 'linkish', type: 'button', onclick: () => openHolidays() }, 'Change')) : null),
       el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
         'Someone is away')),
+    holidayPrompt(data),
     away.length ? el('ul', { class: 'request-list' }, away.map((a) => el('li', { class: 'request' },
       el('span', { class: 'request-time' }, awayWhen(a)),
-      el('span', { class: 'request-what' }, el('b', {}, a.person === '*' ? 'Everybody' : a.person),
+      el('span', { class: 'request-what' },
+        el('b', {}, a.source === 'holiday' ? a.note : (a.person === '*' ? 'Everybody' : a.person)),
         el('span', { class: 'muted small' },
-          [a.note, AWAY_SOURCE[a.source]].filter(Boolean).map((t) => ` · ${t}`).join(''))),
-      a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          (a.source === 'holiday' ? [a.where, AWAY_SOURCE.holiday] : [a.note, AWAY_SOURCE[a.source]])
+            .filter(Boolean).map((t) => ` · ${t}`).join(''))),
+      a.source === 'holiday' ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+        title: 'Announced for another day? Take this one off, and add the right day for everybody.',
+        onclick: () => saveHolidays({ skip: a.dates }, `${a.note} is off the plan.`) }, 'Not a holiday')
+      : a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
         try {
           await api(`/api/absences/${a.id}/remove`, { method: 'POST' });
           plan.needs = null;
@@ -900,6 +1062,7 @@ function renderSubmissions() {
   };
   const counts = data.counts;
   setChildren($('#planner-body'),
+    proposalsBlock(data.from_list, () => loadSubmissions({ quiet: true })),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
         el('div', {},
@@ -943,10 +1106,125 @@ function renderSubmissions() {
                   title: item.basis === 'overdue' ? `The register said ${item.register_date}` : '' }, text),
                   item.step_name ? el('span', { class: 'muted small' }, ` ${item.step_name}`) : null),
                 el('td', { class: 'num' }, item.hours_left === null ? '—' : fmt.hours(item.hours_left)),
-                el('td', { class: 'num' }, item.drawings === null || item.drawings === undefined ? '—' : fmt.int(item.drawings)),
+                el('td', { class: 'num' }, item.list ? `${fmt.int(item.list.issued)} of ${fmt.int(item.list.total)} out`
+                  : item.drawings === null || item.drawings === undefined ? '—' : fmt.int(item.drawings)),
                 el('td', {}, item.people.join(', ') || '—'));
             }))))
-        : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')));
+        : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')),
+    waitingPanel(data));
+}
+
+/** Sent and nothing back yet: the client's turn, oldest first, to chase. */
+function waitingPanel(data) {
+  const waiting = data.waiting || [];
+  if (!waiting.length) return null;
+  return el('section', { class: 'panel' },
+    el('h3', {}, `Waiting for comments (${waiting.length})`),
+    el('p', { class: 'muted' }, 'Sent to the client and nothing back yet. The oldest are the ones to chase.'),
+    el('ul', { class: 'request-list' }, waiting.map((w) => el('li', { class: `request ${w.days > 21 ? 'is-late' : ''}` },
+      el('span', { class: 'request-time' }, `sent ${shortDate(w.sent)}`),
+      el('span', { class: 'request-what' }, el('span', { class: 'code' }, `${w.project_number} `), el('b', {}, w.name),
+        el('span', { class: 'muted small' }, ` · ${w.days} day${w.days === 1 ? '' : 's'}`
+          + (w.list ? ` · ${w.list.issued} drawing(s)` : w.drawings ? ` · ${w.drawings} drawing(s)` : ''))),
+      el('span')))));
+}
+
+/* -- the drawing list --------------------------------------------------- */
+
+function saveFile(result) {
+  const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }));
+  const link = el('a', { href: url, download: result.filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function changeText(change) {
+  const parts = [];
+  if (change.submitted_to_client) parts.push(`sent ${shortDate(change.submitted_to_client)}`);
+  if (change.comments_received) parts.push(`comments back ${shortDate(change.comments_received)}`);
+  if (change.completed) parts.push(`accepted ${shortDate(change.completed)}`);
+  if (change.step_name) parts.push(`step: ${change.step_name}`);
+  return parts.join(' · ');
+}
+
+/** What the drawing list says the register should, and one tap to apply it. */
+function proposalsBlock(proposals, after) {
+  if (!proposals || !proposals.length) return null;
+  return el('div', { class: 'list-proposals' },
+    el('div', { class: 'panel-head' },
+      el('b', {}, `The drawing list moves ${proposals.length} deliverable(s) on`),
+      el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => {
+        try {
+          const result = await api('/api/drawing-list/apply', { method: 'POST',
+            body: { rows: proposals.map((p) => p.row) } });
+          if (result.save) markSaved(result.save);
+          toast(`${result.applied} deliverable(s) updated from the drawing list.`, 'ok');
+          plan.submissions = null;
+          if (after) await after();
+        } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+      } }, 'Apply')),
+    el('ul', { class: 'plain-list' }, proposals.map((p) => el('li', {},
+      el('span', { class: 'code' }, `${p.project_number} `), el('b', {}, p.name), ': ',
+      changeText(p.change), el('span', { class: 'muted small' }, ` — ${p.why}`)))));
+}
+
+/** Projects > Drawing list: the template, the upload, and what it changed. */
+function openDrawingList() {
+  const results = el('div', { class: 'list-results' });
+  const input = el('input', { type: 'file', accept: '.xlsx,.xlsm', multiple: true });
+  const show = (result) => {
+    const d = result.drawings || {};
+    setChildren(results,
+      el('p', {}, el('b', {}, `${fmt.int(result.matched)} drawing(s) on ${result.deliverables.length} deliverable(s).`),
+        ` ${fmt.int(Math.round(d.done || 0))} of ${fmt.int(d.total || 0)} done across the unit`
+        + (d.hours_per_drawing ? `, ${fmt.hours(d.hours_per_drawing)} h a drawing.` : '.')),
+      result.deliverables.length ? el('div', { class: 'table-wrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, el('th', {}, 'Deliverable'), el('th', { class: 'num' }, 'Drawings'),
+          el('th', { class: 'num' }, 'Gone out'), el('th', { class: 'num' }, 'A'),
+          el('th', { class: 'num' }, 'B'), el('th', { class: 'num' }, 'C'))),
+        el('tbody', {}, result.deliverables.map((e) => el('tr', {},
+          el('td', {}, el('span', { class: 'code' }, `${e.project_number} `), e.name),
+          el('td', { class: 'num' }, fmt.int(e.total)), el('td', { class: 'num' }, fmt.int(e.issued)),
+          el('td', { class: 'num' }, fmt.int(e.code_a)), el('td', { class: 'num' }, fmt.int(e.code_b)),
+          el('td', { class: 'num' }, fmt.int(e.code_c))))))) : null,
+      result.unmatched.length ? el('p', { class: 'muted small' },
+        'Not matched to a deliverable: ', result.unmatched.map((u) =>
+          `${u.job_number}${u.deliverable ? ` / ${u.deliverable}` : ''} (${u.drawings})`).join(', '),
+        '. Check the job number, and give the deliverable\'s name as on Projects or its phase number.') : null,
+      proposalsBlock(result.proposals, async () => {
+        setChildren(results, el('p', {}, 'Applied. The register and the submissions plan are up to date.'));
+        if (typeof refreshAll === 'function') await refreshAll();
+      }));
+  };
+  input.addEventListener('change', async () => {
+    if (!input.files.length) return;
+    setChildren(results, el('p', { class: 'muted' }, 'Reading…'));
+    try {
+      const result = await api('/api/drawing-list', { method: 'POST',
+        body: { files: await filesBase64([...input.files]) } });
+      show(result);
+      if (typeof refreshAll === 'function') refreshAll();
+    } catch (error) {
+      setChildren(results, el('p', { class: 'v-bad' }, (error.errors || [error.message]).join(' ')));
+    }
+    input.value = '';
+  });
+  openPanel('Drawing list', el('div', { class: 'drawing-list' },
+    el('p', {}, 'Upload the drawing list the team keeps — one row a drawing — and each deliverable\'s drawing count, '
+      + 'how many have gone to the client and the codes that came back are read from it. '
+      + 'Any list with headings like Job Number, Drawing No., Status, Issued and Code will do.'),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn', type: 'button', onclick: async () => {
+        try { saveFile(await api('/api/drawing-list/template')); } catch (error) {
+          toast((error.errors || [error.message]).join(' '), 'bad'); }
+      } }, 'Download the template'),
+      el('label', { class: 'btn btn-primary file-btn' }, 'Upload a drawing list', input)),
+    results));
 }
 
 /* -- wiring -------------------------------------------------------------- */
@@ -961,6 +1239,8 @@ function fillTeams(teams) {
 }
 
 function wirePlanner() {
+  const listButton = $('#btn-drawing-list');
+  if (listButton) listButton.addEventListener('click', openDrawingList);
   const team = $('#planner-team');
   if (!team) return;
   team.addEventListener('change', (e) => {

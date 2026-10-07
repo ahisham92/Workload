@@ -11,6 +11,9 @@ The work ahead is the projects' own forecast, week by week:
   worth forecasting from, so its recent **pace** is taken to carry on while it
   is live.  It is marked as assumed, and confirming the project replaces the
   assumption with its real figures;
+* a project **just assigned**, that nobody has booked to yet, is its rough
+  hours spread from its start to its end, less what has been booked since,
+  until its own figures or the timesheets take over (see ``incoming``);
 * where a project has **drawings** still to do and the unit has a drawing
   rate of its own, the drawing office's share of that project is its drawings
   left times the hours a drawing takes -- drawings are the one measure here
@@ -37,7 +40,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import calendar_
@@ -52,6 +55,9 @@ HORIZON_WEEKS = 12
 LATE_SPREAD_WEEKS = 6
 #: Short by at least this many people in a week counts as short.
 SHORT_AT = 0.5
+#: Short for fewer weeks than this is somebody away or a busy week: the
+#: Planner's handovers cover it, nobody is hired for it.
+MIN_NEED_WEEKS = 2
 #: Spare by at least this many people counts as room.
 ROOM_AT = 1.0
 #: Room has to last this long to be worth saying.
@@ -93,7 +99,9 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
              drafting_hours_per_drawing: Optional[float],
              today: Optional[_dt.date] = None, weeks: int = HORIZON_WEEKS,
              unit_name: str = "",
-             requests: Sequence[Tuple[str, _dt.date, float]] = ()) -> Dict[str, Any]:
+             requests: Sequence[Tuple[str, _dt.date, float]] = (),
+             planned: Sequence[Dict[str, Any]] = (),
+             team_names: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     today = today or _dt.date.today()
     hours_per_mm = float(hours_per_mm or 0) or 185.0
     a_day = task_sheet.hours_per_day(config)
@@ -105,6 +113,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
 
     people = {p["name"]: p for p in roster}
     teams = {t["id"]: t["name"] for t in _teams(roster)}
+    for team_id, name in (team_names or {}).items():
+        teams.setdefault(team_id, name)
 
     def bucket(name: str) -> Tuple[str, str]:
         person = people.get(name) or {}
@@ -134,9 +144,65 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     for (_person, number), rate in rates.items():
         rate_by_project[number] += rate
 
-    # -- the work ahead, project by project, week by week -----------------
     register = {p.number: p for p in projects}
     demand: Dict[Tuple[str, str], List[float]] = defaultdict(lambda: [0.0] * len(span))
+
+    # -- work coming: projects just assigned, on their rough hours -------
+    booked: Dict[str, float] = defaultdict(float)
+    for row in dated:
+        booked[row["job_number"]] += row["hours"] or 0.0
+    by_team: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(dict)
+    for key, hours in (sum((Counter(v) for v in split.values()), Counter())).items():
+        by_team[key[0]][key] = hours
+    figures_by_number = {f["number"]: f for f in project_rows}
+    coming: List[Dict[str, Any]] = []
+    counted_numbers = set()
+    for item in planned:
+        number = item.get("job_number") or ""
+        project = register.get(number) if number else None
+        own = figures_by_number.get(number) or {}
+        start = _dt.date.fromisoformat(item["start"])
+        end = _dt.date.fromisoformat(item["end"])
+        done = booked.get(number, 0.0) if number else 0.0
+        left = max(0.0, float(item["hours"]) - done)
+        if project is not None and not derive.needs_confirming(project.notes or "") \
+                and (own.get("remaining_mm") or 0) > 0:
+            status = "taken over"
+        elif left <= 0:
+            status = "used up"
+        elif done > 0:
+            status = "started"
+        elif start > today:
+            status = "waiting"
+        else:
+            status = "due to start"
+        weekly = [0.0] * len(span)
+        if status in ("started", "waiting", "due to start"):
+            first = max(start, today)
+            last = end if end >= first + _dt.timedelta(days=7) else \
+                first + _dt.timedelta(weeks=LATE_SPREAD_WEEKS) - _dt.timedelta(days=1)
+            weekly = _spread(left, first, last, span, config)
+            if number:
+                counted_numbers.add(number)
+            team_key = item.get("team_id") or people_module.UNASSIGNED
+            shares = (split.get(number) or whole.get(number) if number else None) \
+                or by_team.get(team_key) \
+                or {(team_key, people_module.ROLE_ENGINEERING): 1.0}
+            total = sum(shares.values()) or 1.0
+            for key, value in shares.items():
+                target = demand[key]
+                for i, hours in enumerate(weekly):
+                    target[i] += hours * value / total
+        coming.append({
+            "id": item.get("id"), "name": item["name"], "job_number": number,
+            "team_id": item.get("team_id") or "",
+            "team_name": teams.get(item.get("team_id") or "", ""),
+            "hours": round(float(item["hours"]), 1), "booked": round(done, 1),
+            "left": round(left, 1), "start": item["start"], "end": item["end"],
+            "status": status, "in_horizon": round(sum(weekly), 1),
+        })
+
+    # -- the work ahead, project by project, week by week -----------------
     assumed: List[str] = []
     late: List[str] = []
     unstaffed: List[str] = []
@@ -145,6 +211,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         project = register.get(number)
         if project is None or not figures.get("in_scope", True):
             continue
+        if number in counted_numbers:
+            continue                      # read from its rough hours above
         shares = split.get(number) or whole.get(number) or {}
         total_share = sum(shares.values())
         weekly = [0.0] * len(span)
@@ -244,7 +312,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
 
     # One line per team and kind with nothing to ask for, so a lead reading
     # the list knows they were looked at, not forgotten.
-    needing = {(a["team_id"], a["role"]) for a in alerts if a["kind"] == "need"}
+    needing = {(a["team_id"], a["role"]) for a in alerts if a["kind"] in ("need", "cover")}
     for group in groups:
         key = (group["team_id"], group["role"])
         if key in needing or not group["people"]:
@@ -259,7 +327,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                       f"the team has.",
             "people": 0, "weeks": 0, "from": None, "to": None, "ask_by": None,
         })
-    order = {"now": 0, "soon": 1, "room": 2, "ok": 3}
+    order = {"now": 0, "soon": 1, "cover": 2, "room": 3, "ok": 4}
     alerts.sort(key=lambda a: (order.get(a["severity"], 9), a["team_name"], a["role"]))
 
     names = {p.number: p.name or p.number for p in projects}
@@ -274,6 +342,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         "assumed": [{"number": n, "name": names.get(n, n)} for n in assumed],
         "late": [{"number": n, "name": names.get(n, n)} for n in late],
         "unstaffed": [{"number": n, "name": names.get(n, n)} for n in unstaffed],
+        "coming": coming,
         "data_through": last_day.isoformat() if last_day else None,
         "summary": {
             "asks": sum(1 for a in alerts if a["kind"] == "need"),
@@ -336,8 +405,26 @@ def _alerts(group: Dict[str, Any], today: _dt.date,
         count = max(1, math.ceil(peak - 0.25))
         start = _dt.date.fromisoformat(run[0]["from"])
         end = _dt.date.fromisoformat(run[-1]["to"])
-        ask_by = start - _dt.timedelta(weeks=LEAD_WEEKS)
         open_ended = j == len(weeks) - 1
+        if len(run) < MIN_NEED_WEEKS and not open_ended:
+            away = sum(w.get("away_days", 0) for w in run)
+            why = (f"{away} day{'s' if away != 1 else ''} away" if away
+                   else "a busy week")
+            out.append({
+                "kind": "cover", "severity": "cover",
+                "team_id": group["team_id"], "team_name": group["team_name"],
+                "role": role,
+                "title": (f"{group['team_name']}: short of {people_module.role_label(role, 2)} "
+                          f"in the week of {start:%d %b}"),
+                "detail": (f"About {peak:.1f} {people_module.role_label(role, 2)} short "
+                           f"for one week ({why}). Hand some work over in Next days "
+                           f"rather than asking for people."),
+                "people": 0, "weeks": len(run),
+                "from": start.isoformat(), "to": end.isoformat(), "ask_by": None,
+            })
+            i = j + 1
+            continue
+        ask_by = start - _dt.timedelta(weeks=LEAD_WEEKS)
         severity = "now" if ask_by <= today else "soon"
         who = people_module.role_label(role, count)
         length = f"{len(run)} week{'s' if len(run) != 1 else ''}"
