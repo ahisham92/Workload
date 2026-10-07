@@ -62,13 +62,13 @@ def department():
     berths, coastal = "BERTHS", "COASTAL"
     return [
         # Osama is doing the work of one and a half people.
-        export("osama", booking("Osama Ayman", "P2", berths, "N1-0100D", 1,
+        export("osama", booking("Osama Ashdown", "P2", berths, "N1-0100D", 1,
                                 "Detailed Design ST", 8)
-               + booking("Osama Ayman", "P2", berths, "N2-0100D", 1,
+               + booking("Osama Ashdown", "P2", berths, "N2-0100D", 1,
                          "Concept Design", 4)),
-        export("kirolos", booking("Kirolos Naguib", "P1", berths, "N1-0100D", 1,
+        export("kirolos", booking("Kirolos Northwind", "P1", berths, "N1-0100D", 1,
                                   "Detailed Design ST", 3)),
-        export("mariam", booking("Mariam Adel", "Lead", coastal, "N3-0100D", 1,
+        export("mariam", booking("Mariam Ashgrove", "Lead", coastal, "N3-0100D", 1,
                                  "Coastal Study", 4)),
         export("hany", booking("Hany Draftsman", "Senior Draftsman", berths,
                                "N1-0100D", 1, "Detailed Design ST", 7)),
@@ -233,7 +233,7 @@ class TestWhenToAskForPeople:
 
     def test_an_overloaded_team_is_told_how_many_and_for_how_long(self, unit):
         unit.import_exports([export("more", booking(
-            "Kirolos Naguib", "P1", "BERTHS", "N4-0100D", 1, "Detail", 8))],
+            "Kirolos Northwind", "P1", "BERTHS", "N4-0100D", 1, "Detail", 8))],
             mode="append")
         data = unit.needs()
         asks = [a for a in data["alerts"] if a["kind"] == "need"]
@@ -458,7 +458,7 @@ class TestTimeAway:
         assert view["to"] == "2026-10-14"
 
     def test_leave_booked_on_a_timesheet_is_read_ahead_and_behind(self, unit):
-        leave = [{"Job Type": "3-Leave", "JobNumber": "LEAVE", "FullName": "Mariam Adel",
+        leave = [{"Job Type": "3-Leave", "JobNumber": "LEAVE", "FullName": "Mariam Ashgrove",
                   "Grade": "Lead", "Date": day, "Phase": None, "RegularHours": 8,
                   "OvertimeHours": 0, "TotalHours": 8, "JobStatus": "",
                   "DeliverableDescription": "Annual leave", "CurrentUnitDesc": "COASTAL"}

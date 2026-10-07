@@ -36,8 +36,8 @@ def make_export(headers, rows, *, title_block=True, shuffled=False):
 
 def a_row(**overrides):
     row = {
-        "Job Type": "1-Projects", "JobNumber": "N25185-0100D",
-        "FullName": "Ahmed Mitwally", "Date": dt.date(2026, 9, 1), "Phase": 4,
+        "Job Type": "1-Projects", "JobNumber": "T10001-0100D",
+        "FullName": "Ahmed Mockridge", "Date": dt.date(2026, 9, 1), "Phase": 4,
         "RegularHours": 8.5, "OvertimeHours": 1.0, "TotalHours": 9.5,
         "WorkScope": "HO Design",
     }
@@ -86,7 +86,7 @@ class TestReadingFiles:
         data = make_export(ts_headers, [a_row()], shuffled=True)
         parsed = timesheets.parse("Ahmed", "e.xlsx", data, ts_headers)
         index = {h: i for i, h in enumerate(parsed.headers)}
-        assert parsed.rows[0][index["JobNumber"]] == "N25185-0100D"
+        assert parsed.rows[0][index["JobNumber"]] == "T10001-0100D"
         assert parsed.rows[0][index["TotalHours"]] == 9.5
 
     def test_csv_is_accepted(self, ts_headers):
@@ -131,7 +131,7 @@ class TestSummaryAndGuards:
         parsed = timesheets.parse("Kirolos", "e.xlsx", data, ts_headers,
                                   name_pattern="*Kirolos*")
         assert parsed.ok is False
-        assert any("Ahmed Mitwally" in message for message in parsed.errors)
+        assert any("Ahmed Mockridge" in message for message in parsed.errors)
 
     def test_the_right_persons_export_passes(self, ts_headers):
         data = make_export(ts_headers, [a_row()])
@@ -142,7 +142,7 @@ class TestSummaryAndGuards:
     def test_job_numbers_outside_the_register_are_flagged(self, ts_headers):
         data = make_export(ts_headers, [a_row(JobNumber="MYSTERY-0100D")])
         parsed = timesheets.parse("Ahmed", "e.xlsx", data, ts_headers,
-                                  known_job_numbers={"N25185-0100D"})
+                                  known_job_numbers={"T10001-0100D"})
         assert parsed.summary["unknown_job_numbers"][0]["code"] == "MYSTERY-0100D"
         assert any("not in the project register" in w for w in parsed.warnings)
 
@@ -174,7 +174,7 @@ class TestKeepingTheRows:
 
     def _rows(self, wb, count=5):
         headers = wb.timesheet_headers("Kirolos")
-        rows = [a_row(FullName="Kirolos Nabil", Date=dt.date(2026, 9, day))
+        rows = [a_row(FullName="Kirolos Northwind", Date=dt.date(2026, 9, day))
                 for day in range(1, count + 1)]
         data = make_export(headers, rows)
         return timesheets.parse("Kirolos", "e.xlsx", data, headers,

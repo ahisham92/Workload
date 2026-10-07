@@ -73,14 +73,14 @@ def make_kit(client):
 
 def tonight(extra_hours=0):
     rows = [
-        row("Ahmed Mitwally", "N25185-0100D", D(2026, 3, 1), 8, grade="Lead"),
-        row("Ahmed Mitwally", "N25185-0100D", D(2026, 8, 2), 8, phase=4,
+        row("Ahmed Mockridge", "T10001-0100D", D(2026, 3, 1), 8, grade="Lead"),
+        row("Ahmed Mockridge", "T10001-0100D", D(2026, 8, 2), 8, phase=4,
             deliverable="Detailed Design ST", grade="Lead"),
-        row("Ahmed Mitwally", "LEAVE", D(2026, 8, 3), 8, job_type="6-Additives",
+        row("Ahmed Mockridge", "LEAVE", D(2026, 8, 3), 8, job_type="6-Additives",
             phase=0, deliverable="", grade="Lead"),
-        row("Ahmed Mitwally", "S12066-0100D", D(2019, 5, 1), 40, phase=4,
+        row("Ahmed Mockridge", "T10002-0100D", D(2019, 5, 1), 40, phase=4,
             deliverable="Tender Documents SB", grade="P1"),
-        row("Ahmed Mitwally", "AN23232-0100D", D(2026, 10, 6), 6 + extra_hours,
+        row("Ahmed Mockridge", "T10004-0100D", D(2026, 10, 6), 6 + extra_hours,
             grade="Lead"),
     ]
     return export(rows, "bispark.xlsx")
@@ -164,7 +164,7 @@ class TestTheNightlyImport:
         assert body["ok"] is True
         assert body["rows"] == 5
         assert body["last_date"] == "2026-10-06"
-        assert "AN23232-0100D" in body["projects_added"]
+        assert "T10004-0100D" in body["projects_added"]
         _status, info = call(client, "/api/import-key")
         assert info["key"]["last_result"]["ok"] is True
         # Osama's rows are not in Ahmed's export, and are left alone.
@@ -200,7 +200,7 @@ class TestTheNightlyImport:
         key, _archive, _ini = make_kit(client)
         call(anonymous(client), "/api/nightly/timesheets", "POST",
              {"key": key, "files": [tonight()]})
-        narrow = export([row("Ahmed Mitwally", "AN23232-0100D",
+        narrow = export([row("Ahmed Mockridge", "T10004-0100D",
                              D(2026, 10, 6), 6, grade="Lead")], "bispark.xlsx")
         status, body = call(anonymous(client), "/api/nightly/timesheets", "POST",
                             {"key": key, "files": [narrow]})
