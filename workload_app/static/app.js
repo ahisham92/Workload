@@ -1165,6 +1165,7 @@ function renderOverview() {
       el('div', { class: 'sub' }, sub))));
 
   renderHeroes(report);
+  renderOverviewTrend(data, report);
 
   setChildren($('#engineer-cards'), 
     ...report.engineers.map((name) => engineerBlock(name, report, data)));
@@ -1234,6 +1235,57 @@ function renderHeroes(report) {
       : null);
 }
 
+/** "2026-03" as "Mar 26", short enough to sit under a column. */
+function shortMonth(month) {
+  const [year, m] = String(month).split('-');
+  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return m ? `${names[Number(m) - 1]} ${year.slice(2)}` : String(month);
+}
+
+/** One engineer's booked months, from the overview, oldest first. */
+function monthsOf(overview, name) {
+  const e = (overview && overview.engineers || {})[name] || {};
+  return (e.months || []).slice().sort((a, b) => (a.month < b.month ? -1 : 1));
+}
+
+/** Every month anyone booked, oldest first, at most the last `limit`. */
+function teamMonths(overview, limit = 12) {
+  const all = new Set();
+  for (const name of Object.keys((overview && overview.engineers) || {})) {
+    for (const m of monthsOf(overview, name)) all.add(m.month);
+  }
+  return Array.from(all).sort().slice(-limit);
+}
+
+/** The team's hours month by month, a column per month split by person,
+ *  against the capacity the team had that month. */
+function renderOverviewTrend(overview, report) {
+  const host = $('#overview-trend');
+  const months = teamMonths(overview);
+  if (!months.length) { setChildren(host); host.hidden = true; return; }
+  host.hidden = false;
+  const capacity = months.map((month) => report.engineers.reduce((sum, name) => {
+    const row = monthsOf(overview, name).find((m) => m.month === month);
+    return sum + (row ? row.capacity || 0 : 0);
+  }, 0));
+  setChildren(host, charts.stackedColumns(
+    months.map(shortMonth),
+    report.engineers.map((name) => ({
+      label: name,
+      color: engineerColor(name),
+      values: months.map((month) => {
+        const row = monthsOf(overview, name).find((m) => m.month === month);
+        return row ? row.total : 0;
+      }),
+    })),
+    {
+      title: 'The team, month by month',
+      note: 'hours booked by each person; the dashed line is what the team had available',
+      unit: 'h', height: 230, target: capacity, wide: true,
+    }));
+}
+
 /** A period's name, short enough for a card's heading. */
 function periodName(period) {
   return period.kind === 'all' ? 'all time' : period.label.toLowerCase();
@@ -1270,6 +1322,19 @@ function engineerBlock(name, report, overview) {
     el('span', { class: 'measure-label', title: hint }, label),
     el('span', { class: `measure-value ${cls ? `v-${cls}` : ''}` }, value));
 
+  const months = monthsOf(overview, name).slice(-12);
+  const trend = months.length > 1
+    ? el('div', { class: 'eng-trend' },
+        charts.sparkline(months.map((m) => m.total), {
+          labels: months.map((m) => shortMonth(m.month)),
+          target: hours.available_hours_per_month || null,
+          color: engineerColor(name),
+        }),
+        el('div', { class: 'eng-trend-labels' },
+          el('span', {}, shortMonth(months[0].month)),
+          el('span', {}, `hours a month · ${shortMonth(months[months.length - 1].month)}`)))
+    : null;
+
   return el('div', { class: 'eng' },
     el('div', { class: 'eng-head' },
       el('span', { class: 'eng-name' },
@@ -1295,6 +1360,8 @@ function engineerBlock(name, report, overview) {
       measure('Plan adherence', fmt.pct(e.plan_adherence),
         'Actual against what was planned to date', tone.target(e.plan_adherence)),
       measure('Projects', fmt.int(e.projects_worked), 'Projects booked to in this period')),
+
+    trend,
 
     el('div', { class: 'muted', style: 'margin-top:6px' },
       `${fmt.hours(hours.total_hours)} h booked in total`
@@ -1363,23 +1430,75 @@ function renderTimesheets() {
   const check = state.overview ? state.overview.data_check : null;
   if (!check) return;
 
-  setChildren($('#ts-cards'), ...Object.entries(check.per_engineer).map(([name, e]) =>
-    el('div', { class: 'card' },
-      el('div', { class: 'label' }, `${name} — ${e.sheet}`),
-      el('div', { class: 'value' }, fmt.int(e.all_time_rows)),
+  renderTimesheetMix(state.overview);
+
+  const people = Object.keys(check.per_engineer).length;
+  const cards = $('#ts-cards');
+  cards.className = 'cards cards-balanced';
+  cards.style.setProperty('--cols', people <= 5 ? people : people % 3 === 0 ? 3 : 4);
+  setChildren(cards, ...Object.entries(check.per_engineer).map(([name, e]) => {
+    const months = monthsOf(state.overview, name).slice(-12);
+    const capacity = ((state.overview.engineers || {})[name] || {}).available_hours_per_month;
+    return el('div', { class: 'card' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'label eng-name' },
+          el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
+          name),
+        el('span', { class: 'muted small' }, e.sheet)),
+      el('div', { class: 'value' }, fmt.int(e.all_time_rows),
+        el('span', { class: 'value-unit' }, ' rows')),
       el('div', { class: 'sub' },
-        `rows · ${fmt.hours(e.all_time_hours)} h · `
+        `${fmt.hours(e.all_time_hours)} h · `
         + `${fmt.date(e.first_date)} → ${fmt.date(e.last_date)}`),
+      months.length > 1
+        ? el('div', { class: 'card-spark' }, charts.sparkline(months.map((m) => m.total), {
+            labels: months.map((m) => shortMonth(m.month)),
+            target: capacity || null, color: engineerColor(name), height: 40,
+          }))
+        : null,
       e.rows_not_matching_pattern
         ? el('div', { class: 'msg msg-bad', style: 'margin-top:8px' },
             `${e.rows_not_matching_pattern} row(s) belong to someone else`)
-        : null)));
+        : null);
+  }));
 
   const select = $('#ts-engineer');
   const chosen = select.value;
   setChildren(select, ...Object.keys(check.per_engineer).map(
     (name) => el('option', { value: name }, name)));
   if (chosen) select.value = chosen;
+}
+
+/** What the imported hours were spent on, month by month, the whole team
+ *  together: project work, proposals, leave and the rest. */
+function renderTimesheetMix(overview) {
+  const host = $('#ts-mix');
+  if (!host) return;
+  const months = teamMonths(overview);
+  const names = Object.keys((overview && overview.engineers) || {});
+  if (!months.length) { setChildren(host); host.hidden = true; return; }
+  host.hidden = false;
+  const sum = (month, key) => names.reduce((total, name) => {
+    const row = monthsOf(overview, name).find((m) => m.month === month);
+    return total + (row ? row[key] || 0 : 0);
+  }, 0);
+  const kinds = [
+    ['projects', 'Project work', 'var(--series-1)'],
+    ['proposals', 'Proposals', 'var(--series-4)'],
+    ['other', 'Other', 'var(--series-5)'],
+    ['absence', 'Leave and absence', 'var(--series-3)'],
+  ];
+  setChildren(host, charts.stackedColumns(
+    months.map(shortMonth),
+    kinds.map(([key, label, color]) => ({
+      label, color, values: months.map((month) => sum(month, key)) }))
+      .filter((series) => series.values.some((v) => v)),
+    {
+      title: 'Where the hours went',
+      note: 'everyone together, month by month; the dashed line is the team’s capacity',
+      unit: 'h', height: 220, target: months.map((month) => sum(month, 'capacity')),
+      wide: true,
+    }));
 }
 
 async function checkTimesheetFile() {
@@ -1516,7 +1635,7 @@ function statusPill(status) {
   if (status === 'Not Started') return 'pill-info';
   if (status === 'On Hold') return 'pill-warn';
   if (status === 'Cancelled') return 'pill-bad';
-  return '';
+  return 'pill-neutral';
 }
 
 /** The sortable columns, in the order the table shows them.
@@ -1615,6 +1734,7 @@ function renderProjects() {
   });
 
   sortProjects(rows, byNumber);
+  renderProjectSummary(byNumber);
 
   setChildren($('#projects-table'), 
     el('thead', {}, el('tr', {}, [
@@ -1648,6 +1768,38 @@ function renderProjects() {
             : el('span', { class: 'pill pill-warn' }, 'none yet')),
           el('td', {}, el('span', { class: 'chevron' }, '›')));
       })));
+}
+
+/** The register at a glance: how many projects sit in each status, and how
+ *  far each live one has spent into its budget against what it has earned. */
+function renderProjectSummary(byNumber) {
+  const host = $('#projects-summary');
+  if (!host) return;
+  const projects = state.projects;
+  if (!projects.length) { setChildren(host); return; }
+  const statuses = (state.reference.statuses || []).filter(
+    (name) => projects.some((p) => p.status === name));
+  const live = projects
+    .filter((p) => ['Active', 'On Hold'].includes(p.status))
+    .map((p) => ({ p, m: byNumber.get(p.number) || {} }))
+    .sort((a, b) => (b.p.budget_mm || 0) - (a.p.budget_mm || 0))
+    .slice(0, 8);
+
+  setChildren(host,
+    el('section', { class: 'panel' }, charts.donut(
+      statuses.map((name) => ({
+        label: name, color: statusColor(name),
+        value: projects.filter((p) => p.status === name).length,
+      })),
+      { title: 'Projects by status', unit: 'projects', size: 150, digits: 0 })),
+    live.length
+      ? el('section', { class: 'panel' }, charts.budgetBars(
+          live.map(({ p, m }) => ({
+            label: p.number, title: `${p.number} — ${p.name}`,
+            budget: p.budget_mm || 0, actual: m.actual_mm || 0, earned: m.earned_mm || 0,
+          })),
+          { title: 'Spent against budget', note: 'active and on-hold projects, largest first' }))
+      : null);
 }
 
 /* --------------------------------------------------- one project's page */
@@ -2386,7 +2538,9 @@ function num(value, digits = 2) {
  *  the numbers have to be readable without relying on the colour. */
 function table(headers, rows, opts = {}) {
   const numeric = opts.numeric || [];
-  return el('div', { class: 'table-wrap' }, el('table', {},
+  // A KPI matrix reads across: its rows are measures, not records, so it is
+  // neither sorted nor cut short.
+  return el('div', { class: 'table-wrap' }, el('table', { 'data-plain': opts.plain || null },
     el('thead', {}, el('tr', {}, headers.map((h, i) =>
       el('th', { class: numeric.includes(i) ? 'num' : '' }, h)))),
     el('tbody', {}, rows.map((row) => el('tr', { class: row.__class || '' },
@@ -2395,8 +2549,16 @@ function table(headers, rows, opts = {}) {
           cell && cell.node ? cell.node : cell)))))));
 }
 
+/** Columns that leave no card stranded on a row of its own. */
+function balancedColumns(count) {
+  if (count <= 6) return count;
+  return count % 4 === 0 ? 4 : count % 3 === 0 ? 3 : 4;
+}
+
 function kpiCards(items) {
-  return el('div', { class: 'cards' }, items.map(([label, value, sub, cls]) =>
+  return el('div', {
+    class: 'cards cards-balanced', style: `--cols:${balancedColumns(items.length)}`,
+  }, items.map(([label, value, sub, cls]) =>
     el('div', { class: 'card' },
       el('div', { class: 'label' }, label),
       el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
@@ -2450,7 +2612,9 @@ function statusColor(status) {
 
 /** A colour per engineer, fixed by the team's order on Work Calendar. */
 function engineerColor(name) {
-  const index = (state.report ? state.report.engineers : []).indexOf(name);
+  const order = state.report ? state.report.engineers
+    : Object.keys((state.overview && state.overview.engineers) || {});
+  const index = order.indexOf(name);
   return `var(--series-${(index < 0 ? 0 : index % 6) + 1})`;
 }
 
@@ -2637,7 +2801,7 @@ function kpiTable(data, rows, { scores = false } = {}) {
     });
   }
   return table(['KPI', ...names, 'Team'], body,
-    { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]) });
+    { numeric: names.map((_n, i) => i + 1).concat([names.length + 1]), plain: true });
 }
 
 function teamValue(data, key) {
@@ -2883,7 +3047,8 @@ function renderTeam() {
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {},
         ['#', 'Engineer', 'Timesheet name pattern', 'Hours / month',
-         ...years.map(String), 'Timesheet rows', 'Their sign-in', ''].map((h, i) =>
+         ...years.map(String), 'Timesheet rows', 'Last 12 months', 'Their sign-in', '']
+          .map((h, i) =>
           el('th', { class: i === 0 || (i >= 3 && i < years.length + 5) ? 'num' : '' }, h)))),
       el('tbody', {}, data.engineers.map(
         (person, position) => engineerRow(person, position, years))))),
@@ -2917,10 +3082,33 @@ function engineerRow(person, position, years) {
     ...years.map((year) => el('td', { class: 'num' },
       fmt.pct0((person.availability || {})[year]))),
     el('td', { class: 'num' },
-      el('span', {}, fmt.int(person.rows)),
+      el('span', {}, fmt.int(timesheetRows(person))),
       el('span', { class: 'slot-note' }, ` · ${person.sheet || 'no sheet'}`)),
+    el('td', { class: 'spark-cell' }, engineerSpark(person.short_name)),
     el('td', {}, accessCell(person)),
     el('td', {}, actions));
+}
+
+/** Rows held for this engineer. Once a unit keeps its timesheet in the
+ *  database the sheet itself is empty, so the data check's count is the one
+ *  that means something. */
+function timesheetRows(person) {
+  const check = state.overview && state.overview.data_check;
+  const own = check && check.source === 'database'
+    ? (check.per_engineer || {})[person.short_name] : null;
+  return own ? own.all_time_rows : person.rows;
+}
+
+/** A person's last twelve months of booked hours, small enough for a row. */
+function engineerSpark(name) {
+  const months = monthsOf(state.overview, name).slice(-12);
+  if (months.length < 2) return el('span', { class: 'muted' }, '—');
+  const e = ((state.overview && state.overview.engineers) || {})[name] || {};
+  return charts.sparkline(months.map((m) => m.total), {
+    labels: months.map((m) => shortMonth(m.month)),
+    target: e.available_hours_per_month || null,
+    color: engineerColor(name), width: 120, height: 26,
+  });
 }
 
 /** Who, if anyone, signs in as this engineer. */
@@ -3210,11 +3398,36 @@ function renderTaskTable(data) {
       : status === 'Blocked' ? 'pill-bad'
         : status === 'In progress' ? 'pill-warn' : 'pill-info');
 
+  const today = new Date().toISOString().slice(0, 10);
+  const count = (test) => data.tasks.filter(test).length;
+  const strip = [
+    ['Not started', count((t) => t.status === 'Not started'), 'info', 'Not started'],
+    ['In progress', count((t) => t.status === 'In progress'), 'warn', 'In progress'],
+    ['Blocked', count((t) => t.status === 'Blocked'), 'bad', 'Blocked'],
+    ['Overdue', count((t) => !t.done && t.due && t.due < today), 'bad', null],
+    ['Done', count((t) => t.done), 'ok', 'Done'],
+  ];
+
   setChildren($('#task-body'), 
+    el('div', { class: 'stat-strip' }, strip.map(([label, n, toneName, status]) =>
+      el('button', {
+        type: 'button',
+        class: `stat stat-${toneName}${status && f.status === status ? ' is-active' : ''}`,
+        disabled: !status,
+        title: status ? `Show only ${label.toLowerCase()} tasks` : 'Past their due date and not done',
+        onclick: status ? () => {
+          const select = $('#task-status-filter');
+          select.value = select.value === status ? 'all' : status;
+          if (status === 'Done') $('#task-show-done').checked = true;
+          renderTaskTable(data);
+        } : null,
+      },
+      el('span', { class: 'stat-value' }, fmt.int(n)),
+      el('span', { class: 'stat-label' }, label)))),
     el('p', { class: 'muted' },
       `${fmt.int(rows.length)} task(s) shown`
       + (f.showDone || !hidden ? '' : ` · ${fmt.int(hidden)} done and hidden`)),
-    el('table', { class: 'tasks-table' },
+    el('div', { class: 'table-wrap' }, el('table', { class: 'tasks-table' },
       el('thead', {}, el('tr', {},
         ['Task', 'For', 'Assigned to', 'Required (h)', 'Actual (h)', 'Progress',
           'Due', 'Status', '']
@@ -3259,7 +3472,7 @@ function renderTaskTable(data) {
                 (v) => (v > 0.01 ? 'bad' : 'ok'),
                 () => fmt.hours(task.actual_hours))
               : fmt.hours(task.actual_hours))),
-          el('td', {}, progressCell(task)),
+          el('td', {}, taskProgressCell(task)),
           el('td', {}, dueCell(task)),
           el('td', {}, el('span', { class: `pill ${statusPillFor(task.status)}` },
             task.status)),
@@ -3271,7 +3484,7 @@ function renderTaskTable(data) {
             el('button', {
               class: 'btn btn-sm btn-ghost', type: 'button',
               onclick: (event) => { event.stopPropagation(); deleteTask(task); },
-            }, '✕'))))))); 
+            }, '✕')))))))); 
 }
 
 /** Overdue first, then by date, then the undated. */
@@ -3294,10 +3507,10 @@ function dueCell(task) {
 /* -- editing ----------------------------------------------------------- */
 
 /** How far along, and -- on hover -- why that is the number. */
-function progressCell(task) {
+function taskProgressCell(task) {
   const value = task.progress || 0;
   const tone = value >= 1 ? 'ok' : value >= 0.8 ? 'warn' : '';
-  return el('div', { class: 'progress-cell', title: task.progress_why || '' },
+  return el('div', { class: 'task-progress', title: task.progress_why || '' },
     el('div', { class: `meter ${tone}` },
       el('span', { style: `width:${Math.round(value * 100)}%` })),
     el('div', { class: 'muted small' },
