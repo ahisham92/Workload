@@ -497,7 +497,8 @@ def portfolio_map(store, projects: Sequence[Dict[str, Any]], *,
     live = [p for p in projects if (p.get("remaining_mm") or 0) > 0
             or hours.get(p["number"])]
     total_remaining = sum(max(0.0, p.get("remaining_mm") or 0.0) for p in live)
-    total_hours = sum(sum(people.values()) for people in hours.values()) or 0.0
+    # Measured against the same projects the need is, so the shares compare.
+    total_hours = sum(sum(hours.get(p["number"], {}).values()) for p in live)
 
     circles = []
     for project in live:

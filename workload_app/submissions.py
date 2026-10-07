@@ -79,6 +79,10 @@ def typical_length(deliverable_rows: Sequence[Dict[str, Any]],
     return {"days": min(high, max(low, middle)), "from": len(lengths)}
 
 
+#: The key a job's total pace is kept under, apart from rows with no phase.
+_WHOLE_JOB = "*"
+
+
 def pace_by_phase(rows: Iterable[Dict[str, Any]], config: Dict[str, Any]
                   ) -> Dict[tuple, float]:
     """Hours a working day booked to each (job, phase) in the newest fortnight."""
@@ -92,7 +96,7 @@ def pace_by_phase(rows: Iterable[Dict[str, Any]], config: Dict[str, Any]
     for row in dated:
         if first <= row["date"] <= last:
             sums[(row["job_number"], row.get("phase"))] += float(row["hours"] or 0.0)
-            sums[(row["job_number"], None)] += float(row["hours"] or 0.0)
+            sums[(row["job_number"], _WHOLE_JOB)] += float(row["hours"] or 0.0)
     return {key: value / len(window) for key, value in sums.items() if value > 0}
 
 
@@ -155,7 +159,7 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
         phase = metric.get("ts_phase")
         rate = rates.get((number, phase)) if phase is not None else None
         if rate is None:
-            project_rate = rates.get((number, None))
+            project_rate = rates.get((number, _WHOLE_JOB))
             rate = project_rate * weight if project_rate and weight else None
 
         set_date = deliverable.status_date

@@ -490,6 +490,9 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
         covered += 1
         series = submission_series(int(row))
         window_start = due - _dt.timedelta(days=int(config["submission_lead_days"]))
+        if only_row is None and not include_past:
+            # Run-up days already gone would be overdue the moment they exist.
+            window_start = max(window_start, today)
         days = working_days(window_start, due, config)
         if not days:
             continue
