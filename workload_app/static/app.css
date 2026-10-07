@@ -220,6 +220,12 @@ th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
 th.sorted { color: var(--text); }
 td.code { font-family: var(--mono); font-size: 12px; }
+th.auto-sort[data-sort-dir="asc"]::after { content: ' ▲'; font-size: 10px; }
+th.auto-sort[data-sort-dir="desc"]::after { content: ' ▼'; font-size: 10px; }
+th.auto-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.is-short tr.row-more { display: none; }
+.table-more { display: flex; justify-content: center; margin: 8px 0 4px; }
+.table-more .btn { color: var(--accent); font-weight: 600; }
 .row-actions { display: flex; gap: 6px; }
 .empty { padding: 26px; text-align: center; color: var(--muted); }
 
@@ -505,6 +511,8 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
   table { font-size: 10px; }
   th, td { padding: 3px 5px; }
   .table-wrap { overflow: visible; }
+  table.is-short tr.row-more { display: table-row; }
+  .table-more { display: none; }
   .chart-scroll { overflow: visible; }
   .pill { border: 1px solid #999; }
   a[href]::after { content: ""; }
