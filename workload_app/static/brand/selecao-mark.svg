@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Selecao+">
+  <rect width="64" height="64" rx="14" fill="#101B2D"/>
+  <circle cx="12.5" cy="50" r="3.8" fill="#FFFFFF"/>
+  <circle cx="25.5" cy="50" r="3.8" fill="#FFFFFF"/>
+  <circle cx="38.5" cy="50" r="3.8" fill="#FFFFFF"/>
+  <circle cx="51.5" cy="50" r="3.8" fill="#FFFFFF"/>
+  <circle cx="19" cy="38.5" r="3.8" fill="#FFFFFF"/>
+  <circle cx="32" cy="38.5" r="3.8" fill="#FFFFFF"/>
+  <circle cx="45" cy="38.5" r="3.8" fill="#FFFFFF"/>
+  <circle cx="25.5" cy="27" r="3.8" fill="#FFFFFF"/>
+  <circle cx="38.5" cy="27" r="3.8" fill="#FFFFFF"/>
+  <polygon points="0,-7 1.65,-2.27 6.66,-2.16 2.66,0.87 4.11,5.66 0,2.8 -4.11,5.66 -2.66,0.87 -6.66,-2.16 -1.65,-2.27" transform="translate(32 14.5) scale(1.05)" fill="#FF5A1F"/>
+</svg>
