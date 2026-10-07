@@ -20,6 +20,33 @@ A deploy replaces the code. If the data sat inside it, a deploy would take
 everyone's workbooks with it. `WORKLOAD_DATA_DIR` is what keeps them apart, and
 `python -m workload_app.admin check` complains if they are not.
 
+## As a tab of another site, rather than a site of its own
+
+Workload can also be mounted inside a larger site -- Project Control mounts it at
+`/workload`, beside its other applications, behind its own sign-in. Then none of
+the above is needed: there is no second web app, no second address and no
+second password.
+
+* **The site signs people in** and tells Workload who is asking. Workload's own
+  login page is never shown, and a username and password made here are not
+  used to sign in.
+* **Everybody starts with nothing.** Somebody who opens the tab for the first
+  time gets an account of their own with no units in it. They cannot see
+  anybody else's: a unit is still its owner's alone.
+* **Access is given by sign-in.** On the **Team** tab, *Give access* beside an
+  engineer picks one of the people who sign in to the site. They need nothing
+  new; they open Workload and land on their own page.
+* **Units from before the move come across.** Point `WORKLOAD_DATA_DIR` at the
+  folder this installation already uses, then, in the tab, *Bring my units
+  across* asks once for the old Workload username and password and ties that
+  account to the sign-in used now. If the old password is forgotten, set a new
+  one first with `python -m workload_app.admin password <old-username>`.
+* **The units follow the person, not the address.** An account is tied to the
+  site's own identifier for somebody, so correcting the email or username they
+  sign in with does not lose them anything.
+
+Run on its own, as described above, nothing about it has changed.
+
 ## A second website beside the one you already have
 
 A **paid** PythonAnywhere account may host more than one web app. Only your
