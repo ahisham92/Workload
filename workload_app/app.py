@@ -31,7 +31,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import accounts as accounts_module, member as member_view, storage
+from . import accounts as accounts_module, member as member_view, nightly, storage
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
@@ -894,6 +894,88 @@ class WorkloadApp:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
         return owned
 
+    # -- the nightly import ----------------------------------------------
+    #
+    # A job on the manager's PC exports from BISpark at night and posts the
+    # file here.  It has no browser session, so it signs with the unit's
+    # import key; see nightly.py.
+
+    def import_key_status(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {"unit": unit["name"],
+                "key": self.accounts.import_key_info(ctx.user["id"], unit["id"])}
+
+    def make_import_key(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """A new key for the open unit, and the kit for the PC built round it.
+
+        The key is in the kit and nowhere else: only its digest is kept, so
+        making a new one is also how an old PC is shut out.
+        """
+        unit = self._open_unit_or_refuse(ctx)
+        app_url = str(body.get("app_url") or "").strip()
+        if not app_url.startswith(("https://", "http://")):
+            raise ApiError(HTTPStatus.BAD_REQUEST,
+                           "Say where Selecao+ is, as a web address.")
+        key = self.accounts.make_import_key(ctx.user["id"], unit["id"])
+        return {"unit": unit["name"],
+                "filename": "selecao-nightly.zip",
+                "kit_base64": nightly.encode(nightly.kit(app_url, key)),
+                "key": self.accounts.import_key_info(ctx.user["id"], unit["id"])}
+
+    def revoke_import_key(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {"revoked": self.accounts.revoke_import_key(ctx.user["id"],
+                                                           unit["id"])}
+
+    def nightly_import(self, ctx: Context, query, body) -> Dict[str, Any]:
+        owner = self.accounts.import_key_owner(body.get("key"))
+        if owner is None:
+            raise ApiError(HTTPStatus.UNAUTHORIZED,
+                           "That import key is not recognised. Make a new one "
+                           "on the Timesheets tab.")
+        user, unit = owner["user"], owner["unit"]
+        if user["role"] != ROLE_MANAGER:
+            raise ApiError(HTTPStatus.FORBIDDEN,
+                           "Only a manager's unit takes a nightly import.")
+        if body.get("failed"):
+            # The PC could not get an export out of BISpark.  Nothing to
+            # import, but the morning's Timesheets tab should say so.
+            self.accounts.record_import(unit["id"], {
+                "ok": False, "error": str(body["failed"])[:500], "errors": []})
+            return {"ok": False, "recorded": True}
+        service = self.service_for(user["id"])
+        service.refresh()
+        # The job imports into its own unit, whichever one the manager left
+        # open in the browser, and puts theirs back afterwards.
+        before = service.unit
+        switched = not before or before.get("id") != unit["id"]
+        if switched:
+            ctx.user, ctx.service = user, service
+            self.open_unit(ctx, query, body, unit["id"])
+        try:
+            result = nightly.run(service, body.get("files") or [])
+        except ApiError as error:
+            self.accounts.record_import(unit["id"], {
+                "ok": False, "error": error.message, "errors": error.errors})
+            raise
+        finally:
+            if switched:
+                self._reopen(user["id"], before)
+        result = {"ok": True, "unit": unit["name"], **result}
+        self.accounts.record_import(unit["id"], result)
+        return result
+
+    def _reopen(self, user_id: int, unit: Optional[Dict[str, Any]]) -> None:
+        """Put back the unit a manager had open, if it is still theirs."""
+        service = self.service_for(user_id)
+        mine = self.accounts.unit(user_id, unit["id"]) if unit else None
+        path = storage.unit_path(self.data_dir, user_id, mine["filename"]) \
+            if mine else None
+        if path is not None and path.is_file():
+            service.open(path, unit=mine)
+        else:
+            service.close()
+
     def _check_room(self, user_id: int) -> None:
         if len(self.accounts.units(user_id)) >= storage.MAX_UNITS_PER_USER:
             raise ApiError(
@@ -1075,6 +1157,10 @@ class WorkloadApp:
             ("POST", "/api/timesheets/apply",
              lambda ctx, q, b: ctx.service.apply_timesheet(
                  b.get("token", ""), b.get("mode", "replace")), "manager"),
+            ("GET", "/api/import-key", self.import_key_status, "manager"),
+            ("POST", "/api/import-key", self.make_import_key, "manager"),
+            ("DELETE", "/api/import-key", self.revoke_import_key, "manager"),
+            ("POST", "/api/nightly/timesheets", self.nightly_import, "public"),
             ("POST", "/api/timesheets/exports/stage",
              lambda ctx, q, b: ctx.service.stage_exports(b.get("files") or []),
              "manager"),

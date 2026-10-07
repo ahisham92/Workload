@@ -1517,7 +1517,73 @@ function renderTimesheets() {
             `${e.rows_not_matching_pattern} row(s) belong to someone else`)
         : null);
   }));
+  renderNightly();
+}
 
+/* ----------------------------------------------------- nightly import */
+
+/** When the PC last sent an export, and whether it went in. */
+async function renderNightly() {
+  const box = $('#ts-nightly-state');
+  if (!box) return;
+  let info = null;
+  try {
+    info = (await api('/api/import-key')).key;
+  } catch {
+    setChildren(box);
+    return;
+  }
+  $('#btn-nightly-stop').hidden = !info;
+  $('#btn-nightly-kit').textContent = info ? 'Download a new kit' : 'Download the PC kit';
+  if (!info) {
+    setChildren(box, el('div', { class: 'msg' }, 'Not set up yet.'));
+    return;
+  }
+  const last = info.last_result;
+  if (!last) {
+    setChildren(box, el('div', { class: 'msg msg-warn' },
+      `Kit made ${fmt.date((info.created_at || '').slice(0, 10))}. Nothing has arrived from the PC yet.`));
+    return;
+  }
+  const when = new Date(info.last_used);
+  const stale = Date.now() - when.getTime() > 36 * 3600 * 1000;
+  const at = `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  if (!last.ok) {
+    setChildren(box, el('div', { class: 'msg msg-bad' },
+      `Last night's import did not go in (${at}): ${last.error}`,
+      ...(last.errors || []).map((e) => el('div', { class: 'small' }, e))));
+    return;
+  }
+  setChildren(box, el('div', { class: stale ? 'msg msg-warn' : 'msg msg-ok' },
+    `${stale ? 'Nothing new since' : 'Last import'} ${at}: ${fmt.int(last.rows)} rows, `
+    + `${fmt.date(last.first_date)} → ${fmt.date(last.last_date)}.`
+    + (stale ? ' Check that the PC was on.' : '')));
+}
+
+async function downloadNightlyKit() {
+  if ($('#btn-nightly-stop').hidden === false
+      && !confirm('A new kit stops the old one working. Carry on?')) return;
+  try {
+    const result = await api('/api/import-key', {
+      method: 'POST', body: { app_url: window.location.origin + BASE },
+    });
+    const bytes = Uint8Array.from(atob(result.kit_base64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    const link = el('a', { href: url, download: result.filename });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) {
+    alert((error.errors || [error.message]).join('\n'));
+  }
+  renderNightly();
+}
+
+async function stopNightly() {
+  if (!confirm('Stop nightly imports? The PC kit stops working until you download a new one.')) return;
+  await api('/api/import-key', { method: 'DELETE' });
+  renderNightly();
 }
 
 /** What the imported hours were spent on, month by month, the whole team
@@ -2510,6 +2576,8 @@ function wire() {
   $('#project-status-filter').addEventListener('change', renderProjects);
   $('#btn-new-project').addEventListener('click', newProject);
   $('#btn-ts-check').addEventListener('click', checkTimesheetFile);
+  $('#btn-nightly-kit').addEventListener('click', downloadNightlyKit);
+  $('#btn-nightly-stop').addEventListener('click', stopNightly);
   $('#btn-add-engineer').addEventListener('click', () => openEngineerModal(null));
   $('#btn-add-task').addEventListener('click', () => openTaskModal(null));
   $('#btn-task-settings').addEventListener('click', openWorkingDayModal);
