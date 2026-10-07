@@ -30,9 +30,9 @@ the app or with `python -m workload_app.admin add`.
 
 There are two kinds:
 
-**A manager** runs a team. They create units, upload or start a workbook, enter
-timesheets, projects, deliverables and tasks, and read every report. This is
-the account the site starts with.
+**A manager** runs a team. They create units from their team's timesheets, import
+each month's, confirm the projects and deliverables those turn up, plan tasks,
+and read every report. This is the account the site starts with.
 
 **A team member** — Osama, Kirolos — signs in to **one page: their own**. Their
 man-months, their earned value, their CPI and utilisation, the projects they
@@ -206,14 +206,43 @@ A unit is a name and the workbook behind it — Marine Structures and its file,
 another discipline and its own. One account can hold up to twelve. **Switch
 unit** in the header puts one down and picks up another; each keeps its place.
 
-A unit starts in one of two ways:
+A unit starts from **timesheets, and nothing else**. Choose everyone's monthly
+export at once on the start page — a file per person, or one file holding the
+whole team — and the app reads the rest out of them:
 
-- **Start blank** — from the template that ships with the app: the whole model,
-  formulas, charts, project types, rules of credit, the scorecard and the
-  glossary, with no projects, no deliverables, no hours and generic engineer
-  names. Build `workload_app/data/template.xlsx` with
-  `python tools/build_template.py <your workbook>`.
-- **Upload** a Workload workbook you already have.
+| From the timesheets | How |
+| --- | --- |
+| The team | everyone who booked, by `FullName`; first name as the short name |
+| Grades | each person's latest `Grade` (Lead/P3 Senior, P1/P2 Engineer, Professional Junior) |
+| The project register | every `1-Projects` job number |
+| Project dates | the first and last day anybody booked to it |
+| Project status | the latest `JobStatus`; **Finalized** once nobody has booked to it for six months |
+| Deliverables | one per phase booked, named by its `DeliverableDescription` |
+| Phase weights | each phase's share of the job's hours |
+| The engineer split | each person's share of the phase's hours |
+| Deliverable type | read from the phase's name — Concept, Tender, Review, Site… |
+| Actual start / finish | the first and last booking to the phase |
+| Proposal effort | a *Proposals* and a *Chargeable Proposals* project for each of the last three years |
+| The unit's name | `CurrentUnitDesc`, unless you type one |
+
+Three things are in no timesheet, so they start as estimates and the project is
+marked **to confirm** on Projects until somebody opens it and saves it:
+
+- **the project's name** — the export has no job-name column, so it is named by
+  its number;
+- **the budget** — the export's Budget column is empty, so it starts as the
+  effort already spent;
+- **how far along it is** — a phase somebody has booked to is at its first step
+  (*started*), a finished project at its last. Until the real step is set, a
+  live project's CPI and profit say nothing, which is why they read red.
+
+The model itself — project types, rules of credit, the scorecard, the glossary —
+comes from the template that ships with the app
+(`python tools/build_template.py <your workbook>` rebuilds it).
+
+Nothing derived ever overwrites the register: a job number that is already a
+project is left exactly as it is, so a corrected name or budget stays corrected,
+and next month's import adds only what is new.
 
 The app owns the file from then on: it lives in that account's folder and is
 saved after every change, with a timestamped backup beside it. **⭳ on a unit
@@ -237,6 +266,13 @@ Mgmt Review, Engineer KPIs and Team Member sheets stay three columns wide and
 know only the first three people. The app's versions of those reports handle any
 number, which is where you read them now.
 
+A workbook takes up to twelve people. An import with more than that still
+imports everybody: the rest are on the roster and in Resourcing, and their hours
+count toward every project they booked to, but they have no KPI line and no
+share of a deliverable. Nobody past the twelve goes unmentioned: the import
+names them before anything is written, marks them **no place yet**, and the
+data check on Timesheets keeps naming them until the limit is raised.
+
 Nothing in the app assumes who the engineers are or how many there are. The
 team, the paste-target sheets and the order they are stacked in all come from
 the workbook, so a copy set up for a different discipline works without a code
@@ -244,21 +280,19 @@ change, and the split on a deliverable is keyed by name.
 
 ## What it does:
 
-**Timesheets** — upload each engineer's monthly export (`.xlsx` or `.csv`).
-Columns are matched to the TS sheet by heading name rather than by position, so
+**Timesheets** — choose this month's exports, any number at once. There is no
+engineer to pick: every row goes to whoever booked it, matched by the pattern on
+Work Calendar. Before anything is written you see each person, their rows and
+hours, who is new, and which projects will be set up. Then choose **Replace**
+(the monthly routine — each person in the files gets exactly the rows the files
+hold for them) or **Append**. Somebody new joins the team; a job number with no
+project becomes one, for you to confirm. Columns are matched by heading name, so
 the export's own column order does not matter and a title block above the
-headings is skipped. Before anything is written you see the row count, the date
-range, the total hours, and warnings for rows with no date, no hours or no
-Phase. An export belonging to someone else is refused outright rather than
-landing on the wrong sheet. Then choose **Replace** (the monthly routine) or
-**Append**.
+headings is skipped.
 
-**Only rows for projects in the register** is on by default, and it matters more
-than it sounds: work charged to job numbers the workbook has no project for
-would never roll up to anything anyway, and leaving it out is what keeps the
-consolidated sheet inside the row limit described below. On the workbook as it
-stands it takes 7,682 rows down to 5,271. Absence codes and proposal effort are
-kept — utilisation and the Proposals sheet both need them.
+The register holds 80 projects and 200 deliverables. If the timesheets imply
+more, the most recently worked come first and the oldest are listed as left
+out; their hours still count for the people who booked them.
 
 **Projects** — the register, and behind each row the project's own page: its
 details, its figures, and **its deliverables edited in place**. Every column
@@ -430,8 +464,9 @@ found later in a red cell:
 - The workbook is saved with a full-recalculation flag, so Excel recomputes
   everything the next time it is opened.
 - The app owns its copy of each workbook, so nothing you have open in Excel can
-  overwrite it. To read one in Excel, download it (⭳ on the unit); to bring
-  changes back, upload it as a unit again.
+  overwrite it. To read one in Excel, download it (⭳ on the unit). A workbook
+  is never an input in the app; an administrator can still restore one from
+  the console (`python -m workload_app.admin restore`).
 - On a host with more than one worker process, a writer takes an exclusive lock
   on the file and a reader that finds the file changed underneath re-reads it
   before answering.
@@ -551,12 +586,11 @@ application answers correctly through the WSGI entry point a host uses.
 ## The monthly routine
 
 1. Sign in and open the unit.
-2. **Timesheets** — upload each engineer's export, check the summary, Replace.
-   Leave "only rows for projects in the register" ticked.
-3. **Overview** — check the data check reads "All rows matched to an engineer",
-   and look at what the unknown job numbers are.
-4. **Projects** — open each active project and move its deliverables' steps on.
-   **Team** — only when someone joins or leaves.
+2. **Timesheets** — choose everyone's export, check the summary, Replace.
+3. **Overview** — check the data check reads "All rows matched to an engineer".
+4. **Projects** — open anything marked *to confirm* and give it its name,
+   budget and step; open each active project and move its deliverables' steps on.
+   **Team** — only to set someone's availability; joiners arrive with their timesheets.
 5. **Tasks** — check who is overloaded for the weeks ahead, and let a new
    deliverable date fill in its week of preparation.
 6. **Reports** — read the Dashboard and Management Review, and print whichever

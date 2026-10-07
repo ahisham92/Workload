@@ -23,6 +23,7 @@ import base64
 import json
 import mimetypes
 import traceback
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -515,6 +516,60 @@ class WorkloadApp:
             raise
         return self.open_unit(ctx, query, body, unit["id"])
 
+    def create_unit_from_timesheets(self, ctx: Context, query, body
+                                    ) -> Dict[str, Any]:
+        """A new unit whose only input is its people's timesheet exports.
+
+        It starts from the blank template, and the exports supply the rest:
+        the team, the project register, the deliverables and their splits. Left
+        unnamed, the unit takes the name the exports give it.
+        """
+        user_id = ctx.user["id"]
+        self._check_room(user_id)
+        files = body.get("files") or []
+        if not files:
+            raise ApiError(HTTPStatus.BAD_REQUEST,
+                           "Choose your team's timesheet exports first.")
+        wanted = " ".join(str(body.get("name") or "").split())
+        unit = self.accounts.create_unit(
+            user_id, wanted or f"New unit {uuid.uuid4().hex[:6]}", "")
+        path = None
+        try:
+            path = storage.new_from_template(self.data_dir, user_id, unit["id"])
+            self.accounts_update_filename(user_id, unit["id"], path.name)
+            self.open_unit(ctx, query, body, unit["id"])
+            service = ctx.service or self.service_for(user_id)
+            imported = service.import_exports(files)
+        except Exception:
+            if ctx.service and ctx.service.unit \
+                    and ctx.service.unit.get("id") == unit["id"]:
+                ctx.service.close()
+            self.accounts.delete_unit(user_id, unit["id"])
+            if path is not None:
+                storage.remove_unit_file(self.data_dir, user_id, path.name)
+            raise
+        if not wanted:
+            self._name_after_exports(ctx, user_id, unit["id"],
+                                     imported["staged"].get("unit_name") or "")
+        status = service.status()
+        status["imported"] = {k: v for k, v in imported.items() if k != "staged"}
+        return status
+
+    def _name_after_exports(self, ctx: Context, user_id: int, unit_id: str,
+                            name: str) -> None:
+        """Name a unit as its exports do, or as near as is free."""
+        if not name:
+            return
+        for candidate in [name] + [f"{name} ({n})" for n in range(2, 10)]:
+            try:
+                unit = self.accounts.rename_unit(user_id, unit_id, candidate)
+            except Exception:
+                continue
+            if ctx.service and ctx.service.unit \
+                    and ctx.service.unit.get("id") == unit_id:
+                ctx.service.unit = unit
+            return
+
     def upload_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
         """A new unit from a workbook the account already has."""
         user_id = ctx.user["id"]
@@ -871,6 +926,8 @@ class WorkloadApp:
             # -- this account's units
             ("GET", "/api/units", self.units, "user"),
             ("POST", "/api/units", self.create_unit, "manager"),
+            ("POST", "/api/units/from-timesheets",
+             self.create_unit_from_timesheets, "manager"),
             ("POST", "/api/units/upload", self.upload_unit, "manager"),
             ("POST", "/api/units/{}/replace", self.replace_unit, "manager"),
             ("POST", "/api/units/{}/open", self.open_unit, "manager"),
@@ -968,6 +1025,14 @@ class WorkloadApp:
             ("POST", "/api/timesheets/apply",
              lambda ctx, q, b: ctx.service.apply_timesheet(
                  b.get("token", ""), b.get("mode", "replace")), "manager"),
+            ("POST", "/api/timesheets/exports/stage",
+             lambda ctx, q, b: ctx.service.stage_exports(b.get("files") or []),
+             "manager"),
+            ("POST", "/api/timesheets/exports/apply",
+             lambda ctx, q, b: ctx.service.apply_exports(
+                 b.get("token", ""), b.get("mode", "replace")), "manager"),
+            ("POST", "/api/projects/from-timesheets",
+             lambda ctx, q, b: ctx.service.sync_projects(), "manager"),
             ("POST", "/api/timesheets/capacity",
              lambda ctx, q, b: ctx.service.extend_capacity(b), "manager"),
             ("POST", "/api/timesheets/discard",

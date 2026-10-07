@@ -204,6 +204,17 @@ TS_KEY_FIELDS = {
     "total_hours": "TotalHours",
 }
 
+#: Columns of the export that carry no weight in the workbook's formulas but
+#: are what lets a unit be set up from timesheets alone: what each phase of a
+#: job is called, whether the job is still live, what grade somebody is, and
+#: which unit they sit in.
+TS_SETUP_FIELDS = {
+    "deliverable": "DeliverableDescription",
+    "job_status": "JobStatus",
+    "grade": "Grade",
+    "unit": "CurrentUnitDesc",
+}
+
 #: Header names whose values are dates rather than text or numbers.
 TS_DATE_HEADERS = {"Date"}
 
