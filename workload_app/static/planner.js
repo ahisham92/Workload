@@ -610,7 +610,92 @@ function renderDay() {
 
 /* -- who is away ---------------------------------------------------------- */
 
-const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar' };
+const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar',
+  holiday: 'public holiday' };
+const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function weekText(days) {
+  if (!days || !days.length) return '';
+  // Written from the first day of the run, so Sunday to Thursday reads as such.
+  const order = [6, 0, 1, 2, 3, 4, 5];
+  const sorted = order.filter((d) => days.includes(d));
+  const startsSunday = days.includes(6) && !days.includes(5);
+  const list = startsSunday ? sorted : sorted.filter((d) => d !== 6).concat(days.includes(6) ? [6] : []);
+  return `${WEEKDAY[list[0]]}–${WEEKDAY[list[list.length - 1]]}`;
+}
+
+async function saveHolidays(body, message) {
+  try {
+    const result = await api('/api/holidays', { method: 'PUT', body });
+    if (result.save) markSaved(result.save);
+    if (message) toast(message, 'ok');
+    plan.needs = null;
+    await loadDay({ quiet: true });
+    return result;
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+    return null;
+  }
+}
+
+/** Public holidays: the unit's country, chosen once, and a team elsewhere. */
+async function openHolidays() {
+  let view;
+  try { view = await api('/api/holidays'); } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad'); return;
+  }
+  const options = [{ value: '', label: 'None' },
+    ...view.countries.map((c) => ({ value: c.code, label: c.name }))];
+  const fields = [{ name: 'unit', label: 'The unit keeps the holidays of', type: 'select',
+    options, full: true, value: view.unit || '' }];
+  for (const team of view.teams) {
+    fields.push({ name: `team:${team.id}`, label: `${team.name}`, type: 'select',
+      hint: 'only if it is somewhere else',
+      options: [{ value: '', label: 'Same as the unit' }, ...options.slice(1)], value: team.country });
+  }
+  fields.push({ name: 'use_week', label: 'Working week', type: 'select', full: true,
+    options: [{ value: '', label: `Keep ${weekText(view.work_days)}` },
+      { value: '1', label: 'Use the country\'s own working week' }] });
+  if (view.off.length) {
+    fields.push({ name: 'restore', label: 'Days taken off the built-in list', type: 'select', full: true,
+      hint: view.off.map(shortDate).join(', '),
+      options: [{ value: '', label: 'Keep them off' }, { value: '1', label: 'Put them back' }] });
+  }
+  openModal('Public holidays', fields, async () => {
+    const values = modalValues();
+    const teams = {};
+    for (const team of view.teams) teams[team.id] = values[`team:${team.id}`] || '';
+    const result = await api('/api/holidays', { method: 'PUT', body: {
+      unit: values.unit || '', teams, use_week: Boolean(values.use_week),
+      restore: Boolean(values.restore) } });
+    if (result.save) markSaved(result.save);
+    toast(result.holidays.unit ? `Public holidays: ${result.holidays.unit_name}.` : 'No public holidays.', 'ok');
+    plan.needs = null;
+    await loadDay({ quiet: true });
+  });
+}
+
+/** Asked once, until somebody answers: whose public holidays to keep. */
+function holidayPrompt(data) {
+  const h = data.holidays;
+  if (!h || h.chosen) return null;
+  const choices = (h.countries || []).map((c) => el('option', { value: c.code }, c.name));
+  const pick = el('select', { 'aria-label': 'Country' }, el('option', { value: '' }, 'Choose a country'), ...choices);
+  if (h.unit) pick.value = h.unit;
+  const week = el('input', { type: 'checkbox', checked: true });
+  return el('div', { class: 'holiday-prompt' },
+    el('span', {}, h.unit ? `Public holidays look like ${h.unit_name}'s.` : 'Which country\'s public holidays does this unit keep?'),
+    pick,
+    el('label', { class: 'check-chip' }, week, el('span', {}, 'and its working week')),
+    el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => {
+      if (!pick.value) { pick.focus(); return; }
+      saveHolidays({ unit: pick.value, use_week: week.checked },
+        `Public holidays: ${pick.options[pick.selectedIndex].text}.`);
+    } }, h.unit ? 'Yes' : 'Use'),
+    el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => openHolidays() },
+      'Teams elsewhere…'));
+}
+
 
 function awayWhen(a) {
   return a.start === a.end ? shortDate(a.start) : `${shortDate(a.start)} – ${shortDate(a.end)}`;
@@ -642,15 +727,28 @@ function awayPanel(data) {
   const away = data.away || [];
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
-      el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+      el('div', {},
+        el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+        data.holidays && data.holidays.chosen ? el('p', { class: 'muted small' },
+          data.holidays.unit ? `Public holidays: ${data.holidays.unit_name}` : 'No public holidays chosen',
+          ...(data.holidays.teams || []).filter((t) => t.country).map((t) =>
+            `; ${t.name}: ${(data.holidays.countries.find((c) => c.code === t.country) || {}).name || t.country}`),
+          '. ',
+          el('button', { class: 'linkish', type: 'button', onclick: () => openHolidays() }, 'Change')) : null),
       el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
         'Someone is away')),
+    holidayPrompt(data),
     away.length ? el('ul', { class: 'request-list' }, away.map((a) => el('li', { class: 'request' },
       el('span', { class: 'request-time' }, awayWhen(a)),
-      el('span', { class: 'request-what' }, el('b', {}, a.person === '*' ? 'Everybody' : a.person),
+      el('span', { class: 'request-what' },
+        el('b', {}, a.source === 'holiday' ? a.note : (a.person === '*' ? 'Everybody' : a.person)),
         el('span', { class: 'muted small' },
-          [a.note, AWAY_SOURCE[a.source]].filter(Boolean).map((t) => ` · ${t}`).join(''))),
-      a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          (a.source === 'holiday' ? [a.where, AWAY_SOURCE.holiday] : [a.note, AWAY_SOURCE[a.source]])
+            .filter(Boolean).map((t) => ` · ${t}`).join(''))),
+      a.source === 'holiday' ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+        title: 'Announced for another day? Take this one off, and add the right day for everybody.',
+        onclick: () => saveHolidays({ skip: a.dates }, `${a.note} is off the plan.`) }, 'Not a holiday')
+      : a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
         try {
           await api(`/api/absences/${a.id}/remove`, { method: 'POST' });
           plan.needs = null;

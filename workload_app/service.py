@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import json
 import os
 import threading
 import uuid
@@ -20,7 +21,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, config as cfg, daily, derive,
-               drawings as drawings_module,
+               drawings as drawings_module, holidays as holidays_module,
                intake, library, metrics, needs as needs_module,
                people as people_module, submissions as submissions_module,
                planner as planner_module, progress, reports,
@@ -32,6 +33,12 @@ from .workbook import ValidationError, WorkloadWorkbook, iso, outside_message
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 #: How far ahead the Planner lists who will be away.
 AWAY_AHEAD_DAYS = 60
+#: The stretch public holidays are worked out for: back far enough for a
+#: pace, ahead far enough for the staffing forecast.
+HOLIDAYS_BEHIND_DAYS = 120
+HOLIDAYS_AHEAD_DAYS = 400
+#: Where the countries a unit's holidays come from are kept.
+HOLIDAY_SETTING = "holiday_calendar"
 
 
 class ApiError(Exception):
@@ -964,14 +971,40 @@ class WorkloadService:
                 self.store, wb.deliverables(), body.get("counts") or {})
             return {"saved": saved, "drawings": self._drawings(wb, self._index(wb))}
 
-    def _calendar(self, wb, rows) -> Dict[str, Any]:
+    def _holiday_choice(self, teams: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+        """Which country's public holidays the unit, and each team, keeps.
+
+        Until somebody chooses, a country named in the unit's or a team's
+        name is taken as a guess, and the Planner asks to confirm it.
+        """
+        try:
+            choice = json.loads(self.store.setting(HOLIDAY_SETTING) or "{}")
+        except ValueError:
+            choice = {}
+        choice = {"unit": choice.get("unit"), "teams": dict(choice.get("teams") or {}),
+                  "off": list(choice.get("off") or []), "chosen": "unit" in choice}
+        if not choice["chosen"]:
+            unit = self.unit if isinstance(self.unit, dict) else {}
+            names = [unit.get("name") or ""] + [t.get("name") or "" for t in teams]
+            choice["unit"] = next((c for c in map(holidays_module.guess, names) if c), None)
+        return choice
+
+    def _calendar(self, wb, rows, people: Sequence[Dict[str, Any]] = (),
+                  teams: Sequence[Dict[str, Any]] = ()):
         """The working-day settings, less holidays and whoever is away."""
+        today = _today()
         leave = calendar_.leave_from_timesheets(rows, codes=calendar_.leave_codes(wb))
         absences = self.store.absences()
+        choice = self._holiday_choice(teams)
+        public = holidays_module.calendar_for(
+            choice, people=people,
+            start=today - _dt.timedelta(days=HOLIDAYS_BEHIND_DAYS),
+            end=today + _dt.timedelta(days=HOLIDAYS_AHEAD_DAYS))
         config = calendar_.with_calendar(
-            wb.task_settings(), holidays=calendar_.workbook_holidays(wb),
-            absences=absences, leave=leave)
-        return config, absences, leave
+            wb.task_settings(),
+            holidays=calendar_.workbook_holidays(wb) | public["common"],
+            absences=absences, leave=leave, own_holidays=public["own"])
+        return config, absences, leave, public, choice
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
@@ -982,7 +1015,8 @@ class WorkloadService:
                                             lambda: uuid.uuid4().hex[:12])
         roster = people_module.roster(self.store, known=wb.ts_sheets())
         rows = self.store.all_rows()
-        config, absences, leave = self._calendar(wb, rows)
+        config, absences, leave, public, choice = self._calendar(
+            wb, rows, roster["people"], roster["teams"])
         return {
             "rows": rows,
             "tasks": task_sheet.read(wb.raw),
@@ -991,6 +1025,8 @@ class WorkloadService:
             "config": config,
             "absences": absences,
             "leave": leave,
+            "public": public,
+            "holiday_choice": choice,
             "project_rows": project_rows,
             "project_names": {p.number: p.name or p.number for p in wb.projects()},
             "drawings": drawn,
@@ -1171,12 +1207,91 @@ class WorkloadService:
                 "engineers": wb.engineer_names(),
                 "unit": (self.unit or {}).get("name") if isinstance(self.unit, dict) else "",
                 "away": self._away(inputs, today),
+                "holidays": {k: v for k, v in self._holidays_view(inputs, today).items()
+                             if k in ("unit", "unit_name", "chosen", "week_differs",
+                                      "country_week", "work_days", "countries", "teams")},
             }
 
     def _away(self, inputs: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
         return calendar_.upcoming(
             inputs["config"], inputs["absences"], inputs["leave"], today,
-            today + _dt.timedelta(days=AWAY_AHEAD_DAYS))
+            today + _dt.timedelta(days=AWAY_AHEAD_DAYS),
+            public=inputs["public"]["named"],
+            country_names={c["code"]: c["name"] for c in holidays_module.choices()})
+
+    def _holidays_view(self, inputs: Dict[str, Any], today: _dt.date) -> Dict[str, Any]:
+        choice = inputs["holiday_choice"]
+        countries = holidays_module.choices()
+        names = {c["code"]: c["name"] for c in countries}
+        week = inputs["config"]["work_days"]
+        unit_week = (holidays_module.COUNTRIES[choice["unit"]]["week"]
+                     if choice["unit"] else None)
+        return {
+            "unit": choice["unit"],
+            "unit_name": names.get(choice["unit"], ""),
+            "chosen": choice["chosen"],
+            "teams": [{"id": t["id"], "name": t["name"],
+                       "country": choice["teams"].get(t["id"]) or ""}
+                      for t in inputs["teams"]],
+            "off": choice["off"],
+            "countries": countries,
+            "work_days": list(week),
+            "country_week": unit_week,
+            "week_differs": bool(unit_week and sorted(unit_week) != sorted(week)),
+            "lunar_until": holidays_module.LUNAR_YEARS[1],
+            "next": [h for h in inputs["public"]["named"]
+                     if h["date"] >= today.isoformat()][:40],
+        }
+
+    def holidays(self) -> Dict[str, Any]:
+        with self._lock:
+            return self._holidays_view(self._planning(self.workbook), _today())
+
+    def save_holidays(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Choose the countries once; take a wrong day off, or put it back."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            choice = dict(inputs["holiday_choice"])
+            errors = []
+            try:
+                if "unit" in body:
+                    choice["unit"] = holidays_module.clean_country(body.get("unit"))
+                teams = dict(choice["teams"])
+                known = {t["id"] for t in inputs["teams"]}
+                for team_id, code in dict(body.get("teams") or {}).items():
+                    if team_id not in known:
+                        continue
+                    code = holidays_module.clean_country(code)
+                    if code:
+                        teams[team_id] = code
+                    else:
+                        teams.pop(team_id, None)
+                choice["teams"] = teams
+            except ValueError as exc:
+                errors.append(str(exc))
+            off = set(choice["off"])
+            for iso in body.get("skip") or []:
+                try:
+                    off.add(_dt.date.fromisoformat(str(iso)).isoformat())
+                except ValueError:
+                    errors.append(f"{iso!r} is not a date.")
+            if body.get("restore"):
+                off = set()
+            if errors:
+                raise ValidationError(errors)
+            self.store.set_setting(HOLIDAY_SETTING, json.dumps({
+                "unit": choice["unit"], "teams": choice["teams"],
+                "off": sorted(off)}))
+            result: Dict[str, Any] = {}
+            if body.get("use_week") and choice["unit"]:
+                week = holidays_module.COUNTRIES[choice["unit"]]["week"]
+                wb.save_task_settings({"work_days": week})
+                result["save"] = self._commit()
+            inputs = self._planning(wb)
+            result["holidays"] = self._holidays_view(inputs, _today())
+            result["away"] = self._away(inputs, _today())
+            return result
 
     def add_absence(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Somebody will be away -- or, for everybody, a day nobody works."""
@@ -1274,12 +1389,14 @@ class WorkloadService:
             index = self._index(wb)
             deliverables = wb.deliverables()
             rows = self.store.all_rows()
+            roster = people_module.roster(self.store, known=wb.ts_sheets())
             return submissions_module.plan(
                 deliverable_rows=metrics.deliverable_rows(wb, index),
                 deliverables=deliverables,
                 project_rows=metrics.project_rows(wb, index),
                 projects=wb.projects(), rows=rows,
-                tasks=task_sheet.read(wb.raw), config=self._calendar(wb, rows)[0],
+                tasks=task_sheet.read(wb.raw),
+                config=self._calendar(wb, rows, roster["people"], roster["teams"])[0],
                 hours_per_mm=wb.hours_per_man_month(),
                 drawing_counts=drawings_module.counts(self.store, deliverables),
                 today=_today())

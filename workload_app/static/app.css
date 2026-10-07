@@ -1134,3 +1134,11 @@ tr.row-done .task-name { text-decoration: line-through; }
 @media (max-width: 700px) {
   #view-planner .view-head p { display: none; }
 }
+
+/* Public holidays: asked once, then one line under Away. */
+.linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--accent);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.holiday-prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 4px 0 10px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--surface-2); border-left: 3px solid var(--accent); }
+.holiday-prompt > span:first-child { flex: 1 1 260px; font-weight: 600; }
