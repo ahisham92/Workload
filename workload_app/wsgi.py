@@ -14,11 +14,10 @@ step, and the same application object serves the local server too.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs
 
-from .app import Request, Response, WorkloadApp, parse_cookies
+from .app import ApiError, Request, Response, WorkloadApp, parse_body, parse_cookies
 from .service import MAX_UPLOAD_BYTES
 
 #: Where a site that mounts Workload says who is asking. See ``Request.site``.
@@ -38,7 +37,11 @@ def get_app() -> WorkloadApp:
 
 def application(environ: Dict[str, Any],
                 start_response: Callable[..., Any]) -> Iterable[bytes]:
-    request = _request_from(environ)
+    try:
+        request = _request_from(environ)
+    except ApiError as exc:
+        return _reply(start_response, Response.json(
+            exc.status, {"error": exc.message, "errors": exc.errors}))
     if request is None:
         return _reply(start_response, Response.json(
             400, {"error": "Bad request.", "errors": ["Bad request."]}))
@@ -60,15 +63,8 @@ def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
         if length > MAX_UPLOAD_BYTES * 2:
             return None
         if length > 0:
-            raw = environ["wsgi.input"].read(length)
-            if raw.strip():
-                try:
-                    parsed = json.loads(raw.decode("utf-8"))
-                except (ValueError, UnicodeDecodeError):
-                    return None
-                if not isinstance(parsed, dict):
-                    return None
-                body = parsed
+            body = parse_body(environ["wsgi.input"].read(length),
+                              environ.get("CONTENT_TYPE") or "")
 
     # Behind the host's proxy the connection to the browser is the one that
     # matters: it decides whether the session cookie may be marked Secure.

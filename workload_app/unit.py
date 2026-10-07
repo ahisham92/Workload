@@ -489,6 +489,9 @@ class Unit:
         name = " ".join(as_text(name).split())
         if not name:
             errors.append("The engineer needs a short name.")
+        if "/" in name:
+            # It goes into the address the app reaches the engineer by.
+            errors.append("A short name cannot contain a slash (/).")
         if len(name) > MAX_SHORT_NAME:
             errors.append(f"Keep the short name under {MAX_SHORT_NAME} characters.")
         taken = {e.short_name.lower() for e in self.engineers()} - (
@@ -985,6 +988,8 @@ class Unit:
         number = as_text(data.get("number"))
         if not number:
             errors.append("Project number is required.")
+        if "/" in number:
+            errors.append("A project number cannot contain a slash (/).")
         for other in self.projects():
             if other.number == number and other.row != row:
                 errors.append(f"Project number {number!r} is already in the register.")

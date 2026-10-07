@@ -150,9 +150,16 @@ def _read_xlsx(data: bytes) -> List[List[Any]]:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        book = openpyxl.load_workbook(
-            io.BytesIO(data), read_only=True, data_only=True
-        )
+        try:
+            book = openpyxl.load_workbook(
+                io.BytesIO(data), read_only=True, data_only=True
+            )
+        except Exception:
+            # Not a zip (damaged, or a password-protected workbook, which
+            # Excel stores differently), or a zip that is not a workbook.
+            raise ImportError_(
+                "That file could not be opened as an Excel workbook. If it "
+                "has a password, save a copy without one.")
         try:
             sheet = book.worksheets[0]
             # The reporting tool writes a stub `<dimension ref="A1"/>`, and in

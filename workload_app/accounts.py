@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS users (
     -- never matched on -- it can change).
     site_key      TEXT,
     site_login    TEXT,
+    -- The unit this manager has open, so every web worker opens the same one.
+    open_unit_id  TEXT,
     created_at    TEXT NOT NULL,
     last_seen     TEXT
 );
@@ -166,6 +168,8 @@ class Accounts:
             db.execute("ALTER TABLE users ADD COLUMN site_key TEXT")
         if "site_login" not in columns:
             db.execute("ALTER TABLE users ADD COLUMN site_login TEXT")
+        if "open_unit_id" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN open_unit_id TEXT")
         # One person on the site is one account here, never two.
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_site_key "
                    "ON users(site_key) WHERE site_key IS NOT NULL")
@@ -230,6 +234,7 @@ class Accounts:
                              (user_id,)).fetchone()
             if row is None:
                 raise AccountError("That account no longer exists.")
+            password = str(password or "")
             check_password(password, row["username"])
             salt = secrets.token_bytes(SALT_BYTES)
             db.execute(
@@ -407,6 +412,8 @@ class Accounts:
     # -- logging in ------------------------------------------------------
     def verify(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         """The account, or ``None``.  Takes the same time either way."""
+        if not isinstance(password, str):
+            password = ""
         try:
             username = clean_username(username)
         except AccountError:
@@ -556,6 +563,17 @@ class Accounts:
             raise AccountError(f"You already have a unit called {name}.")
         return self.unit(user_id, unit_id)              # type: ignore[return-value]
 
+    def set_open_unit(self, user_id: int, unit_id: Optional[str]) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE users SET open_unit_id = ? WHERE id = ?",
+                       (unit_id, user_id))
+
+    def open_unit_of(self, user_id: int) -> Optional[str]:
+        with self._connect() as db:
+            row = db.execute("SELECT open_unit_id FROM users WHERE id = ?",
+                             (user_id,)).fetchone()
+        return row["open_unit_id"] if row else None
+
     def touch_unit(self, user_id: int, unit_id: str) -> None:
         with self._connect() as db:
             db.execute("UPDATE units SET opened_at = ? WHERE id = ? AND user_id = ?",
@@ -634,7 +652,7 @@ class Accounts:
         with self._connect() as db:
             rows = db.execute(
                 "SELECT m.*, u.name AS unit_name, u.filename, u.user_id AS owner_id, "
-                "o.display_name AS owner_name "
+                "COALESCE(NULLIF(o.display_name, ''), o.username) AS owner_name "
                 "FROM memberships m JOIN units u ON u.id = m.unit_id "
                 "JOIN users o ON o.id = u.user_id "
                 "WHERE m.user_id = ? ORDER BY u.name",
