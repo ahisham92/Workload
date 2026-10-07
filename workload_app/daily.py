@@ -3,11 +3,13 @@
 Nobody types a plan.  A person's day is laid out from what the app already
 knows, in this order:
 
-1. **requests** that came in, at the time they were given;
-2. **tasks** on the list for that day -- the submission run-ups the
+1. **requests** that came in, at the time they were given, and the
+   **meetings** of anybody who leads people (see ``management``);
+2. for somebody who leads people, their daily **team support**;
+3. **tasks** on the list for that day -- the submission run-ups the
    submissions plan put there, meetings, anything else dated -- a task over
    several days taking its share of each;
-3. **their usual project work** in what is left, at the pace their newest
+4. **their usual project work** in what is left, at the pace their newest
    timesheets set, with any handover in force for that day applied.
 
 Each goes into the first free stretch of the working day, so the result reads
@@ -23,7 +25,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from collections import defaultdict
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import calendar_
 from . import intake
@@ -59,7 +61,15 @@ def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
 def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]],
              rates: Mapping[Tuple[str, str], float], tasks: Sequence[task_sheet.Task],
              slots: Mapping[int, Dict[str, Any]], config: Dict[str, Any],
-             project_names: Mapping[str, str]) -> Dict[str, Any]:
+             project_names: Mapping[str, str],
+             meetings: Sequence[Dict[str, Any]] = (),
+             support: Optional[Mapping[str, float]] = None,
+             led: Optional[Mapping[str, int]] = None) -> Dict[str, Any]:
+    """One day for everybody. ``meetings`` are that day's, from
+    ``management.Plan.meetings_on``; ``support`` is each leader's daily team
+    support in hours and ``led`` how many people they lead."""
+    support = support or {}
+    led = led or {}
     working = task_sheet.is_working_day(day, config)
     day_start = intake._at(day, config["day_start"])
     day_end = intake._at(day, config["day_end"])
@@ -93,6 +103,20 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                                   "title": task.name, "project": task.project_number,
                                   "task_id": task.id, "done": task.done})
         if working and not away:
+            for meeting in meetings:
+                if name != meeting["leader"] and name not in meeting["with"]:
+                    continue
+                fixed.append({"start": meeting["start"], "end": meeting["end"],
+                              "kind": "meeting", "title": _meeting_title(meeting, name),
+                              "project": "", "task_id": None, "done": False,
+                              "agenda": list(meeting.get("agenda") or ())})
+            if support.get(name):
+                count = led.get(name, 0)
+                flexible.append({"hours": support[name], "kind": "management",
+                                 "title": "Team support: questions, checking and "
+                                          f"replies ({count} "
+                                          f"{'person' if count == 1 else 'people'})",
+                                 "project": "", "task_id": None, "done": False})
             on_task_projects: Dict[str, float] = defaultdict(float)
             for task in tasks:
                 if intake.is_request(task) or name not in task.assignees:
@@ -148,6 +172,18 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
         "hours_per_day": round(a_day, 2),
         "people": people,
     }
+
+
+def _meeting_title(meeting: Dict[str, Any], name: str) -> str:
+    """The meeting as the person reading their own day would put it."""
+    leader = meeting["leader"]
+    if meeting["kind"] == "one_to_one":
+        other = meeting["with"][0] if name == leader else leader
+        return f"One-to-one with {other}"
+    if name == leader:
+        count = len(meeting["with"])
+        return f"Runs the team meeting ({count} {'person' if count == 1 else 'people'})"
+    return f"Team meeting with {leader}"
 
 
 def _lay_out(fixed: List[Dict[str, Any]], flexible: List[Dict[str, Any]],

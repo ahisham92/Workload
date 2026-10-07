@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
+               management as management_module,
                drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
                incoming, intake, metrics, needs as needs_module,
@@ -936,6 +937,8 @@ class WorkloadService:
         config, absences, leave, public, choice = self._calendar(
             wb, rows, roster["people"], roster["teams"])
         return {
+            "management": management_module.Plan(roster["people"], roster["teams"],
+                                                 config),
             "rows": rows,
             "tasks": wb.task_records(),
             "roster": roster["people"],
@@ -961,7 +964,8 @@ class WorkloadService:
             rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
             config=inputs["config"], project_names=inputs["project_names"],
             drawings_left=drawings_module.left_by_project(inputs["drawings"]),
-            saved=self.store.plan_moves(), days=days)
+            saved=self.store.plan_moves(), days=days,
+            management=inputs["management"].hours_a_day())
         suggested: List[Dict[str, Any]] = []
         if suggest:
             suggested = planner_module.suggest(moves=moves, **common)
@@ -1058,7 +1062,8 @@ class WorkloadService:
                           if intake.is_request(t) and not t.done and t.due
                           for name in t.assignees],
                 planned=self.store.planned_work(),
-                team_names={t["id"]: t["name"] for t in self.store.teams()})
+                team_names={t["id"]: t["name"] for t in self.store.teams()},
+                management=inputs["management"].hours_a_day())
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",
@@ -1077,7 +1082,24 @@ class WorkloadService:
                 rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
                 config=inputs["config"], project_names=inputs["project_names"],
                 saved=self.store.plan_moves(), slots=self.store.slots(),
-                today=_today())
+                today=_today(), management=inputs["management"])
+
+    def _agendas(self, inputs: Dict[str, Any], today: _dt.date,
+                 saved: List[Dict[str, Any]], slots: Dict[int, Dict[str, Any]]):
+        """Each meeting's agenda, from the checkpoints Check-ins raises."""
+        seen = checkins_module.build(
+            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
+            config=inputs["config"], project_names=inputs["project_names"],
+            saved=saved, slots=slots, today=today, management=inputs["management"])
+        points = {p["name"]: p["checkpoints"] for p in seen["people"]}
+        signals = {p["name"]: p["signal"]["label"] for p in seen["people"]}
+        room = [p["name"] for p in seen["can_take"]]
+
+        def agenda(meeting: Dict[str, Any], day: _dt.date) -> List[str]:
+            return management_module.agenda(
+                meeting, checkpoints=points, signals=signals, tasks=inputs["tasks"],
+                day=day, config=inputs["config"], can_take=room)
+        return agenda
 
     def add_planned_work(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """A project just assigned: one line, and the forecast counts it."""
@@ -1110,13 +1132,18 @@ class WorkloadService:
             days = daily.week_of(day, config) if span == "week" else [day]
             saved = self.store.plan_moves()
             slots = self.store.slots()
+            plan = inputs["management"]
+            agendas = None
+            if any(plan.meetings_on(each) for each in days):
+                agendas = self._agendas(inputs, today, saved, slots)
             out = []
             for each in days:
                 out.append(daily.plan_day(
                     day=each, today=today, roster=inputs["roster"],
                     rates=daily.rates_on(each, inputs["rows"], config, saved),
                     tasks=inputs["tasks"], slots=slots, config=config,
-                    project_names=inputs["project_names"]))
+                    project_names=inputs["project_names"],
+                    **plan.for_day(each, agendas)))
             requests = []
             for task in inputs["tasks"]:
                 if not intake.is_request(task):
@@ -1280,6 +1307,7 @@ class WorkloadService:
                     project_names=inputs["project_names"],
                     drawings_left=drawings_module.left_by_project(inputs["drawings"]),
                     saved=self.store.plan_moves(), today=today,
+                    management=inputs["management"].hours_a_day(),
                     days=max(1, len(task_sheet.working_days(
                         today, max(request["due"], today), inputs["config"]))))
                 history: Dict[str, set] = {}
@@ -1297,6 +1325,7 @@ class WorkloadService:
             taken = [(_dt.datetime.fromisoformat(s["start"]),
                       _dt.datetime.fromisoformat(s["end"]))
                      for s in self.store.slots().values() if s["person"] == person]
+            taken += inputs["management"].busy(person, now.date(), 60)
             start, end = intake.slot(
                 hours=request["hours"], now=now, taken=taken, config=inputs["config"],
                 away=(inputs["config"].get("away") or {}).get(person, ()))

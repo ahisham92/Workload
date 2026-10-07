@@ -233,7 +233,8 @@ def free_hours(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Tas
                roster: Sequence[Dict[str, Any]], config: Dict[str, Any],
                saved: Sequence[Dict[str, Any]], slots: Mapping[int, Dict[str, Any]],
                project_names: Mapping[str, str], today: _dt.date,
-               days: int = AHEAD_DAYS) -> Dict[str, Any]:
+               days: int = AHEAD_DAYS, management: Optional[Any] = None
+               ) -> Dict[str, Any]:
     """Each person's free hours on each of the next working days.
 
     The days are laid out exactly as the Planner lays out Today, so the two
@@ -247,7 +248,8 @@ def free_hours(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Tas
         rates, _ = planner._apply_project_moves(measured, active)
         laid = daily.plan_day(day=day, today=today, roster=roster, rates=rates,
                               tasks=tasks, slots=slots, config=config,
-                              project_names=project_names)
+                              project_names=project_names,
+                              **(management.for_day(day) if management else {}))
         for person in laid["people"]:
             per[person["name"]].append({
                 "date": day.isoformat(),
@@ -356,7 +358,11 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
           roster: Sequence[Dict[str, Any]], config: Dict[str, Any],
           project_names: Mapping[str, str], saved: Sequence[Dict[str, Any]] = (),
           slots: Optional[Mapping[int, Dict[str, Any]]] = None,
-          today: Optional[_dt.date] = None) -> Dict[str, Any]:
+          today: Optional[_dt.date] = None,
+          management: Optional[Any] = None) -> Dict[str, Any]:
+    """The whole Check-ins page. ``management`` (a ``management.Plan``) puts
+    the time leaders give their people into the free hours, and gives each
+    leader their meetings with the agenda for each."""
     today = today or _dt.date.today()
     active = [p for p in roster if p.get("active", True)]
     names = [p["name"] for p in active]
@@ -365,11 +371,13 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     past = history(rows, names, config, through=through)
     ahead = free_hours(rows=rows, tasks=tasks, roster=active, config=config,
                        saved=saved, slots=slots or {}, project_names=project_names,
-                       today=today)
+                       today=today, management=management)
     rates = planner.pace(rows, config)["rates"]
     away = config.get("away") or {}
     a_day = ahead["hours_per_day"]
 
+    led = management.led if management else {}
+    leading_hours = management.hours_a_day() if management else {}
     people = []
     for person in active:
         name = person["name"]
@@ -407,6 +415,9 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
                 name, tasks=tasks, today=today, config=config, load=load,
                 last_row=past["last_row"].get(name), team_last=through,
                 ahead=days, top_work=top),
+            "leads": len(led.get(name, ())),
+            "is_manager": person.get("grade") == "manager",
+            "leading_hours": leading_hours.get(name, 0.0),
         })
 
     order = {key: i for i, key in enumerate(SIGNAL_ORDER)}
@@ -421,9 +432,13 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     # Who to give the next piece of work to: room this week, and not somebody
     # who has just been told to ease off.
     take = sorted((p for p in people if p["free_week"] >= 1
-                   and p["signal"]["key"] != "rest"),
+                   and p["signal"]["key"] != "rest" and not p["is_manager"]),
                   key=lambda p: (p["signal"]["key"] != "fresh", -p["free_week"]))
+    leading = _leading(management, people, tasks=tasks, config=config,
+                       window=[_dt.date.fromisoformat(d) for d in ahead["days"]],
+                       can_take=[p["name"] for p in take]) if management else []
     return {
+        "leading": leading,
         "today": today.isoformat(),
         "through": through.isoformat(),
         "stale": (today - through).days > planner.STALE_AFTER_DAYS,
@@ -444,3 +459,43 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         "thresholds": {"rest_load": REST_LOAD, "busy_load": BUSY_LOAD,
                        "quiet_load": QUIET_LOAD, "over_line": OVER_LINE},
     }
+
+
+def _leading(management: Any, people: Sequence[Dict[str, Any]], *,
+             tasks: Sequence[task_sheet.Task], config: Dict[str, Any],
+             window: Sequence[_dt.date], can_take: Sequence[str]
+             ) -> List[Dict[str, Any]]:
+    """Each leader's side of it: the time the team takes from their day, and
+    the coming meetings with what to go through in each."""
+    from . import management as management_module
+
+    points = {p["name"]: p["checkpoints"] for p in people}
+    signals = {p["name"]: p["signal"]["label"] for p in people}
+    hours = management.hours_a_day()
+    out = []
+    for name, led in management.led.items():
+        meetings = []
+        for day in window:
+            for meeting in management.meetings_on(day):
+                if meeting["leader"] != name:
+                    continue
+                meetings.append({
+                    "date": day.isoformat(),
+                    "start": meeting["start"].strftime("%H:%M"),
+                    "end": meeting["end"].strftime("%H:%M"),
+                    "kind": meeting["kind"],
+                    "title": ("Team meeting" if meeting["kind"] == "team"
+                              else f"One-to-one with {meeting['with'][0]}"),
+                    "with": meeting["with"],
+                    "agenda": management_module.agenda(
+                        meeting, checkpoints=points, signals=signals, tasks=tasks,
+                        day=day, config=config, can_take=can_take),
+                })
+        out.append({
+            "name": name,
+            "people": sorted(p["name"] for p in led),
+            "support_hours": management.support.get(name, 0.0),
+            "hours_a_day": hours.get(name, 0.0),
+            "meetings": meetings,
+        })
+    return out

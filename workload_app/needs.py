@@ -101,8 +101,11 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
              unit_name: str = "",
              requests: Sequence[Tuple[str, _dt.date, float]] = (),
              planned: Sequence[Dict[str, Any]] = (),
-             team_names: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+             team_names: Optional[Mapping[str, str]] = None,
+             management: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
     today = today or _dt.date.today()
+    # Leading people takes part of a leader's day; that part does no project work.
+    management = management or {}
     hours_per_mm = float(hours_per_mm or 0) or 185.0
     a_day = task_sheet.hours_per_day(config)
     span = weeks_ahead(today, weeks)
@@ -278,7 +281,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
             headcount[key] += 1
             for i, days in enumerate(week_dates):
                 present = calendar_.present_days(config, person["name"], days)
-                supply[key][i] += present * a_day
+                supply[key][i] += present * max(
+                    0.0, a_day - management.get(person["name"], 0.0))
                 away_days[key][i] += len(days) - present
 
     groups = []
