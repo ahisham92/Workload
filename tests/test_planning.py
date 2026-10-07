@@ -12,8 +12,8 @@ import shutil
 
 import pytest
 
-from workload_app import (derive, drawings, needs, people, planner, storage,
-                          submissions)
+from workload_app import (derive, drawings, holidays, needs, people, planner,
+                          storage, submissions)
 from workload_app.service import WorkloadService
 
 openpyxl = pytest.importorskip("openpyxl")
@@ -276,6 +276,137 @@ class TestWhenToAskForPeople:
         assert span[1][0] == dt.date(2026, 10, 12)
 
 
+def drawing_list(rows, name="Drawing list"):
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "DWG register"
+    sheet.append(["Project drawing register"])
+    sheet.append(["JOB NO", "Package", "Dwg No", "Drawing Title", "Rev", "Purpose",
+                  "Date Issued", "Client Code", "Date Returned"])
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return {"filename": f"{name}.xlsx",
+            "content_base64": base64.b64encode(buffer.getvalue()).decode()}
+
+
+def jetty_drawings(issued=4, approved=0, total=10):
+    rows = []
+    for i in range(total):
+        sent = i < issued
+        code = "1" if i < approved else ""
+        rows.append(["N1-0100D", "Detailed design", f"N1-ST-{i + 1:03d}", f"Pile layout {i + 1}",
+                     "B" if sent else "A", "IFC" if sent else "In progress",
+                     dt.date(2026, 9, 20 + i) if sent else None, code,
+                     dt.date(2026, 10, 2) if code else None])
+    return rows
+
+
+class TestTheDrawingList:
+    def test_the_template_reads_back_and_its_starter_rows_are_skipped(self, unit):
+        from workload_app import drawing_list as module
+        template = unit.drawing_list_template()
+        data = base64.b64decode(template["content_base64"])
+        assert module.read(data) == []
+        sheet = openpyxl.load_workbook(io.BytesIO(data))["Drawing list"]
+        assert [c.value for c in sheet[1]][:3] == ["Job Number", "Deliverable", "Drawing No."]
+        assert {sheet.cell(r, 1).value for r in range(2, 5)} == {
+            "N1-0100D", "N2-0100D", "N3-0100D"}
+
+    def test_counts_and_drawings_done_come_from_the_list(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(
+            jetty_drawings() + [["ZZ-9999", "", "X-1", "Stray", "A", "", None, "", None]])]})
+        assert result["matched"] == 10
+        assert result["unmatched"] == [{"job_number": "ZZ-9999", "deliverable": "",
+                                        "drawings": 1}]
+        project = next(p for p in result["drawings"]["projects"] if p["number"] == "N1-0100D")
+        assert project["total"] == 10 and project["done"] == 4
+        # Four drawings really done is a rate, confirmed project or not.
+        assert project["hours_per_drawing"] == pytest.approx(18 * 15 / 4, rel=0.01)
+        assert result["proposals"] == []
+
+    def test_all_sent_is_offered_as_sent_and_one_tap_applies_it(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(jetty_drawings(issued=10))]})
+        proposal = result["proposals"][0]
+        assert proposal["change"]["submitted_to_client"] == "2026-09-29"
+        assert proposal["change"]["step_no"] == 4               # transmitted to client
+        unit.apply_drawing_list({"rows": [proposal["row"]]})
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N1-0100D")
+        assert deliverable.submitted_to_client == dt.date(2026, 9, 29)
+        assert deliverable.step_no == 4
+        plan = unit.submissions()
+        assert all(i["project_number"] != "N1-0100D" for i in plan["items"])
+        waiting = plan["waiting"][0]
+        assert waiting["project_number"] == "N1-0100D" and waiting["days"] == 8
+        assert waiting["list"]["issued"] == 10
+
+    def test_every_drawing_code_a_is_accepted(self, unit):
+        result = unit.import_drawing_list({"files": [drawing_list(
+            jetty_drawings(issued=10, approved=10))]})
+        change = result["proposals"][0]["change"]
+        assert change["completed"] == "2026-10-02" and change["step_no"] == 5
+        assert change["comments_received"] == "2026-10-02"
+
+    def test_a_file_that_is_not_a_drawing_list_is_refused(self, unit):
+        from workload_app.drawing_list import DrawingListError
+        with pytest.raises(DrawingListError):
+            unit.import_drawing_list({"files": [export("x", booking(
+                "A B", "P2", "U", "N1-0100D", 1, "D", 8))]})
+
+
+class TestWorkComing:
+    def _berths(self, unit):
+        return next(t for t in unit.store.teams() if t["name"] == "BERTHS")["id"]
+
+    def _group(self, data, team, role="engineering"):
+        return next(g for g in data["groups"] if g["team_name"] == team and g["role"] == role)
+
+    def test_a_project_just_assigned_counts_from_its_start(self, unit):
+        before = unit.needs()
+        result = unit.add_planned_work({
+            "name": "New berth at Safaga", "team_id": self._berths(unit),
+            "hours": 600, "start": "2026-10-12", "end": "2026-11-20"})
+        after = result["needs"]
+        item = next(c for c in after["coming"] if c["name"] == "New berth at Safaga")
+        assert item["status"] == "waiting" and item["in_horizon"] == pytest.approx(600)
+        # Nothing in the week it has not started; a share of 100 h a week after.
+        week0 = [self._group(d, "BERTHS")["weeks"][0]["demand_hours"] for d in (before, after)]
+        week1 = [sum(self._group(d, "BERTHS", r)["weeks"][1]["demand_hours"]
+                     for r in ("engineering", "drafting")) for d in (before, after)]
+        assert week0[0] == pytest.approx(week0[1])
+        assert week1[1] - week1[0] == pytest.approx(100, abs=1)
+        assert any(a["kind"] == "need" and a["team_name"] == "BERTHS" for a in after["alerts"])
+
+    def test_bookings_use_it_up_and_are_not_counted_twice(self, unit):
+        unit.add_planned_work({"name": "Concept", "job_number": "n2-0100d",
+                               "team_id": self._berths(unit), "hours": 200,
+                               "start": "2026-09-01", "end": "2026-12-31"})
+        item = unit.needs()["coming"][0]
+        # Osama's 4 h a day for three weeks are already booked to it.
+        assert item["status"] == "started"
+        assert item["booked"] == pytest.approx(60) and item["left"] == pytest.approx(140)
+        assert not any(a["number"] == "N2-0100D" for a in unit.needs()["assumed"])
+        unit.add_planned_work({"name": "Small", "job_number": "N1-0100D",
+                               "hours": 50, "start": "2026-09-01", "end": "2026-12-31"})
+        small = next(c for c in unit.needs()["coming"] if c["name"] == "Small")
+        assert small["status"] == "used up" and small["in_horizon"] == 0
+
+    def test_nonsense_is_refused_and_a_line_can_go(self, unit):
+        from workload_app.incoming import IncomingError
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "", "hours": 100})
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "X", "hours": 0})
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "X", "hours": 10, "start": "2026-11-01",
+                                   "end": "2026-10-01"})
+        made = unit.add_planned_work({"name": "X", "hours": 10})
+        assert made["end"] == "2026-12-31"           # three months by default
+        assert unit.remove_planned_work(made["id"])["needs"]["coming"] == []
+
+
 class TestTheDayFillsItself:
     def test_everybody_s_day_is_laid_out_from_their_pace(self, unit):
         data = unit.day_plan({})
@@ -356,6 +487,13 @@ class TestTimeAway:
         assert week(after, 1)["away_days"] == 5
         assert week(before, 1)["capacity_hours"] > 0
 
+    def test_a_week_short_because_somebody_is_away_is_a_handover_not_a_hire(self, unit):
+        unit.add_absence({"person": "Osama", "start": "2026-10-12", "end": "2026-10-16"})
+        alerts = [a for a in unit.needs()["alerts"]
+                  if a["team_name"] == "BERTHS" and a["role"] == "engineering"]
+        assert [a["kind"] for a in alerts] == ["cover"]
+        assert "Next days" in alerts[0]["detail"] and "5 days away" in alerts[0]["detail"]
+
     def test_nonsense_is_refused_and_a_typed_absence_can_go(self, unit):
         from workload_app.calendar_ import CalendarError
         with pytest.raises(CalendarError):
@@ -365,6 +503,55 @@ class TestTimeAway:
                               "end": "2026-10-08"})
         made = unit.add_absence({"person": "Osama", "start": "2026-10-08"})
         assert unit.remove_absence(made["id"])["away"] == []
+
+
+class TestPublicHolidays:
+    def test_the_dates_are_built_in(self):
+        named = {h["date"]: h["name"] for h in holidays.for_year("EG", 2026)}
+        assert named["2026-10-06"] == "Armed Forces Day"
+        assert named["2026-04-13"] == "Sham el-Nessim"        # Orthodox Easter Monday
+        assert named["2026-03-20"] == "Eid al-Fitr"
+        uk = {h["date"] for h in holidays.for_year("GB", 2026)}
+        assert {"2026-04-03", "2026-04-06", "2026-08-31", "2026-12-28"} <= uk
+
+    def test_chosen_once_for_the_unit_and_kept_off_the_plan(self, unit):
+        assert unit.holidays()["unit"] is None
+        unit.save_holidays({"unit": "AE"})
+        day = unit.day_plan({"date": ["2026-12-02"]})["days"][0]
+        assert not day["working_day"]
+        away = unit.day_plan({})["away"]
+        national = next(a for a in away if a["note"] == "National Day")
+        assert (national["start"], national["end"]) == ("2026-12-02", "2026-12-03")
+
+    def test_a_team_elsewhere_keeps_its_own(self, unit):
+        coastal = next(t for t in unit.store.teams() if t["name"] == "COASTAL")
+        unit.save_holidays({"unit": "EG", "teams": {coastal["id"]: "AE"}})
+        dec = unit.day_plan({"date": ["2026-12-02"]})["days"][0]
+        assert dec["working_day"]
+        assert person(dec, "Mariam")["away"] and not person(dec, "Osama")["away"]
+        jan = unit.day_plan({"date": ["2027-01-07"]})["days"][0]
+        assert person(jan, "Osama")["away"] and not person(jan, "Mariam")["away"]
+
+    def test_the_country_s_week_comes_with_it_when_asked(self, unit):
+        unit.save_holidays({"unit": "EG", "use_week": True})
+        assert sorted(unit.workbook.task_settings()["work_days"]) == [0, 1, 2, 3, 6]
+        assert not unit.holidays()["week_differs"]
+
+    def test_a_day_announced_differently_is_taken_off_or_added(self, unit):
+        unit.save_holidays({"unit": "AE", "skip": ["2026-12-02"]})
+        assert unit.day_plan({"date": ["2026-12-02"]})["days"][0]["working_day"]
+        unit.save_holidays({"restore": True})
+        assert not unit.day_plan({"date": ["2026-12-02"]})["days"][0]["working_day"]
+
+    def test_a_city_in_the_unit_s_name_is_a_guess_to_confirm(self, unit):
+        unit.unit = {"name": "Marine Structures Cairo"}
+        view = unit.holidays()
+        assert view["unit"] == "EG" and not view["chosen"]
+
+    def test_an_unknown_country_is_refused(self, unit):
+        from workload_app.workbook import ValidationError
+        with pytest.raises(ValidationError):
+            unit.save_holidays({"unit": "XX"})
 
 
 class TestRequestsAsTheyComeIn:

@@ -101,12 +101,19 @@ def _days(start: _dt.date, end: _dt.date) -> List[str]:
 
 def with_calendar(config: Dict[str, Any], *, holidays: Iterable[str] = (),
                   absences: Sequence[Dict[str, Any]] = (),
-                  leave: Mapping[str, Iterable[str]] = ()) -> Dict[str, Any]:
-    """The working-day settings, with who is away added to them."""
+                  leave: Mapping[str, Iterable[str]] = (),
+                  own_holidays: Mapping[str, Iterable[str]] = ()) -> Dict[str, Any]:
+    """The working-day settings, with who is away added to them.
+
+    ``holidays`` are days nobody works; ``own_holidays`` are public holidays
+    only some people have, because their team is in another country.
+    """
     out = dict(config)
     days_off = set(holidays)
     away: Dict[str, Set[str]] = defaultdict(set)
     for name, days in dict(leave).items():
+        away[name] |= set(days)
+    for name, days in dict(own_holidays).items():
         away[name] |= set(days)
     for absence in absences:
         try:
@@ -163,9 +170,35 @@ def clean_absence(body: Mapping[str, Any], *, people: Iterable[str],
 
 def upcoming(config: Dict[str, Any], absences: Sequence[Dict[str, Any]],
              leave: Mapping[str, Iterable[str]], today: _dt.date,
-             until: _dt.date) -> List[Dict[str, Any]]:
-    """Who is away between now and ``until``, for the Planner to list."""
+             until: _dt.date, public: Sequence[Dict[str, Any]] = (),
+             country_names: Mapping[str, str] = ()) -> List[Dict[str, Any]]:
+    """Who is away between now and ``until``, for the Planner to list.
+
+    ``public`` is the built-in public holidays, one entry a day; a holiday of
+    several days is listed once.
+    """
     out = []
+    country_names = dict(country_names)
+    several = len({c for h in public for c in h.get("countries", ())}) > 1
+    named = set()
+    run: Optional[Dict[str, Any]] = None
+    for holiday in sorted(public, key=lambda h: h["date"]):
+        if not today.isoformat() <= holiday["date"] <= until.isoformat():
+            continue
+        named.add(holiday["date"])
+        day = _dt.date.fromisoformat(holiday["date"])
+        if run and run["note"] == holiday["name"] and run["countries"] == holiday["countries"] \
+                and (day - _dt.date.fromisoformat(run["end"])).days == 1:
+            run["end"] = holiday["date"]
+            run["dates"].append(holiday["date"])
+            continue
+        run = {"id": None, "person": EVERYONE, "start": holiday["date"],
+               "end": holiday["date"], "note": holiday["name"], "source": "holiday",
+               "countries": list(holiday.get("countries", ())),
+               "where": (", ".join(country_names.get(c, c) for c in holiday["countries"])
+                         if several else ""),
+               "dates": [holiday["date"]]}
+        out.append(run)
     for absence in absences:
         if absence["end"] >= today.isoformat() and absence["start"] <= until.isoformat():
             out.append({**absence, "source": "typed"})
@@ -175,7 +208,7 @@ def upcoming(config: Dict[str, Any], absences: Sequence[Dict[str, Any]],
             out.append({"id": None, "person": name, "start": run[0], "end": run[-1],
                         "note": "booked on a timesheet", "source": "timesheet"})
     for day in sorted(d for d in config.get("holidays", ())
-                      if today.isoformat() <= d <= until.isoformat()):
+                      if today.isoformat() <= d <= until.isoformat() and d not in named):
         if not any(a["person"] == EVERYONE and a["start"] <= day <= a["end"]
                    for a in absences):
             out.append({"id": None, "person": EVERYONE, "start": day, "end": day,
