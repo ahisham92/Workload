@@ -1,7 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Selecao+">
-  <!-- The Selecao+ mark: a squad in a pyramid, four, three and two, with a star
-       at the top. Every page and the browser tab read the logo from this file.
-       The full logo with the name, reversed versions and PNG icons are in brand/. -->
   <rect width="64" height="64" rx="14" fill="#101B2D"/>
   <circle cx="12.5" cy="50" r="3.8" fill="#FFFFFF"/>
   <circle cx="25.5" cy="50" r="3.8" fill="#FFFFFF"/>

@@ -758,8 +758,8 @@ class WorkloadApp:
         if known is None:
             raise ApiError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
-                "That is not somebody who can open Workload on this site. Ask "
-                "the administrator to make them an account with Workload "
+                "That is not somebody who can open Selecao+ on this site. Ask "
+                "the administrator to make them an account with Selecao+ "
                 "ticked, then give them access here.")
         who = known["name"] or known["login"] or engineer
 
