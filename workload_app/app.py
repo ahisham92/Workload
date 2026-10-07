@@ -903,7 +903,24 @@ class WorkloadApp:
     def import_key_status(self, ctx: Context, query, body) -> Dict[str, Any]:
         unit = self._open_unit_or_refuse(ctx)
         return {"unit": unit["name"],
+                "source": nightly.source(ctx.service),
                 "key": self.accounts.import_key_info(ctx.user["id"], unit["id"])}
+
+    def save_import_source(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """The export request, pasted once from the browser."""
+        self._open_unit_or_refuse(ctx)
+        return {"source": nightly.save_source(ctx.service, body)}
+
+    def team_kit(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """The kit for a team member's PC: export to the shared folder, no key."""
+        self._open_unit_or_refuse(ctx)
+        folder = nightly.source(ctx.service)["shared_folder"]
+        if not folder:
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "Give the team's shared folder first.")
+        return {"filename": "selecao-nightly-team.zip",
+                "kit_base64": nightly.encode(nightly.kit(
+                    nightly.request_for(ctx.service), shared_folder=folder))}
 
     def make_import_key(self, ctx: Context, query, body) -> Dict[str, Any]:
         """A new key for the open unit, and the kit for the PC built round it.
@@ -916,10 +933,13 @@ class WorkloadApp:
         if not app_url.startswith(("https://", "http://")):
             raise ApiError(HTTPStatus.BAD_REQUEST,
                            "Say where Selecao+ is, as a web address.")
+        request = nightly.request_for(ctx.service)
+        folder = nightly.source(ctx.service)["shared_folder"]
         key = self.accounts.make_import_key(ctx.user["id"], unit["id"])
         return {"unit": unit["name"],
-                "filename": "selecao-nightly.zip",
-                "kit_base64": nightly.encode(nightly.kit(app_url, key)),
+                "filename": "selecao-nightly-manager.zip",
+                "kit_base64": nightly.encode(nightly.kit(
+                    request, shared_folder=folder, app_url=app_url, key=key)),
                 "key": self.accounts.import_key_info(ctx.user["id"], unit["id"])}
 
     def revoke_import_key(self, ctx: Context, query, body) -> Dict[str, Any]:
@@ -953,7 +973,9 @@ class WorkloadApp:
             ctx.user, ctx.service = user, service
             self.open_unit(ctx, query, body, unit["id"])
         try:
-            result = nightly.run(service, body.get("files") or [])
+            late = body.get("late") or []
+            result = nightly.run(service, body.get("files") or [],
+                                 late if isinstance(late, list) else [late])
         except ApiError as error:
             self.accounts.record_import(unit["id"], {
                 "ok": False, "error": error.message, "errors": error.errors})
@@ -1160,6 +1182,8 @@ class WorkloadApp:
             ("GET", "/api/import-key", self.import_key_status, "manager"),
             ("POST", "/api/import-key", self.make_import_key, "manager"),
             ("DELETE", "/api/import-key", self.revoke_import_key, "manager"),
+            ("PUT", "/api/import-key/source", self.save_import_source, "manager"),
+            ("POST", "/api/import-key/team-kit", self.team_kit, "manager"),
             ("POST", "/api/nightly/timesheets", self.nightly_import, "public"),
             ("POST", "/api/timesheets/exports/stage",
              lambda ctx, q, b: ctx.service.stage_exports(b.get("files") or []),
