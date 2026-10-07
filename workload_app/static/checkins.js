@@ -71,6 +71,7 @@ function renderCheckins() {
       + 'so how loaded people are reads from then. Import the latest exports to bring it up to date.')
       : null,
     checkinStats(people),
+    leadingPanel(data),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
         el('div', {},
@@ -221,6 +222,41 @@ function loadBars(weeks, color) {
   return svg;
 }
 
+/** The manager's side: the time the team takes, and the meetings with agendas. */
+function leadingPanel(data) {
+  const leading = (data.leading || []).filter((l) => l.meetings.length || l.people.length);
+  if (!leading.length) {
+    return el('p', { class: 'muted small' },
+      'Leading people takes time too. Set your own grade to Manager on Team (or make '
+      + 'someone a team\'s lead) and their day keeps time for team support, the weekly '
+      + 'team meeting and a one-to-one with each person, each with its agenda.');
+  }
+  return el('section', { class: 'panel ci-leading' },
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, 'Leading the team'),
+        el('p', { class: 'muted' },
+          'Time kept every day for questions, checking and replies, more for a junior '
+          + 'than a senior; a team meeting at the start of each week; a one-to-one with '
+          + 'each person every two weeks. It comes out of the leader\'s free hours, so '
+          + 'they are never given project work in it. Agendas come from the checkpoints below.'))),
+    ...leading.map((l) => el('div', { class: 'ci-lead' },
+      el('p', {},
+        el('b', {}, l.name), ` leads ${l.people.length} `
+        + `${l.people.length === 1 ? 'person' : 'people'}: `,
+        el('b', {}, `${ciHours(l.hours_a_day)} a day`),
+        ` (${ciHours(l.support_hours)} team support, the rest meetings).`),
+      l.meetings.length
+        ? el('ol', { class: 'ci-meetings' }, l.meetings.map((m) => el('li', {},
+          el('details', {},
+            el('summary', {},
+              el('span', { class: 'ci-meet-when' }, `${ciDay(m.date)} ${m.start}–${m.end}`),
+              el('b', {}, m.title),
+              m.kind === 'team' ? el('span', { class: 'muted small' }, ` · ${m.with.join(', ')}`) : null),
+            el('ul', { class: 'ci-agenda' }, m.agenda.map((line) => el('li', {}, line)))))))
+        : el('p', { class: 'muted small' }, 'No meetings in the next two weeks.'))));
+}
+
 function personCard(p, data) {
   const s = p.signal;
   const color = engineerColor(p.name);
@@ -235,7 +271,8 @@ function personCard(p, data) {
         el('div', {},
           el('span', { class: 'swatch', style: `background:${color}` }),
           el('b', { class: 'eng-name' }, p.name)),
-        el('div', { class: 'muted' }, `${p.grade_label}${p.team_name ? ` · ${p.team_name}` : ''}`)),
+        el('div', { class: 'muted' }, `${p.grade_label}${p.team_name ? ` · ${p.team_name}` : ''}`
+          + (p.leads ? ` · leads ${p.leads}, ${ciHours(p.leading_hours)} a day on it` : ''))),
       el('span', { class: `pill pill-${SIGNAL_TONE[s.key]}` }, s.label)),
     el('div', { class: 'ci-chart' },
       loadBars(p.weeks, color),

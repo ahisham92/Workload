@@ -316,8 +316,14 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             project_names: Mapping[str, str], drawings_left: Mapping[str, float],
             saved: Sequence[Dict[str, Any]] = (), moves: Sequence[Dict[str, Any]] = (),
             today: Optional[_dt.date] = None, days: int = DEFAULT_DAYS,
-            team_names: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    """Who has what over the next few working days, before and after ``moves``."""
+            team_names: Optional[Mapping[str, str]] = None,
+            management: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
+    """Who has what over the next few working days, before and after ``moves``.
+
+    ``management`` is the hours a day leading people takes from each leader
+    (``management.Plan.hours_a_day``); it is not there for project work.
+    """
+    management = management or {}
     today = today or _dt.date.today()
     window = days_ahead(today, days, config)
     end = window[-1] if window else today
@@ -393,7 +399,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             })
         items.sort(key=lambda item: -max(item["hours_before"], item["hours_after"]))
         days_in = present.get(name, len(window))
-        own = days_in * a_day
+        own = days_in * max(0.0, a_day - management.get(name, 0.0))
         fb, fa = figure(b, own), figure(a, own)
         out_people.append({
             "name": name,
@@ -505,6 +511,7 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             project_names: Mapping[str, str], drawings_left: Mapping[str, float],
             saved: Sequence[Dict[str, Any]] = (), moves: Sequence[Dict[str, Any]] = (),
             today: Optional[_dt.date] = None, days: int = DEFAULT_DAYS,
+            management: Optional[Mapping[str, float]] = None,
             ) -> List[Dict[str, Any]]:
     """Moves that bring the overloaded back under a full load, if any can.
 
@@ -526,7 +533,8 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             break
         view = outlook(rows=rows, tasks=tasks, roster=roster, config=config,
                        project_names=project_names, drawings_left=drawings_left,
-                       saved=saved, moves=plan, today=today, days=days)
+                       saved=saved, moves=plan, today=today, days=days,
+                       management=management)
         if not view["capacity"]:
             break
         over = sorted((p for p in view["people"] if p["verdict_after"] == "over"

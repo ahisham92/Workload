@@ -614,7 +614,15 @@ async function overviewNeeds() {
 /* -- today ------------------------------------------------------------- */
 
 const KIND_LABEL = { request: 'Request', submission: 'Submission', meeting: 'Meeting',
-  task: 'Task', work: '' };
+  management: 'Team', task: 'Task', work: '' };
+
+/** A meeting's agenda, folded away under it until it is wanted. */
+function agendaList(b) {
+  if (!b.agenda || !b.agenda.length) return null;
+  return el('details', { class: 'block-agenda' },
+    el('summary', {}, `Agenda · ${b.agenda.length}`),
+    el('ul', {}, b.agenda.map((line) => el('li', {}, line))));
+}
 
 function isoDay(date) {
   const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -930,7 +938,8 @@ function dayCards(day, shown) {
         el('span', { class: 'block-what' },
           KIND_LABEL[b.kind] ? el('span', { class: 'block-kind' }, KIND_LABEL[b.kind]) : null,
           b.project && b.title !== b.project ? el('span', { class: 'code' }, `${b.project} `) : null,
-          b.title)))),
+          b.title,
+          agendaList(b))))),
         p.away ? null : el('button', { class: 'linkish day-away', type: 'button',
           onclick: () => markAway(plan.dayData, p.name) }, 'Mark away')))),
     away.length ? el('p', { class: 'small' },
@@ -981,6 +990,7 @@ function dayText(data) {
       for (const b of p.blocks) {
         lines.push(`  ${b.start}–${b.end}  ${KIND_LABEL[b.kind] ? `${KIND_LABEL[b.kind]}: ` : ''}`
           + `${b.project && b.title !== b.project ? `${b.project} ` : ''}${b.title}`);
+        for (const line of b.agenda || []) lines.push(`      - ${line}`);
       }
     }
     lines.push('');

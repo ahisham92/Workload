@@ -28,6 +28,8 @@ from .model import ValidationError
 
 #: What somebody is, in the order they rank. The label is what the app shows.
 GRADES = [
+    # Leads the whole unit: their day keeps time for the team (see management).
+    ("manager", "Manager"),
     ("senior", "Senior"),
     ("engineer", "Engineer"),
     ("junior", "Junior"),
@@ -430,7 +432,7 @@ def _people_spare(team: Dict[str, Any], monthly_capacity: float) -> float:
 
 def _who_to_move(team: Dict[str, Any],
                  members: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The least loaded of a team; never its lead; and on a tie, the junior.
+    """The least loaded of a team; never its lead or a manager; on a tie, the junior.
 
     Whose hours are freest is the first question. Where that is even -- which
     it usually is, because a quiet team is quiet all through -- the tie goes to
@@ -440,7 +442,7 @@ def _who_to_move(team: Dict[str, Any],
     """
     candidates = [m for m in members
                   if m["team_id"] == team["id"] and m["active"]
-                  and m["name"] != team.get("lead")]
+                  and m["name"] != team.get("lead") and m["grade"] != "manager"]
     if not candidates:
         return None
     return min(candidates, key=lambda m: (

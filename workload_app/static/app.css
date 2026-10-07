@@ -1080,6 +1080,18 @@ tr.row-done .task-name { text-decoration: line-through; }
 .block-submission { background: var(--warn-soft); }
 .block-submission .block-kind { color: var(--warn); }
 .block-meeting .block-kind, .block-task .block-kind { color: var(--muted); }
+.block-meeting { background: var(--ok-soft); }
+.block-management { background: var(--ok-soft); }
+.block-management .block-kind { color: var(--ok); }
+.block-agenda { margin-top: 3px; font-size: 12px; }
+.block-agenda summary { cursor: pointer; color: var(--muted); }
+.block-agenda ul, .ci-agenda { margin: 4px 0 0; padding-left: 18px; }
+.ci-lead + .ci-lead { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.ci-meetings { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.ci-meetings summary { cursor: pointer; }
+.ci-meet-when { display: inline-block; min-width: 10.5em; margin-right: 8px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.ci-agenda li { margin: 2px 0; }
 .block.is-done { opacity: .55; text-decoration: line-through; }
 .week-cell { cursor: pointer; }
 .share-text { white-space: pre-wrap; font: 13px/1.5 var(--mono); }
