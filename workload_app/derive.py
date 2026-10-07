@@ -64,6 +64,7 @@ _GRADE_RULES: Sequence[Tuple[str, str]] = (
     (r"draft|\bcad\b", "drafter"),
     (r"bim|model+er", "bim"),
     (r"lead|principal|head|manager|director|senior|^p[3-9]\b", "senior"),
+    (r"junior|graduate|trainee|assistant", "junior"),
     (r"^p[12]\b|engineer", "engineer"),
     (r"professional|junior|graduate|trainee|assistant|^p0\b", "junior"),
 )
@@ -110,7 +111,9 @@ def type_for(description: str, known: Iterable[str]) -> str:
     guess = _match(_TYPE_RULES, description)
     if guess in known:
         return guess
-    return DEFAULT_TYPE if DEFAULT_TYPE in known else sorted(known)[0]
+    if DEFAULT_TYPE in known or not known:
+        return DEFAULT_TYPE
+    return sorted(known)[0]
 
 
 def status_for(job_status: str, last_day: Optional[_dt.date],

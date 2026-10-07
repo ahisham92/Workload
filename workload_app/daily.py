@@ -199,9 +199,9 @@ def rates_on(day: _dt.date, rows: Sequence[Dict[str, Any]], config: Dict[str, An
 
 
 def week_of(day: _dt.date, config: Dict[str, Any]) -> List[_dt.date]:
-    monday = day - _dt.timedelta(days=day.weekday())
-    # A Sunday-to-Thursday week starts on the Sunday before.
+    start = day - _dt.timedelta(days=day.weekday())
+    # A Sunday-to-Thursday week starts on the Sunday on or before the day.
     if 6 in config["work_days"] and 4 not in config["work_days"]:
-        monday -= _dt.timedelta(days=1)
-    return [d for d in (monday + _dt.timedelta(days=i) for i in range(7))
+        start = day - _dt.timedelta(days=(day.weekday() + 1) % 7)
+    return [d for d in (start + _dt.timedelta(days=i) for i in range(7))
             if task_sheet.is_working_day(d, config)]

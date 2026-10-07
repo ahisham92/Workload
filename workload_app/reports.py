@@ -289,9 +289,15 @@ def _project_in_period(wb, index, lifetime, period, quarters, overrides,
 
     # The workbook splits a project's earned value across quarters in proportion
     # to the effort spent in each, so a period's share follows its effort.
-    lifetime_actual = lifetime["actual_mm"] or 0.0
+    # Hours, not the rounded man-months, so the shares add back up to the whole.
+    # Earned value with no effort booked behind it belongs to no quarter, but
+    # it is still the project's: the all-time view counts it.
+    lifetime_hours = lifetime["actual_hours"] or 0.0
     lifetime_earned = lifetime["earned_mm"] or 0.0
-    earned = (actual / lifetime_actual * lifetime_earned) if lifetime_actual else 0.0
+    if lifetime_hours:
+        earned = actual_hours / lifetime_hours * lifetime_earned
+    else:
+        earned = lifetime_earned if period.kind == "all" else 0.0
 
     live = bool(start and end and period.start and period.end
                 and start <= period.end and end >= period.start)
@@ -671,7 +677,11 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
         per: Dict[str, Dict[str, Any]] = {}
         for name in engineers:
             jobs = buckets.get(label, {}).get(name, {})
-            actual = sum(jobs.values()) / hours_per_mm if hours_per_mm else 0.0
+            # Project work only, the way the period figures count it: leave
+            # and codes outside the register are not effort on a project.
+            project_hours = sum(hours for job, hours in jobs.items()
+                                if job in by_project)
+            actual = project_hours / hours_per_mm if hours_per_mm else 0.0
             earned = type_weighted = planned = 0.0
             worked = 0
             for job, hours in jobs.items():
@@ -679,7 +689,6 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
                 if not project or not hours:
                     continue
                 worked += 1
-                share = (project["shares"] or {}).get(name) or 0.0
                 lifetime = project["lifetime_actual_mm"] or 0.0
                 month_mm = hours / hours_per_mm if hours_per_mm else 0.0
                 value = ((month_mm / lifetime) * (project["lifetime_earned_mm"] or 0.0)
