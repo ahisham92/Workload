@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import io
+import math
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -167,7 +168,12 @@ def _read_xlsx(data: bytes) -> List[List[Any]]:
 
 
 def _read_delimited(data: bytes) -> List[List[Any]]:
-    for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+    # UTF-16 only with its byte-order mark: without one, any even-length
+    # Windows-1252 file "decodes" as UTF-16 into nonsense.
+    encodings = ["utf-8-sig", "cp1252", "latin-1"]
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        encodings.insert(0, "utf-16")
+    for encoding in encodings:
         try:
             text = data.decode(encoding)
         except (UnicodeDecodeError, UnicodeError):
@@ -242,9 +248,15 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
     text = str(value).strip()
     if not text:
         return None
+    try:
+        # ISO dates with a time, "T" or space separated, fractions included.
+        return _dt.datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S",
                 "%d-%b-%Y", "%d-%b-%y", "%d.%m.%Y", "%m/%d/%Y %H:%M:%S",
-                "%d/%m/%Y %H:%M:%S", "%Y/%m/%d"):
+                "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p",
+                "%d/%m/%Y %I:%M:%S %p", "%Y/%m/%d"):
         try:
             return _dt.datetime.strptime(text, fmt).date()
         except ValueError:
@@ -253,6 +265,12 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
 
 
 def _coerce_number(value: Any) -> Optional[float]:
+    """A finite number, or None: NaN and infinity are not hours."""
+    number = _parse_number(value)
+    return number if number is not None and math.isfinite(number) else None
+
+
+def _parse_number(value: Any) -> Optional[float]:
     if isinstance(value, bool):
         return float(value)
     if isinstance(value, (int, float)):

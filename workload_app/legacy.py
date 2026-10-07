@@ -169,7 +169,7 @@ def _projects(wb: Workbook, engineers: List[Dict[str, Any]]) -> List[Dict[str, A
             "shares": _shares(wb, cfg.SHEET_INPUTS, row, engineers,
                               "manual_share_column"),
         })
-    return out
+    return _first_of_each(out, ("number",))
 
 
 def _deliverables(wb: Workbook, engineers: List[Dict[str, Any]]
@@ -216,7 +216,7 @@ def _project_types(wb: Workbook) -> List[Dict[str, Any]]:
         item["portfolio_weight"] = wb.get_number(
             cfg.SHEET_PROJECT_TYPES, f"{cols['portfolio_weight']}{row}")
         out.append(item)
-    return out
+    return _first_of_each(out, ("code",))
 
 
 def _credit_steps(wb: Workbook) -> List[Dict[str, Any]]:
@@ -233,6 +233,23 @@ def _credit_steps(wb: Workbook) -> List[Dict[str, Any]]:
             "credit": wb.get_number(cfg.SHEET_RULES, f"{cols['credit']}{row}") or 0.0,
             "data_source": wb.get_text(cfg.SHEET_RULES, f"{cols['data_source']}{row}"),
         })
+    return _first_of_each(out, ("type_code", "step_no"))
+
+
+def _first_of_each(items: List[Dict[str, Any]], key: Tuple[str, ...]
+                   ) -> List[Dict[str, Any]]:
+    """Drop rows repeating an earlier row's key.
+
+    The workbook let a project number or a type code be typed twice; the
+    database holds each once, so the first one typed is the one kept.
+    """
+    seen = set()
+    out = []
+    for item in items:
+        k = tuple(item[name] for name in key)
+        if k not in seen:
+            seen.add(k)
+            out.append(item)
     return out
 
 

@@ -206,10 +206,12 @@ def _check_unit_database(path: Path) -> None:
         try:
             tables = {row[0] for row in db.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}
-            db.execute("PRAGMA quick_check").fetchone()
+            check = db.execute("PRAGMA quick_check").fetchone()
         finally:
             db.close()
     except sqlite3.Error:
+        check = None
+    if not check or check[0] != "ok":
         raise NotAUnit("That file is damaged, or is not a copy of a unit.")
     if not {"projects", "deliverables", "engineers", "rows"} <= tables:
         raise NotAUnit("That database is not a copy of a unit.")
@@ -272,7 +274,20 @@ def backups_of(data_dir: Path, user_id: int, unit_id: str) -> List[Path]:
     folder = backups_dir(data_dir, user_id)
     if not folder.is_dir():
         return []
-    return sorted(folder.glob(f"{unit_id}-*{UNIT_SUFFIX}"))
+    return _copies(folder, unit_id)
+
+
+def _copies(folder: Path, unit_id: str) -> List[Path]:
+    """The dated copies ``keep_a_copy`` made, oldest first.
+
+    Matched exactly: the old workbook's files kept when a unit was brought
+    across (``<unit>-before-database-...``) are not copies, and must neither
+    count as the newest one nor be pruned away.
+    """
+    pattern = re.compile(re.escape(unit_id) + r"-\d{8}-\d{6}-\d{6}"
+                         + re.escape(UNIT_SUFFIX) + "$")
+    return sorted(p for p in folder.glob(f"{unit_id}-*{UNIT_SUFFIX}")
+                  if pattern.match(p.name))
 
 
 def latest_backup(data_dir: Path, user_id: int, unit_id: str) -> Optional[Path]:
@@ -281,8 +296,7 @@ def latest_backup(data_dir: Path, user_id: int, unit_id: str) -> Optional[Path]:
 
 
 def _prune(folder: Path, unit_id: str) -> None:
-    kept = sorted(folder.glob(f"{unit_id}-*{UNIT_SUFFIX}"))
-    for old in kept[:-BACKUPS_KEPT]:
+    for old in _copies(folder, unit_id)[:-BACKUPS_KEPT]:
         old.unlink(missing_ok=True)
 
 

@@ -194,10 +194,12 @@ class Workbook:
     def _read_sheet_map(self) -> Dict[str, str]:
         wb = self._text("xl/workbook.xml")
         rels = self._text("xl/_rels/workbook.xml.rels")
-        targets = {
-            m.group(1): m.group(2)
-            for m in re.finditer(r'Id="([^"]+)"[^>]*?Target="([^"]+)"', rels)
-        }
+        targets = {}
+        for m in re.finditer(r"<Relationship\b[^>]*>", rels):
+            rid = re.search(r'\bId="([^"]+)"', m.group(0))
+            target = re.search(r'\bTarget="([^"]+)"', m.group(0))
+            if rid and target:
+                targets[rid.group(1)] = target.group(1)
         sheets: Dict[str, str] = {}
         for m in re.finditer(r"<sheet\b[^>]*/>", wb):
             tag = m.group(0)

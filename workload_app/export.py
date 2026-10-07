@@ -20,6 +20,7 @@ from .unit import Unit
 def unit_workbook(unit: Unit, name: str = "") -> bytes:
     """The whole unit as ``.xlsx`` bytes."""
     from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
     from openpyxl.styles import Font
 
     book = Workbook(write_only=True)
@@ -34,13 +35,12 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
         ws.freeze_panes = "A2"
         header_cells = []
         for header in headers:
-            from openpyxl.cell import WriteOnlyCell
             cell = WriteOnlyCell(ws, value=header)
             cell.font = bold
             header_cells.append(cell)
         ws.append(header_cells)
         for row in rows:
-            ws.append([_cell(v) for v in row])
+            ws.append([_cell(ws, v) for v in row])
 
     names = unit.engineer_names()
     years = unit.availability_years()
@@ -173,9 +173,25 @@ def _split(shares: Dict[str, Optional[float]]) -> str:
                      for name, share in shares.items() if share)
 
 
-def _cell(value: Any) -> Any:
+def _cell(ws: Any, value: Any) -> Any:
+    """A value openpyxl will write as it is.
+
+    Text comes from uploaded timesheets, so it is cleaned of the control
+    characters an .xlsx cannot hold, and text starting with "=" is written as
+    text rather than run as a formula when the copy is opened.
+    """
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
     if isinstance(value, (list, dict, tuple, set)):
-        return str(value)
+        value = str(value)
+    if not isinstance(value, str):
+        return value
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    if value.startswith("="):
+        cell = WriteOnlyCell(ws, value=value)
+        cell.data_type = "s"
+        return cell
     return value
 
 
