@@ -73,15 +73,15 @@
 </header>
 
 <nav class="tabs" id="tabs" role="tablist" hidden>
-  <button class="tab is-active" data-view="overview" role="tab">Overview</button>
-  <button class="tab" data-view="timesheets" role="tab">Timesheets</button>
-  <button class="tab" data-view="projects" role="tab">Projects</button>
-  <button class="tab" data-view="reports" role="tab">Reports</button>
-  <button class="tab" data-view="tasks" role="tab">Tasks</button>
-  <button class="tab" data-view="team" role="tab">Team</button>
-  <button class="tab" data-view="reference" role="tab">Reference</button>
-  <button class="tab" data-view="resourcing" role="tab">Resourcing</button>
-  <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden>Admin</button>
+  <button class="tab is-active" data-view="overview" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
+  <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
+  <button class="tab" data-view="projects" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Projects</span></button>
+  <button class="tab" data-view="reports" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Reports</span></button>
+  <button class="tab" data-view="tasks" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></button>
+  <button class="tab" data-view="team" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>Team</span></button>
+  <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Reference</span></button>
+  <button class="tab" data-view="resourcing" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4 3 8l4 4M3 8h13M17 12l4 4-4 4M21 16H8"/></svg><span>Resourcing</span></button>
+  <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Admin</span></button>
 </nav>
 
 <main id="main" hidden>
@@ -98,23 +98,24 @@
         <select id="overview-year"></select>
       </label>
     </div>
-    <div id="overview-cards" class="cards"></div>
+    <div id="overview-cards" class="cards cards-4"></div>
     <div id="hero-strip"></div>
-    <div class="split">
-      <section class="panel">
-        <h3>Workload by engineer</h3>
-        <p class="muted">Effort in man-months against the capacity each person has in this period.</p>
-        <div id="engineer-cards"></div>
-      </section>
+    <section class="panel" id="overview-trend" hidden></section>
+    <section class="panel">
+      <h3>Workload by engineer</h3>
+      <p class="muted">Effort in man-months against the capacity each person has in this period.</p>
+      <div id="engineer-cards" class="eng-grid"></div>
+    </section>
+    <div class="split split-even">
       <section class="panel">
         <h3>Data check</h3>
         <div id="data-check"></div>
       </section>
+      <section class="panel">
+        <h3>Things to fix</h3>
+        <div id="issues"></div>
+      </section>
     </div>
-    <section class="panel">
-      <h3>Things to fix</h3>
-      <div id="issues"></div>
-    </section>
     <details class="panel" id="definitions-panel">
       <summary><b>What these measures mean</b></summary>
       <div id="definitions-body"></div>
@@ -124,8 +125,8 @@
   <!-- ----------------------------------------------------- timesheets -->
   <section class="view" id="view-timesheets">
     <div class="view-head"><h2>Monthly timesheets</h2></div>
-    <div id="ts-capacity"></div>
     <div id="ts-cards" class="cards cards-3"></div>
+    <section class="panel" id="ts-mix" hidden></section>
     <section class="panel">
       <h3>Import exports</h3>
       <p class="muted">
@@ -153,6 +154,7 @@
         <h2>Projects</h2>
         <button class="btn btn-primary" id="btn-new-project" type="button">Add project</button>
       </div>
+      <div id="projects-summary" class="summary-grid"></div>
       <div class="row">
         <label class="field">
           <span>Project</span>
@@ -327,5 +329,6 @@
 <script src="charts.js"></script>
 <script src="map.js"></script>
 <script src="app.js"></script>
+<script src="tables.js"></script>
 </body>
 </html>
