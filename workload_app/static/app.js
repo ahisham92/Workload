@@ -1362,7 +1362,6 @@ function renderIssues(issues) {
 function renderTimesheets() {
   const check = state.overview ? state.overview.data_check : null;
   if (!check) return;
-  renderCapacity(check);
 
   setChildren($('#ts-cards'), ...Object.entries(check.per_engineer).map(([name, e]) =>
     el('div', { class: 'card' },
@@ -1381,102 +1380,6 @@ function renderTimesheets() {
   setChildren(select, ...Object.keys(check.per_engineer).map(
     (name) => el('option', { value: name }, name)));
   if (chosen) select.value = chosen;
-}
-
-function renderCapacity(check) {
-  const cap = check.capacity;
-  const target = $('#ts-capacity');
-  if (!cap) { setChildren(target); return; }
-  const used = cap.rows_used / cap.total_capacity;
-  const meter = cap.over_capacity ? 'bad' : cap.low_headroom ? 'warn' : '';
-  const warnings = check.capacity_warnings || [];
-
-  setChildren(target, el('div', { class: 'panel' },
-    el('h3', {}, 'Room left in the workbook'),
-    el('p', { class: 'muted' },
-      `Every calculation reads Timesheet Raw rows 4–${cap.raw_last_row.toLocaleString()}, `
-      + `stacked from each monthly sheet down to row ${cap.source_last_row.toLocaleString()} `
-      + `— ${cap.total_capacity.toLocaleString()} entries in all. An import that `
-      + 'would not fit raises the limit itself before writing anything, so no '
-      + 'entry is ever left on the sheet unread.'),
-    el('div', { class: `meter ${meter}` },
-      el('span', { style: `width:${Math.min(100, Math.round(used * 100))}%` })),
-    el('p', { class: 'muted' },
-      `${cap.rows_used.toLocaleString()} of ${cap.total_capacity.toLocaleString()} rows used`
-      + (cap.headroom >= 0
-        ? ` — ${cap.headroom.toLocaleString()} left`
-        : ` — ${Math.abs(cap.headroom).toLocaleString()} rows are being ignored`)),
-    ...warnings.map((w) => el('div', {
-      class: `msg msg-${w.level === 'error' ? 'bad' : 'warn'}`,
-    }, w.message)),
-    el('div', { class: 'row-actions' },
-      (cap.over_capacity || cap.low_headroom)
-        ? el('button', { class: 'btn btn-primary', type: 'button',
-            onclick: () => extendCapacity(cap) },
-            `Raise the limit to ${cap.suggested_raw_last_row.toLocaleString()} entries`)
-        : null,
-      cap.source_is_short
-        ? el('button', { class: 'btn', type: 'button',
-            onclick: () => raiseSourceLimit(cap) },
-            `Read each sheet to row ${cap.suggested_source_last_row.toLocaleString()}`)
-        : null),
-    cap.source_is_short
-      ? el('p', { class: 'muted' },
-          `Each monthly sheet is only read to row ${cap.source_last_row.toLocaleString()} `
-          + `(${cap.per_sheet_capacity.toLocaleString()} entries). Reading to row `
-          + `${cap.suggested_source_last_row.toLocaleString()} leaves room for years of imports.`)
-      : el('p', { class: 'muted' },
-          `Each monthly sheet is read to row ${cap.source_last_row.toLocaleString()}, `
-          + `which is ${cap.per_sheet_capacity.toLocaleString()} entries each — `
-          + 'the app widens the stack to that when it opens a workbook, so an '
-          + "engineer's own sheet is not the thing that runs out first.")));
-}
-
-async function raiseSourceLimit(cap) {
-  if (!window.confirm(
-    `Read each monthly sheet down to row ${cap.suggested_source_last_row.toLocaleString()} `
-    + `instead of ${cap.source_last_row.toLocaleString()}?\n\n`
-    + 'This widens the stack that builds Timesheet Raw so a single sheet can hold '
-    + 'far more entries. A backup is taken first.')) return;
-  try {
-    toast('Widening the stack…');
-    const result = await api('/api/timesheets/capacity', {
-      method: 'POST',
-      body: { source_last_row: cap.suggested_source_last_row },
-    });
-    markSaved(result.save);
-    toast(`Each sheet is now read to row ${result.source_last_row.toLocaleString()}.`, 'ok');
-    await refreshAll();
-  } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
-  }
-}
-
-async function extendCapacity(cap) {
-  const perSheetNeeded = Math.max(
-    ...Object.values(cap.per_sheet).map((s) => s.rows)) + 1500;
-  const source = perSheetNeeded > cap.per_sheet_capacity || cap.source_is_short
-    ? cap.suggested_source_last_row : null;
-  if (!window.confirm(
-    `Raise the limit from ${cap.raw_last_row.toLocaleString()} to `
-    + `${cap.suggested_raw_last_row.toLocaleString()} entries?\n\n`
-    + 'This is a one-off: it rewrites every formula that reads the consolidated '
-    + 'timesheet and adds the per-row helper formulas to match, which takes about '
-    + 'a minute. A backup is taken first.\n\n'
-    + 'Afterwards the whole timesheet has one limit — 25,000 entries — and Excel '
-    + 'takes a little longer to recalculate the file.')) return;
-  try {
-    toast('Rewriting formulas — this takes about a minute…');
-    const result = await api('/api/timesheets/capacity', {
-      method: 'POST',
-      body: { raw_last_row: cap.suggested_raw_last_row, source_last_row: source },
-    });
-    markSaved(result.save);
-    toast(`Limit raised to ${result.raw_last_row.toLocaleString()} rows.`, 'ok');
-    await refreshAll();
-  } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
-  }
 }
 
 async function checkTimesheetFile() {

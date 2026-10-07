@@ -118,7 +118,8 @@ def _check_code(report: Report, root: Path) -> None:
                    "workbook. Build one with tools/build_template.py.")
 
     missing = [name for name in ("index.html", "login.html", "member.html",
-                                 "app.js", "member.js", "app.css", "charts.js")
+                                 "app.js", "member.js", "app.css", "charts.js",
+                                 "tables.js")
                if not (root / "workload_app" / "static" / name).is_file()]
     if missing:
         report.add("bad", "The front end is incomplete",
@@ -243,7 +244,8 @@ def static_files(root: Optional[Path] = None) -> List[Dict[str, str]]:
     root = (root or Path(__file__).resolve().parent.parent).resolve()
     static = root / "workload_app" / "static"
     return [{"url": f"/{name}", "path": str(static / name)}
-            for name in ("app.css", "app.js", "member.js", "charts.js")]
+            for name in ("app.css", "app.js", "member.js", "charts.js",
+                         "tables.js")]
 
 
 def render(report: Report, *, show_wsgi: bool = True) -> str:
