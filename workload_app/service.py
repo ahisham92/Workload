@@ -1048,7 +1048,10 @@ class WorkloadService:
         """Put what the drawing list says onto the register, in one tap."""
         with self._lock:
             wb = self.workbook
-            wanted = {int(r) for r in body.get("rows") or []}
+            try:
+                wanted = {int(r) for r in body.get("rows") or []}
+            except (TypeError, ValueError):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "Choose deliverables by their row.")
             proposals = [p for p in self._list_proposals(wb)
                          if not wanted or p["row"] in wanted]
             if not proposals:
