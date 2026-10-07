@@ -22,7 +22,7 @@ Stopping it
   pause.bat     stops it until resume.bat is run
   remove.bat    removes it from this PC for good; then delete the folder
   Selecao+      "Stop nightly imports" on the Timesheets tab cancels the key,
-                so every PC with this kit stops at once
+                so nothing more reaches Selecao+ from any PC
   It is also listed in Task Scheduler as "Selecao+ nightly timesheets".
 
 When a PC goes back to IT
@@ -42,8 +42,9 @@ Good to know
   - It tries at night, then every hour, at sign-in, and a minute after the PC
     connects to a network, FortiClient included. Off the Dar network it just
     waits; the first time BISpark can be reached that day, it exports.
-  - On the manager's PC, anything new in the shared folder is sent the next
-    time it runs, so an engineer who connects late still gets in that day.
+  - The manager's PC uploads at most every 6 hours, and only when the shared
+    folder has something new. An engineer whose PC was off at midnight exports
+    when they next sign in, and goes up with the next upload.
   - The Timesheets tab in Selecao+ shows when the last import ran and whether
     it worked. Details of the last run are in logs\last-run.txt here.
   - If an export has far fewer rows than Selecao+ already holds, it is refused
