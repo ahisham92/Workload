@@ -1,5 +1,5 @@
 @echo off
-rem Runs tonight's export now, in a window you can watch.
+rem Runs tonight's export now.
 cd /d "%~dp0"
-".venv\Scripts\python.exe" pull.py --show
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0nightly.ps1"
 pause

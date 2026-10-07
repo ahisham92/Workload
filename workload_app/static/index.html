@@ -140,14 +140,29 @@
     <section class="panel" id="ts-nightly">
       <h3>Every night, on its own</h3>
       <p class="muted">
-        Your PC exports Detailed Utilization from BISpark at 12:00 am and sends
-        it here. Download the kit, unzip it on your work PC and double-click
-        <b>setup.bat</b>. It signs in to BISpark with your Windows login, so no
-        password is stored.
+        Each PC on the team asks BISpark for its own export once a day, as soon
+        as it is on the Dar network, signed in with its Windows login, and
+        leaves it in the team's shared folder. Your PC sends whatever is new in
+        the folder here. Nothing is installed:
+        the kits use only what Windows already has.
       </p>
+      <div class="row">
+        <label class="field grow">
+          <span>1. The export request, copied from BISpark (F12 → Network → Export → right-click → Copy as PowerShell)</span>
+          <textarea id="nightly-capture" rows="3" placeholder="Paste it here"></textarea>
+        </label>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>2. The team's shared folder</span>
+          <input id="nightly-folder" type="text" placeholder="\\server\share\Selecao">
+        </label>
+        <button class="btn" id="btn-nightly-save" type="button">Save</button>
+      </div>
       <div id="ts-nightly-state"></div>
       <div class="row">
-        <button class="btn btn-primary" id="btn-nightly-kit" type="button">Download the PC kit</button>
+        <button class="btn btn-primary" id="btn-nightly-kit" type="button">3. Kit for my PC</button>
+        <button class="btn" id="btn-nightly-team" type="button">4. Kit for the team's PCs</button>
         <button class="btn" id="btn-nightly-stop" type="button" hidden>Stop nightly imports</button>
       </div>
     </section>
