@@ -37,6 +37,7 @@ from .accounts import (AccountError, Accounts, ROLE_MANAGER,
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
 from .calendar_ import CalendarError
+from .drawing_list import DrawingListError
 from .incoming import IncomingError
 from .drawings import DrawingsError
 from .people import PeopleError
@@ -157,7 +158,8 @@ class WorkloadApp:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
         except (ValidationError, TaskError, PeopleError, PlanError,
-                DrawingsError, IntakeError, CalendarError, IncomingError) as exc:
+                DrawingsError, IntakeError, CalendarError, IncomingError,
+                DrawingListError) as exc:
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -994,6 +996,12 @@ class WorkloadApp:
             ("GET", "/api/drawings", lambda ctx, q, b: ctx.service.drawings(), "manager"),
             ("PUT", "/api/drawings",
              lambda ctx, q, b: ctx.service.save_drawings(b), "manager"),
+            ("GET", "/api/drawing-list/template",
+             lambda ctx, q, b: ctx.service.drawing_list_template(), "manager"),
+            ("POST", "/api/drawing-list",
+             lambda ctx, q, b: ctx.service.import_drawing_list(b), "manager"),
+            ("POST", "/api/drawing-list/apply",
+             lambda ctx, q, b: ctx.service.apply_drawing_list(b), "manager"),
             ("POST", "/api/planner",
              lambda ctx, q, b: ctx.service.planner(b), "manager"),
             ("POST", "/api/planner/suggest",

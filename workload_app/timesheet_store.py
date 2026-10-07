@@ -111,6 +111,21 @@ CREATE TABLE IF NOT EXISTS absences (
     created_at TEXT NOT NULL
 );
 
+-- What the uploaded drawing list says, a deliverable a row: how many
+-- drawings, how many have gone to the client, and the codes come back.
+CREATE TABLE IF NOT EXISTS drawing_list (
+    row            INTEGER PRIMARY KEY,
+    project_number TEXT NOT NULL,
+    total          INTEGER NOT NULL,
+    issued         INTEGER NOT NULL,
+    code_a         INTEGER NOT NULL DEFAULT 0,
+    code_b         INTEGER NOT NULL DEFAULT 0,
+    code_c         INTEGER NOT NULL DEFAULT 0,
+    last_issued    TEXT,
+    last_returned  TEXT,
+    updated_at     TEXT NOT NULL
+);
+
 -- Work coming: a project just assigned, before anybody has booked to it.
 -- Rough hours between two dates, for the staffing forecast, until the
 -- timesheets or the project's own figures take over.
@@ -532,6 +547,34 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM absences WHERE id = ?",
                               (int(absence_id),)).rowcount
+
+    # -- the drawing list ------------------------------------------------------
+    def drawing_list(self) -> Dict[int, Dict[str, Any]]:
+        with self._connect() as db:
+            return {row["row"]: dict(row) for row in db.execute(
+                "SELECT * FROM drawing_list")}
+
+    def save_drawing_list(self, entries: Sequence[Dict[str, Any]],
+                          projects: Iterable[str]) -> None:
+        """The list's figures, replacing what an earlier list said of the
+        same projects; other projects keep theirs."""
+        stamp = now()
+        with self._connect() as db:
+            for number in set(projects):
+                db.execute("DELETE FROM drawing_list WHERE "
+                           "REPLACE(UPPER(project_number), ' ', '') = ?", (number,))
+            for e in entries:
+                db.execute(
+                    "INSERT OR REPLACE INTO drawing_list (row, project_number, total, "
+                    "issued, code_a, code_b, code_c, last_issued, last_returned, "
+                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (int(e["row"]), e["project_number"], int(e["total"]),
+                     int(e["issued"]), int(e["code_a"]), int(e["code_b"]),
+                     int(e["code_c"]), e["last_issued"], e["last_returned"], stamp))
+
+    def clear_drawing_list_row(self, row: int) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM drawing_list WHERE row = ?", (int(row),))
 
     # -- work coming ---------------------------------------------------------
     def planned_work(self) -> List[Dict[str, Any]]:

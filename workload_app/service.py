@@ -21,6 +21,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, config as cfg, daily, derive,
+               drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
                incoming, intake, library, metrics, needs as needs_module,
                people as people_module, submissions as submissions_module,
@@ -452,6 +453,7 @@ class WorkloadService:
         with self._lock:
             result = self.workbook.delete_deliverable(row)
             self.store.set_drawings(row, "", None)
+            self.store.clear_drawing_list_row(row)
             result["save"] = self._commit()
             return result
 
@@ -948,6 +950,13 @@ class WorkloadService:
             return {"removed": name}
 
     # -- drawings, the coming days, and who is needed ---------------------
+    def _listed(self, deliverables) -> Dict[int, Dict[str, Any]]:
+        """The drawing list's figures, for deliverables still on their project."""
+        by_row = {d.row: d for d in deliverables}
+        return {row: entry for row, entry in self.store.drawing_list().items()
+                if row in by_row and drawing_list_module._job(by_row[row].project_number)
+                == drawing_list_module._job(entry["project_number"])}
+
     def _drawings(self, wb, index, project_rows=None) -> Dict[str, Any]:
         deliverables = wb.deliverables()
         return drawings_module.summary(
@@ -957,7 +966,8 @@ class WorkloadService:
             else metrics.project_rows(wb, index),
             people_module.roster(self.store, known=wb.ts_sheets())["people"],
             measured={p.number for p in wb.projects()
-                      if not derive.needs_confirming(p.notes or "")})
+                      if not derive.needs_confirming(p.notes or "")},
+            issued={row: e["issued"] for row, e in self._listed(deliverables).items()})
 
     def drawings(self) -> Dict[str, Any]:
         with self._lock:
@@ -988,6 +998,69 @@ class WorkloadService:
             names = [unit.get("name") or ""] + [t.get("name") or "" for t in teams]
             choice["unit"] = next((c for c in map(holidays_module.guess, names) if c), None)
         return choice
+
+    # -- the drawing list ------------------------------------------------
+    def _list_proposals(self, wb) -> List[Dict[str, Any]]:
+        deliverables = wb.deliverables()
+        return drawing_list_module.proposals(
+            list(self._listed(deliverables).values()), deliverables,
+            wb.credit_steps(), _today())
+
+    def drawing_list_template(self) -> Dict[str, Any]:
+        """An empty drawing list with a starter row per live deliverable."""
+        with self._lock:
+            wb = self.workbook
+            live = {p.number for p in wb.projects()
+                    if p.status not in ("Finalized", "Cancelled", "Proposal")}
+            starters = [{"project_number": d.project_number, "name": d.name}
+                        for d in wb.deliverables() if d.project_number in live]
+            data = drawing_list_module.template(starters)
+            unit = self.unit if isinstance(self.unit, dict) else {}
+            return {"filename": f"Drawing list{' - ' + unit['name'] if unit.get('name') else ''}.xlsx",
+                    "content_base64": base64.b64encode(data).decode("ascii")}
+
+    def import_drawing_list(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Counts, issues and codes from the office's own drawing list."""
+        with self._lock:
+            wb = self.workbook
+            files = body.get("files") or []
+            if not files:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "Choose a drawing list to upload.")
+            drawings: List[Dict[str, Any]] = []
+            for item in files:
+                drawings.extend(drawing_list_module.read(
+                    _decode(item.get("content_base64")), item.get("filename") or ""))
+            deliverables = wb.deliverables()
+            matched = drawing_list_module.match(drawings, deliverables)
+            self.store.save_drawing_list(matched["deliverables"], matched["projects"])
+            for entry in matched["deliverables"]:
+                self.store.set_drawings(entry["row"], entry["project_number"], entry["total"])
+            return {
+                "read": len(drawings),
+                "matched": matched["drawings"],
+                "deliverables": matched["deliverables"],
+                "unmatched": matched["unmatched"],
+                "proposals": self._list_proposals(wb),
+                "drawings": self._drawings(wb, self._index(wb)),
+            }
+
+    def apply_drawing_list(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Put what the drawing list says onto the register, in one tap."""
+        with self._lock:
+            wb = self.workbook
+            wanted = {int(r) for r in body.get("rows") or []}
+            proposals = [p for p in self._list_proposals(wb)
+                         if not wanted or p["row"] in wanted]
+            if not proposals:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "There is nothing to apply.")
+            by_row = {d.row: d for d in wb.deliverables()}
+            for proposal in proposals:
+                data = by_row[proposal["row"]].to_dict()
+                data.update({k: v for k, v in proposal["change"].items()
+                             if k != "step_name"})
+                wb.update_deliverable(proposal["row"], data)
+            return {"applied": len(proposals), "save": self._commit(),
+                    "proposals": self._list_proposals(wb)}
 
     def _calendar(self, wb, rows, people: Sequence[Dict[str, Any]] = (),
                   teams: Sequence[Dict[str, Any]] = ()):
@@ -1408,7 +1481,7 @@ class WorkloadService:
             deliverables = wb.deliverables()
             rows = self.store.all_rows()
             roster = people_module.roster(self.store, known=wb.ts_sheets())
-            return submissions_module.plan(
+            result = submissions_module.plan(
                 deliverable_rows=metrics.deliverable_rows(wb, index),
                 deliverables=deliverables,
                 project_rows=metrics.project_rows(wb, index),
@@ -1418,6 +1491,15 @@ class WorkloadService:
                 hours_per_mm=wb.hours_per_man_month(),
                 drawing_counts=drawings_module.counts(self.store, deliverables),
                 today=_today())
+            listed = self._listed(deliverables)
+            for item in result["items"] + result["waiting"]:
+                entry = listed.get(item["row"])
+                if entry:
+                    item["list"] = {k: entry[k] for k in
+                                    ("total", "issued", "code_a", "code_b", "code_c",
+                                     "last_issued", "last_returned")}
+            result["from_list"] = self._list_proposals(wb)
+            return result
 
     def confirm_submissions(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Write the confirmed dates, and put each run-up on the task list."""
