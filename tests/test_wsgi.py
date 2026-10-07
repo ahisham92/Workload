@@ -84,8 +84,6 @@ class TestTheEntryPoint:
         cookie = sign_in(app)
         status, _headers, body = request(app, "POST", "/api/units",
                                          {"name": "New unit"}, cookie=cookie)
-        if status.startswith("422"):
-            pytest.skip("no template built in this checkout")
         assert status.startswith("200")
         assert body["open"] is True
 

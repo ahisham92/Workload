@@ -17,7 +17,7 @@ Nothing this app owns may live inside the code:
 ```
 
 A deploy replaces the code. If the data sat inside it, a deploy would take
-everyone's workbooks with it. `WORKLOAD_DATA_DIR` is what keeps them apart, and
+everyone's units with it. `WORKLOAD_DATA_DIR` is what keeps them apart, and
 `python -m workload_app.admin check` complains if they are not.
 
 ## As a tab of another site, rather than a site of its own
@@ -135,7 +135,7 @@ On the **Web** tab, **Add a new web app**. Then:
    if path not in sys.path:
        sys.path.insert(0, path)
 
-   # Accounts and workbooks live outside the code, so a deploy never touches
+   # Accounts and units live outside the code, so a deploy never touches
    # them, and no other web app on this account shares them.
    os.environ['WORKLOAD_DATA_DIR'] = '/home/<you>/workload-data'
 
@@ -167,24 +167,27 @@ If it does not come up, the Web tab's **error log** has the reason on its last
 few lines; nine times in ten it is a path in the WSGI file, or the virtualenv
 without `openpyxl` in it.
 
-## 4. Bring your own workbook
+## 4. Units, and old workbooks
 
-Two ways, and both leave the file in that account only:
+A unit is its own database; a new one starts from the team's timesheet exports
+on the unit screen, with the reference tables built into the app.
 
-- **In the app** — *Upload a Workload workbook* on the unit screen.
-- **From a console** — if the file is already on the server:
+A unit made in the workbook days needs nothing done to it. The first time it
+is opened it is brought across into its own database — registers, team,
+reference tables, tasks and every timesheet row — and the old workbook and its
+timesheet file are moved into that account's `backups/` folder, untouched, as
+`<unit>-before-database-<date>.xlsx` and `.timesheets.db`.
 
-  ```bash
-  python -m workload_app.admin import <username> ~/Workload.xlsx --name "Marine Structures"
-  ```
+An old workbook that is only on disk can be made into a unit, or put in place
+of what a unit holds, from a console:
 
-A unit started with **Start blank** uses the template that ships with the app:
-the whole model — formulas, charts, project types, rules of credit, the
-scorecard — with no projects, no deliverables, no hours and generic engineer
-names.
+```bash
+python -m workload_app.admin import <username> ~/Workload.xlsx --name "Marine Structures"
+python -m workload_app.admin restore <username> "Marine Structures" ~/Workload.xlsx
+```
 
-You can always take a copy back: the ⭳ button on a unit downloads the workbook
-as it stands.
+You can always take a copy away: the ⭳ button on a unit downloads everything it
+holds as a spreadsheet.
 
 ## Updating
 
@@ -193,44 +196,34 @@ cd ~/Workload && git pull
 ```
 
 Then **Reload** on the Web tab. The data directory is untouched. Run
-`python -m workload_app.admin check` afterwards if you want it confirmed.
+`python -m workload_app.admin check` afterwards if you want it confirmed; it
+also says how many units are still on an old workbook, waiting to be brought
+across the next time they are opened.
 
 ## What to keep an eye on
 
-**Memory.** A parsed workbook is tens of megabytes, and each worker process
-holds up to four of them (`OPEN_WORKBOOK_LIMIT` in `workload_app/app.py`);
-the least recently used is saved and dropped. Two web apps on one account share
-the account's allowance — if you see a worker being killed, lower that number
-to 2.
+**Memory.** A unit is read from its database as it is needed, so a worker
+holds very little: each keeps the open unit of up to sixteen signed-in accounts
+(`OPEN_WORKBOOK_LIMIT` in `workload_app/app.py`), and the least recently used
+is dropped.
 
-**Long requests.** Raising the timesheet limit rewrites every formula in the
-consolidated sheet and takes the better part of a minute on a full workbook.
-It happens only when you press the button on the **Timesheets** tab, or when an
-import needs the room. PythonAnywhere's web workers will cut off a request that
-runs past their limit; if that happens, do it from a console instead, where
-nothing is watching the clock:
-
-```bash
-python -m workload_app.admin check      # confirms which data directory
-```
-
-then open the unit and re-run the import — the limit only has to be raised once.
-
-**Disk.** Every save writes a timestamped backup beside the workbook, in that
-account's own folder. They are the reason a bad import is recoverable, and they
-do add up. To see what an account is using and prune the oldest:
+**Disk.** A dated copy of a unit is kept when it is opened (at most every
+twelve hours) and before a Replace import, the nightly import or taking
+somebody off the team. The last twenty of each unit are kept and older ones
+are let go on their own. To see what an account is using:
 
 ```bash
 du -sh ~/workload-data/users/*
-ls -t ~/workload-data/users/1/backups | tail -n +30 | xargs -I{} rm ~/workload-data/users/1/backups/{}
+python -m workload_app.admin units
 ```
 
-**Two workers, one workbook.** PythonAnywhere may run more than one worker
-process. Each holds its own copy, takes an exclusive lock on the file while
-writing, and re-reads the file when it finds it changed underneath. That is
-safe for one person working in one place at a time, which is how this is used.
-Two people editing the *same unit* at the same second is not something to
-attempt.
+To put a copy back: `python -m workload_app.admin restore <username> <unit>
+~/workload-data/users/<id>/backups/<copy>.db` — what the unit had is kept first.
+
+**Two workers, one unit.** PythonAnywhere may run more than one worker
+process. Every change is a database transaction, and every worker sees it the
+moment it is written: a change moves the unit's revision on, and a worker that
+finds it moved re-reads before answering.
 
 **Back it up.** The whole application state is one folder — and that includes
 `secret.key`, without which the Admin tab can no longer read passwords back
@@ -253,15 +246,3 @@ python -m workload_app
 
 It opens `http://127.0.0.1:8765/`. Data goes to `./instance` unless
 `WORKLOAD_DATA_DIR` says otherwise.
-
-## Rebuilding the blank template
-
-If the workbook's structure changes and the template should follow:
-
-```bash
-python tools/build_template.py path/to/Workload.xlsx
-```
-
-It clears the registers, the timesheets and the tasks, renames the engineers to
-`Engineer 1..3`, and then opens the result the way the app does and prints what
-is in it. The output is `workload_app/data/template.xlsx`, which is committed.

@@ -253,7 +253,7 @@ function renderTimesheet(data) {
       el('dt', {}, 'Last date'), el('dd', {}, fmt.date(t.last_date))),
     el('p', { class: 'muted' },
       'Your manager uploads the timesheet; this is what has reached the '
-      + 'workbook so far.'));
+      + 'unit so far.'));
 }
 
 function renderTasks(data) {

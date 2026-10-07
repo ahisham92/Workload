@@ -191,6 +191,29 @@ TS_LAST_COLUMN = "BT"
 #: Fallback only; the real limit is read from the VSTACK in the workbook.
 TS_MAX_DATA_ROW = 25000
 
+#: The columns of a BISpark timesheet export, in the order it gives them.
+#: An upload is read by header name against this list, so a column the
+#: export adds or moves later is noticed rather than misread.
+TS_HEADERS: List[str] = [
+    "Job Type", "JobNumber", "FullName", "Total MM", "%", "WorkAreaCode",
+    "EmployeeAreaCode", "DepartmentABR", "EmployeeID", "RegularHours",
+    "OvertimeHours", "Date", "Phase", "Task", "WorkScope", "TotalHours",
+    "MappedDepartmentABR", "Grade", "DCNID", "Budget", "BudgetStatus",
+    "PercentProgress", "ProgressDepBudget", "JobDept", "BudgetedDeptABR",
+    "OfficeCode", "AreaDept", "EmployeeOffice", "CurrentUnitDesc",
+    "CurrentUnitId", "JobDeptUnit", "JobStatus", "RegularHoursSubmitted",
+    "OvertimeHoursSubmitted", "SourceID", "TimesheetStatusId",
+    "TotalTimesheetHours", "EmployeeWeek", "EmployeeDay", "Expenditure Type",
+    "DeliverableID", "InOut", "EAC", "ETC", "BudgetAtProgressDate",
+    "SpentAtProgressDate", "InOutSourcing", "WkSummarykey", "WKeyOffice",
+    "DeliverableDescription", "CPI_New", "EAC1_New", "EAC2_New", "ETC1_New",
+    "ETC2_New", "EV_New", "MaximumEAC", "MinimumEAC", "PercentPlanedWork_New",
+    "PV_New", "SPI_New", "EV_New_MM", "EV_without99", "EAC1without99",
+    "ETC1Without99", "CumulativeSpent", "CumulativeSpentMM",
+    "EAC1 Based on CumulativeSpent", "ETC1 Based on CumulativeSpent",
+    "EAC2 Based on Cumulative Spent", "IsLatestProgressDate", "IsMaximumdate",
+]
+
 #: Columns of the export that the workbook actually reads, by header name.
 TS_KEY_FIELDS = {
     "job_type": "Job Type",
@@ -305,10 +328,6 @@ PHASING_LAST_COL = "X"
 #: project, aligned with Inputs).
 PHASING_OVERRIDE_FIRST_ROW = 95
 
-
-#: How many engineers a unit may have.  Well past any real team, and bounded so
-#: a typo cannot walk the slots off the end of the sheet.
-MAX_ENGINEERS = 12
 
 # -- Scorecard: the factors the ranking is built from ----------------------
 SHEET_SCORECARD = "Scorecard"

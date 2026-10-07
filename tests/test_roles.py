@@ -7,7 +7,6 @@ these are the tests that keep it short.
 """
 
 import json
-import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -17,7 +16,8 @@ import pytest
 from workload_app import member as member_view, storage
 from workload_app.accounts import AccountError, ROLE_MANAGER, ROLE_MEMBER
 from workload_app.server import make_server
-from workload_app.workbook import WorkloadWorkbook
+
+from conftest import copy_unit
 
 PASSWORD = "a-good-long-password"
 
@@ -53,7 +53,7 @@ def _sign_in(base, username, password) -> str:
 
 
 @pytest.fixture
-def site(tmp_path, workbook_copy, monkeypatch):
+def site(tmp_path, migrated, monkeypatch):
     """A running app with a manager who has the real workbook open."""
     monkeypatch.setenv("WORKLOAD_DATA_DIR", str(tmp_path / "instance"))
     httpd = make_server(tmp_path / "instance", "127.0.0.1", 0, quiet=True)
@@ -64,8 +64,8 @@ def site(tmp_path, workbook_copy, monkeypatch):
     manager = app.accounts.create_user("ahmed", PASSWORD, display_name="Ahmed",
                                        is_admin=True)
     unit = app.accounts.create_unit(manager["id"], "Marine Structures", "")
-    target = storage.unit_path(app.data_dir, manager["id"], f"{unit['id']}.xlsx")
-    shutil.copy(workbook_copy, target)
+    target = storage.unit_path(app.data_dir, manager["id"], f"{unit['id']}.db")
+    copy_unit(migrated, target)
     app.accounts_update_filename(manager["id"], unit["id"], target.name)
 
     client = Client(base)
@@ -219,7 +219,6 @@ class TestWhatAMemberCannotDo:
         ("POST", "/api/team", {"short_name": "New"}),
         ("POST", "/api/save", {}),
         ("POST", "/api/reload", {}),
-        ("POST", "/api/timesheets/capacity", {}),
         ("PUT", "/api/reference", {}),
         ("POST", "/api/team/access", {"engineer": "Osama", "username": "x"}),
     ])
@@ -250,9 +249,9 @@ class TestWhatAMemberCannotDo:
         assert status == 422
         assert "cannot manage accounts" in body["errors"][0]
 
-    def test_reading_does_not_write_to_the_managers_workbook(self, site, osama):
+    def test_reading_does_not_write_to_the_managers_unit(self, site, osama):
         path = storage.unit_path(site.app.data_dir, site.user["id"],
-                                 f"{site.unit['id']}.xlsx")
+                                 f"{site.unit['id']}.db")
         before = path.stat().st_mtime_ns, path.stat().st_size
         call(osama, "/api/me?period=year&year=2026")
         call(osama, "/api/me?period=all")

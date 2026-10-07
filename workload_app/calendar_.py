@@ -25,7 +25,6 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
-from . import config as cfg
 from . import derive
 
 EVERYONE = "*"
@@ -49,19 +48,13 @@ class CalendarError(ValueError):
 
 
 def workbook_holidays(wb) -> Set[str]:
-    """The unit's own public holidays, as ISO strings."""
-    try:
-        return {day.isoformat() for day in wb.holidays()}
-    except Exception:                       # pragma: no cover - odd workbook
-        return set()
+    """The days off the unit typed in itself, as ISO strings."""
+    return {day.isoformat() for day in wb.holidays()}
 
 
 def leave_codes(wb) -> Set[str]:
-    """The charge codes the workbook treats as a day off (Work Calendar)."""
-    try:
-        codes = wb.non_project_codes()
-    except Exception:                       # pragma: no cover - odd workbook
-        return set()
+    """The charge codes the unit treats as a day off."""
+    codes = wb.non_project_codes()
     return {code.strip().upper() for code, treat in codes.items()
             if "day off" in str(treat or "").lower()}
 

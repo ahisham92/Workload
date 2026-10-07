@@ -176,19 +176,13 @@ class TestStorage:
         with pytest.raises(ValueError):
             storage._target(tmp_path, 1, "")
 
-    def test_a_new_unit_is_a_copy_of_the_template(self, tmp_path):
-        if not storage.template_path().is_file():
-            pytest.skip("no template built in this checkout")
-        made = storage.new_from_template(tmp_path, 7, "a1b2c3d4")
-        assert made.is_file()
-        assert made.read_bytes() == storage.template_path().read_bytes()
-
     def test_an_upload_that_is_not_a_workbook_is_not_kept(self, tmp_path):
         from workload_app.library import NotAWorkbook
 
         with pytest.raises(NotAWorkbook):
-            storage.save_upload(tmp_path, 7, "a1b2c3d4", b"not a spreadsheet")
-        assert not list(storage.user_dir(tmp_path, 7).glob("*.xlsx"))
+            storage.import_workbook(tmp_path, 7, "a1b2c3d4", b"not a spreadsheet")
+        assert not [p for p in storage.user_dir(tmp_path, 7).iterdir()
+                    if p.is_file()]
 
     def test_removing_an_account_removes_its_files(self, tmp_path):
         directory = storage.user_dir(tmp_path, 7)
@@ -197,28 +191,101 @@ class TestStorage:
         assert not (tmp_path / "users" / "7" / "a.xlsx").exists()
 
 
-class TestTheTemplate:
-    """What ships with the app, and what it must not carry."""
+class TestANewUnit:
+    """What a unit starts with: the reference tables, and nobody's data."""
 
-    def test_it_is_there_and_is_a_workbook(self):
-        from workload_app import library
+    def test_it_is_a_database_of_its_own(self, tmp_path):
+        made = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        assert made.name == "a1b2c3d4.db"
+        assert storage.is_database(made.read_bytes()[:16])
 
-        path = storage.template_path()
-        if not path.is_file():
-            pytest.skip("no template built in this checkout")
-        assert library.check(path) == []
+    def test_it_holds_the_model_but_nobody_s_data(self, tmp_path):
+        from workload_app.unit import Unit
 
-    def test_it_holds_the_model_but_nobody_s_data(self):
-        from workload_app.workbook import WorkloadWorkbook
-
-        path = storage.template_path()
-        if not path.is_file():
-            pytest.skip("no template built in this checkout")
-        wb = WorkloadWorkbook(path)
+        wb = Unit(storage.new_unit(tmp_path, 7, "a1b2c3d4"))
         assert wb.projects() == []
         assert wb.deliverables() == []
-        assert all(len(wb.timesheet_rows(name, ["B"])) == 0
-                   for name in wb.ts_sheets())
+        assert wb.engineer_names() == []
+        assert wb.store.count() == 0
         assert wb.project_types() and wb.credit_steps()
         assert wb.scorecard_factors()
-        assert wb.engineer_names() == ["Engineer 1", "Engineer 2", "Engineer 3"]
+        assert wb.hours_per_man_month() == 185.0
+
+
+class TestBringingAnOldUnitAcross:
+    """A unit made in the workbook days becomes a database the first time it
+    is opened, and its old files are kept, untouched, with its copies."""
+
+    @pytest.fixture
+    def old_unit(self, source_path, tmp_path):
+        import shutil
+
+        folder = storage.user_dir(tmp_path, 7)
+        shutil.copy(source_path, folder / "a1b2c3d4.xlsx")
+        return tmp_path
+
+    def test_the_workbook_becomes_the_unit_s_database(self, old_unit):
+        from workload_app.unit import Unit
+
+        result = storage.bring_across(old_unit, 7, "a1b2c3d4", "a1b2c3d4.xlsx")
+        assert result["filename"] == "a1b2c3d4.db"
+        assert result["moved"]["projects"] == 40
+        assert result["moved"]["timesheet_rows"] == 7682
+        wb = Unit(result["path"])
+        assert len(wb.deliverables()) == 64
+        assert wb.engineer_names() == ["Ahmed", "Osama", "Kirolos"]
+
+    def test_the_old_workbook_is_kept_with_the_copies(self, old_unit, source_path):
+        storage.bring_across(old_unit, 7, "a1b2c3d4", "a1b2c3d4.xlsx")
+        folder = storage.user_dir(old_unit, 7)
+        assert not (folder / "a1b2c3d4.xlsx").exists()
+        (kept,) = storage.backups_dir(old_unit, 7).glob("a1b2c3d4-before-database-*.xlsx")
+        assert kept.read_bytes() == source_path.read_bytes()
+
+    def test_a_second_open_finds_the_database(self, old_unit):
+        first = storage.bring_across(old_unit, 7, "a1b2c3d4", "a1b2c3d4.xlsx")
+        again = storage.bring_across(old_unit, 7, "a1b2c3d4", first["filename"])
+        assert again["moved"] is None
+        assert again["path"] == first["path"]
+
+
+class TestCopies:
+    def test_a_copy_is_a_whole_database(self, tmp_path):
+        from workload_app.unit import Unit
+
+        path = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        Unit(path).add_engineer({"short_name": "Nadia"})
+        kept = storage.keep_a_copy(tmp_path, 7, path)
+        assert Unit(kept).engineer_names() == ["Nadia"]
+
+    def test_only_so_many_are_kept(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(storage, "BACKUPS_KEPT", 3)
+        path = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        for _ in range(5):
+            storage.keep_a_copy(tmp_path, 7, path)
+        assert len(storage.backups_of(tmp_path, 7, "a1b2c3d4")) == 3
+
+    def test_an_open_copies_at_most_every_so_often(self, tmp_path):
+        path = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        assert storage.backup_if_due(tmp_path, 7, path) is not None
+        assert storage.backup_if_due(tmp_path, 7, path) is None
+
+    def test_a_copy_can_be_put_back(self, tmp_path):
+        from workload_app.unit import Unit
+
+        path = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        Unit(path).add_engineer({"short_name": "Nadia"})
+        kept = storage.keep_a_copy(tmp_path, 7, path)
+        Unit(path).add_engineer({"short_name": "Youssef"})
+        result = storage.replace_unit_file(tmp_path, 7, "a1b2c3d4", kept.read_bytes())
+        assert Unit(result["path"]).engineer_names() == ["Nadia"]
+        assert result["backup"] is not None, "what it had is kept first"
+
+    def test_a_database_that_is_not_a_unit_is_refused(self, tmp_path):
+        other = tmp_path / "other.db"
+        sqlite3.connect(other).execute("CREATE TABLE t (x)").connection.commit()
+        path = storage.new_unit(tmp_path, 7, "a1b2c3d4")
+        before = path.read_bytes()
+        with pytest.raises(storage.NotAUnit):
+            storage.replace_unit_file(tmp_path, 7, "a1b2c3d4", other.read_bytes())
+        assert path.read_bytes() == before
