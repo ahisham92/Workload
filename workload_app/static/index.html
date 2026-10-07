@@ -31,24 +31,21 @@
     <div class="chooser-actions">
       <div class="add-unit-body">
         <p class="muted">
-          A unit is a name and the workbook behind it. Start a new one from the
-          blank template — the full model with no data in it — or bring a
-          Workload workbook you already have. Either way the file is yours
-          alone, and you can take a copy back out at any time.
+          A unit starts from your team's timesheet exports — nothing else. Choose
+          everyone's export at once: the people, the projects, their phases and
+          who worked on what are all read out of them. Leave the name empty to
+          use the unit the exports belong to.
         </p>
         <div class="row">
-          <label class="field grow">
-            <span>Unit name</span>
+          <label class="field">
+            <span>Unit name (optional)</span>
             <input type="text" id="unit-name" placeholder="Marine Structures" spellcheck="false">
           </label>
-          <button class="btn btn-primary" id="btn-new-unit" type="button">Start blank</button>
-        </div>
-        <div class="row">
           <label class="field grow">
-            <span>Or upload a Workload workbook (.xlsx)</span>
-            <input type="file" id="unit-file" accept=".xlsx,.xlsm">
+            <span>Timesheet exports (.xlsx or .csv, one or many)</span>
+            <input type="file" id="unit-timesheets" accept=".xlsx,.xlsm,.csv,.tsv,.txt" multiple>
           </label>
-          <button class="btn" id="btn-upload-unit" type="button">Upload</button>
+          <button class="btn btn-primary" id="btn-new-unit" type="button">Create from timesheets</button>
         </div>
         <div id="chooser-error"></div>
       </div>
@@ -130,28 +127,21 @@
     <div id="ts-capacity"></div>
     <div id="ts-cards" class="cards cards-3"></div>
     <section class="panel">
-      <h3>Import an export</h3>
+      <h3>Import exports</h3>
       <p class="muted">
-        Columns are matched to the sheet by heading name, so the order of the export
-        does not matter and its own header rows are skipped.
+        Choose everyone's export together, or just the ones that changed. Each
+        row goes to whoever booked it, so there is nobody to pick. Somebody new
+        joins the team, and a job number with no project becomes one — named by
+        its number, with its phases as deliverables — for you to confirm on
+        Projects.
       </p>
       <div class="row">
-        <label class="field">
-          <span>Engineer</span>
-          <select id="ts-engineer"></select>
-        </label>
         <label class="field grow">
-          <span>Export file (.xlsx or .csv)</span>
-          <input type="file" id="ts-file" accept=".xlsx,.xlsm,.csv,.tsv,.txt">
+          <span>Export files (.xlsx or .csv)</span>
+          <input type="file" id="ts-file" accept=".xlsx,.xlsm,.csv,.tsv,.txt" multiple>
         </label>
-        <button class="btn btn-primary" id="btn-ts-check" type="button">Check file</button>
+        <button class="btn btn-primary" id="btn-ts-check" type="button">Check files</button>
       </div>
-      <label class="check">
-        <input type="checkbox" id="ts-registered" checked>
-        <span>Only rows for projects in the register
-          <span class="hint">— leaves out work the workbook has no project for, which is what keeps the sheet inside its row limit</span>
-        </span>
-      </label>
       <div id="ts-result"></div>
     </section>
   </section>
