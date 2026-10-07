@@ -20,7 +20,7 @@ def store(tmp_path):
 
 def rows(n, *, person="Ahmed", job="20-1234", start=dt.date(2026, 1, 1)):
     return [{"job_type": "1-Projects", "job_number": job, "job_name": "Port Deck",
-             "full_name": f"{person} Mitwally", "date": start + dt.timedelta(days=i % 300),
+             "full_name": f"{person} Mockridge", "date": start + dt.timedelta(days=i % 300),
              "phase": 4, "regular_hours": 8, "overtime_hours": 0, "hours": 8}
             for i in range(n)]
 
@@ -97,8 +97,8 @@ class TestWhatItCanAnswer:
 
     def test_renaming_a_person_keeps_their_rows(self, store):
         store.replace("Kirolos", rows(6, person="Kirolos"))
-        store.rename_person("Kirolos", "Kirolos Nabil")
-        assert store.counts() == {"Kirolos Nabil": 6}
+        store.rename_person("Kirolos", "Kirolos Northwind")
+        assert store.counts() == {"Kirolos Northwind": 6}
 
     def test_removing_a_person_takes_their_rows(self, store):
         store.replace("Ahmed", rows(3))

@@ -59,7 +59,7 @@ class TestReading:
 
     def test_a_deliverable_carries_its_actuals_inputs(self, readonly_wb):
         first = readonly_wb.deliverables()[0]
-        assert first.project_number == "N25178-0100D"
+        assert first.project_number == readonly_wb.projects()[0].number
         assert first.type_code == "CD"
         assert first.ts_phase == 1
 

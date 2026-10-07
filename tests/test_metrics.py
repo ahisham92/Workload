@@ -10,6 +10,8 @@ import pytest
 
 from workload_app import metrics
 
+from conftest import BUSY_PROJECT, FINISHED_PROJECT, FIRST_PROJECT
+
 
 @pytest.fixture(scope="session")
 def index(readonly_wb):
@@ -26,12 +28,13 @@ class TestTimesheetIndex:
         assert len(index.rows) == 7682
         assert {row["engineer"] for row in index.rows} == {"Ahmed", "Osama", "Kirolos"}
 
-    def test_hours_can_be_narrowed_by_phase_and_person(self, index):
-        total = index.hours_for_job("N25185-0100D")
-        by_person = sum(index.hours_for_job("N25185-0100D", engineer=name)
+    def test_hours_can_be_narrowed_by_phase_and_person(self, index, project_numbers):
+        job = project_numbers[BUSY_PROJECT]
+        total = index.hours_for_job(job)
+        by_person = sum(index.hours_for_job(job, engineer=name)
                         for name in ("Ahmed", "Osama", "Kirolos"))
         assert total == pytest.approx(by_person)
-        assert index.hours_for_job("N25185-0100D", phase=4) < total
+        assert index.hours_for_job(job, phase=4) < total
 
     def test_a_job_nobody_charged_is_zero_not_an_error(self, index):
         assert index.hours_for_job("NOT-A-JOB") == 0.0
@@ -48,24 +51,27 @@ class TestAgainstTheWorkbooksOwnFigures:
         total = sum(row["earned_mm"] for row in projects.values() if row["earned_mm"])
         assert total == pytest.approx(114.341, abs=0.01)
 
-    @pytest.mark.parametrize("number,progress,actual_mm,earned_mm", [
-        ("N25178-0100D", 0.65, 0.0, 1.56),
-        ("N25185-0100D", 0.316, 18.516, 8.216),
-        ("S24014-0101D", 1.0, 2.442, 21.27),
+    @pytest.mark.parametrize("position,progress,actual_mm,earned_mm", [
+        (FIRST_PROJECT, 0.65, 0.0, 1.56),
+        (BUSY_PROJECT, 0.316, 18.516, 8.216),
+        (FINISHED_PROJECT, 1.0, 2.442, 21.27),
     ])
-    def test_per_project_figures_match(self, projects, number, progress,
-                                       actual_mm, earned_mm):
-        row = projects[number]
+    def test_per_project_figures_match(self, projects, project_numbers, position,
+                                       progress, actual_mm, earned_mm):
+        row = projects[project_numbers[position]]
         assert row["progress"] == pytest.approx(progress, abs=0.001)
         assert row["actual_mm"] == pytest.approx(actual_mm, abs=0.01)
         assert row["earned_mm"] == pytest.approx(earned_mm, abs=0.01)
 
-    def test_cpi_matches_inputs_column_u(self, projects):
-        assert projects["N25185-0100D"]["cpi"] == pytest.approx(0.4437, abs=0.001)
-        assert projects["S24014-0101D"]["cpi"] == pytest.approx(8.7105, abs=0.01)
+    def test_cpi_matches_inputs_column_u(self, projects, project_numbers):
+        busy = projects[project_numbers[BUSY_PROJECT]]
+        finished = projects[project_numbers[FINISHED_PROJECT]]
+        assert busy["cpi"] == pytest.approx(0.4437, abs=0.001)
+        assert finished["cpi"] == pytest.approx(8.7105, abs=0.01)
 
-    def test_the_engineer_split_matches_inputs_columns_i_to_k(self, projects):
-        shares = projects["N25185-0100D"]["share_by_engineer"]
+    def test_the_engineer_split_matches_inputs_columns_i_to_k(self, projects,
+                                                               project_numbers):
+        shares = projects[project_numbers[BUSY_PROJECT]]["share_by_engineer"]
         assert shares["Ahmed"] == pytest.approx(0.4158, abs=0.001)
         assert shares["Osama"] == pytest.approx(0.5127, abs=0.001)
         assert shares["Kirolos"] == pytest.approx(0.0715, abs=0.001)
@@ -104,17 +110,19 @@ class TestProgress:
 
 
 class TestDeliverableRows:
-    def test_hours_are_shared_between_deliverables_on_the_same_phase(self, readonly_wb, index):
+    def test_hours_are_shared_between_deliverables_on_the_same_phase(
+            self, readonly_wb, index, project_numbers):
+        job = project_numbers[BUSY_PROJECT]
         rows = {row["row"]: row for row in metrics.deliverable_rows(readonly_wb, index)}
         berths = [r for r in rows.values()
-                  if r["project_number"] == "N25185-0100D" and r["ts_phase"] == 4]
+                  if r["project_number"] == job and r["ts_phase"] == 4]
         assert len(berths) > 1
         # each sharer gets an equal slice, and the slices add back up
         assert len({round(r["actual_hours"], 3) for r in berths}) == 1
         # Each row is rounded to two places for display, so the slices add back
         # up to the phase total only within half a rounding step per row.
         assert sum(r["actual_hours"] for r in berths) == pytest.approx(
-            index.hours_for_job("N25185-0100D", phase=4), abs=0.005 * len(berths))
+            index.hours_for_job(job, phase=4), abs=0.005 * len(berths))
 
     def test_a_deliverable_without_a_ts_phase_earns_no_hours(self, readonly_wb, index):
         rows = metrics.deliverable_rows(readonly_wb, index)
