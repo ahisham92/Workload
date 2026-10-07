@@ -139,6 +139,20 @@
     <div class="view-head"><h2>Monthly timesheets</h2></div>
     <div id="ts-cards" class="cards cards-3"></div>
     <section class="panel" id="ts-mix" hidden></section>
+    <section class="panel" id="ts-nightly">
+      <h3>Every night, on its own</h3>
+      <p class="muted">
+        Your PC exports Detailed Utilization from BISpark at 12:00 am and sends
+        it here. Download the kit, unzip it on your work PC and double-click
+        <b>setup.bat</b>. It signs in to BISpark with your Windows login, so no
+        password is stored.
+      </p>
+      <div id="ts-nightly-state"></div>
+      <div class="row">
+        <button class="btn btn-primary" id="btn-nightly-kit" type="button">Download the PC kit</button>
+        <button class="btn" id="btn-nightly-stop" type="button" hidden>Stop nightly imports</button>
+      </div>
+    </section>
     <section class="panel">
       <h3>Import exports</h3>
       <p class="muted">
