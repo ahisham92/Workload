@@ -41,6 +41,13 @@ second password.
   across* asks once for the old Workload username and password and ties that
   account to the sign-in used now. If the old password is forgotten, set a new
   one first with `python -m workload_app.admin password <old-username>`.
+* **Or copy them from the old folder, leaving it as it was.** When the tab keeps
+  its own folder and the old site kept another, open the tab once, then run
+  `python -m workload_app.admin --data-dir <tab's folder> bring <old folder>`.
+  It copies the old folder aside, brings each unit across from the copy (old
+  workbooks included) into the tab's account, and changes nothing in the old
+  folder. Running it twice brings nothing twice. With several accounts on
+  either side, `--from <old-username>` and `--to <sign-in>` say which.
 * **The units follow the person, not the address.** An account is tied to the
   site's own identifier for somebody, so correcting the email or username they
   sign in with does not lose them anything.
