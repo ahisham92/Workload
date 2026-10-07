@@ -473,6 +473,7 @@ rebuilds it. This happens automatically; there is nothing to do by hand.
 | `workload_app/timesheet_store.py` | A unit's timesheet rows and its establishment |
 | `workload_app/tasks.py` | The task list, the working day, and who is overloaded |
 | `workload_app/static/charts.js` | Inline-SVG charts — donut, bars, columns |
+| `workload_app/static/tables.js` | Every table sorts by its headings and starts short |
 | `workload_app/server.py` | The local HTTP transport |
 | `workload_app/wsgi.py` | The transport a host uses (PythonAnywhere) |
 | `workload_app/admin.py` | Making accounts from a console |
@@ -550,17 +551,15 @@ application answers correctly through the WSGI entry point a host uses.
 1. Sign in and open the unit.
 2. **Timesheets** — upload each engineer's export, check the summary, Replace.
    Leave "only rows for projects in the register" ticked.
-3. **Timesheets** — glance at the room left. Nothing has to be done about it:
-   an import that does not fit raises the limit itself.
-4. **Overview** — check the data check reads "All rows matched to an engineer",
+3. **Overview** — check the data check reads "All rows matched to an engineer",
    and look at what the unknown job numbers are.
-5. **Projects** — open each active project and move its deliverables' steps on.
+4. **Projects** — open each active project and move its deliverables' steps on.
    **Team** — only when someone joins or leaves.
-6. **Tasks** — check who is overloaded for the weeks ahead, and let a new
+5. **Tasks** — check who is overloaded for the weeks ahead, and let a new
    deliverable date fill in its week of preparation.
-7. **Reports** — read the Dashboard and Management Review, and print whichever
+6. **Reports** — read the Dashboard and Management Review, and print whichever
    view you need for the meeting.
-8. Download the workbook (⭳) when you want `Delivery Sequence` or `Profit Plan`,
+7. Download the workbook (⭳) when you want `Delivery Sequence` or `Profit Plan`,
    which are not yet in the app.
 
 Steps 4 and 5 of the workbook's own routine — retyping actual MM on `Phasing` —
