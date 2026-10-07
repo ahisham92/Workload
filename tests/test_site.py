@@ -44,6 +44,7 @@ def ask(method, path, body=None, *, site=None, cookie=None, mount="/workload"):
         "PATH_INFO": path,
         "QUERY_STRING": "",
         "CONTENT_LENGTH": str(len(raw)),
+        "CONTENT_TYPE": "application/json",
         "wsgi.input": io.BytesIO(raw),
         "wsgi.url_scheme": "http",
     }

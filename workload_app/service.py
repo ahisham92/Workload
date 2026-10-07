@@ -306,12 +306,12 @@ class WorkloadService:
                                        body: Dict[str, Any]) -> Dict[str, Any]:
         """Save a project and its whole deliverable set in one go."""
         with self._lock:
-            project = dict(body.get("project", {}))
+            project = dict(_object(body.get("project") or {}, "project"))
             # Saving a project the timesheets set up is somebody confirming it.
             if derive.needs_confirming(project.get("notes") or ""):
                 project["notes"] = (project["notes"] or "").replace(
                     derive.TO_CONFIRM, "").strip()
-            items = body.get("deliverables", [])
+            items = _objects(body.get("deliverables") or [], "deliverables")
             # Drawings are checked before anything is written, so a typo in
             # one count does not leave the project saved without its drawings.
             counts = [drawings_module.clean_count(item.get("drawings"))
@@ -460,7 +460,7 @@ class WorkloadService:
             parsed: List[ParsedTimesheet] = []
             errors: List[str] = []
             warnings: List[str] = []
-            for item in files:
+            for item in _objects(files, "files"):
                 filename = str(item.get("filename") or "export.xlsx")
                 data = _decode(item.get("content_base64"))
                 try:
@@ -819,7 +819,8 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             saved = drawings_module.save_counts(
-                self.store, wb.deliverables(), body.get("counts") or {})
+                self.store, wb.deliverables(),
+                _object(body.get("counts") or {}, "counts"))
             return {"saved": saved, "drawings": self._drawings(wb, self._index(wb))}
 
     def _holiday_choice(self, teams: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
@@ -868,7 +869,7 @@ class WorkloadService:
             if not files:
                 raise ApiError(HTTPStatus.BAD_REQUEST, "Choose a drawing list to upload.")
             drawings: List[Dict[str, Any]] = []
-            for item in files:
+            for item in _objects(files, "files"):
                 drawings.extend(drawing_list_module.read(
                     _decode(item.get("content_base64")), item.get("filename") or ""))
             deliverables = wb.deliverables()
@@ -1365,7 +1366,7 @@ class WorkloadService:
                 raise ApiError(HTTPStatus.BAD_REQUEST, "Choose a submission to confirm.")
             by_row = {d.row: d for d in wb.deliverables()}
             errors, chosen = [], []
-            for item in items:
+            for item in _objects(items, "items"):
                 try:
                     row = int(item.get("row"))
                     date = _dt.date.fromisoformat(str(item.get("date")))
@@ -1531,6 +1532,20 @@ def _year(query: Dict[str, List[str]]) -> Optional[int]:
 def _flag(query: Dict[str, List[str]], name: str) -> bool:
     values = query.get(name)
     return bool(values) and values[0].lower() in {"1", "true", "yes"}
+
+
+def _object(value: Any, what: str) -> Dict[str, Any]:
+    """``value`` if it is a JSON object, else a plain refusal."""
+    if not isinstance(value, dict):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{what} should be an object.")
+    return value
+
+
+def _objects(value: Any, what: str) -> List[Dict[str, Any]]:
+    """``value`` if it is a list of JSON objects, else a plain refusal."""
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{what} should be a list of objects.")
+    return value
 
 
 def _int(value: str) -> int:

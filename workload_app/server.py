@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .app import Request, WorkloadApp, parse_cookies
+from .app import Request, WorkloadApp, parse_body, parse_cookies
 from .service import ApiError, MAX_UPLOAD_BYTES
 
 # Re-exported so existing imports keep working.
@@ -33,21 +33,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- request ---------------------------------------------------------
     def _read_body(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "Bad Content-Length.")
         if length <= 0:
             return {}
         if length > MAX_UPLOAD_BYTES * 2:
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request too large.")
-        raw = self.rfile.read(length)
-        if not raw.strip():
-            return {}
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            raise ApiError(HTTPStatus.BAD_REQUEST, "Request body was not valid JSON.")
-        if not isinstance(body, dict):
-            raise ApiError(HTTPStatus.BAD_REQUEST, "Request body must be an object.")
-        return body
+        return parse_body(self.rfile.read(length),
+                          self.headers.get("Content-Type") or "")
 
     def _handle(self, method: str) -> None:
         parsed = urlparse(self.path)

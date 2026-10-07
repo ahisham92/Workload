@@ -23,12 +23,12 @@ import base64
 import functools
 import json
 import mimetypes
+import threading
 import traceback
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -119,6 +119,8 @@ class WorkloadApp:
         self.autosave = autosave
         #: user id -> their open unit, most recently used last.
         self._services: "OrderedDict[int, WorkloadService]" = OrderedDict()
+        #: Requests arrive on several threads at once; one service per account.
+        self._services_lock = threading.Lock()
         #: Set by a site that mounts Workload: a call returning the people who
         #: can sign in to it, as ``[{"id", "login", "name"}]``.  Access to a
         #: unit is given by picking one of them.
@@ -127,17 +129,48 @@ class WorkloadApp:
 
     # -- the services one account at a time ------------------------------
     def service_for(self, user_id: int) -> WorkloadService:
-        service = self._services.pop(user_id, None)
-        if service is None:
-            service = WorkloadService(autosave=self.autosave)
-        self._services[user_id] = service
-        while len(self._services) > OPEN_WORKBOOK_LIMIT:
-            _old_id, old = self._services.popitem(last=False)
+        with self._services_lock:
+            service = self._services.pop(user_id, None)
+            if service is None:
+                service = WorkloadService(autosave=self.autosave)
+            self._services[user_id] = service
+            evicted = []
+            while len(self._services) > OPEN_WORKBOOK_LIMIT:
+                evicted.append(self._services.popitem(last=False)[1])
+        for old in evicted:
             try:
                 old.close()
             except Exception:                  # pragma: no cover - best effort
                 traceback.print_exc()
         return service
+
+    def _drop_service(self, user_id: int) -> None:
+        with self._services_lock:
+            service = self._services.pop(user_id, None)
+        if service is not None:
+            service.close()
+
+    def _follow_open_unit(self, ctx: "Context") -> None:
+        """Have this worker open the unit the manager last opened anywhere.
+
+        Which unit is open is kept in the account database, not only in this
+        process: a host may run several workers, and a request is not always
+        answered by the one that opened the unit.
+        """
+        user_id = ctx.user["id"]
+        wanted = self.accounts.open_unit_of(user_id)
+        current = (ctx.service.unit or {}).get("id") if ctx.service.unit else None
+        if wanted == current:
+            return
+        if wanted is None:
+            ctx.service.close()
+            return
+        try:
+            self._open(ctx.service, user_id, wanted)
+        except ApiError:
+            # Deleted, or its data has gone: there is nothing to follow.
+            self.accounts.set_open_unit(user_id, None)
+            ctx.service.close()
 
     def close_all(self) -> None:
         for service in list(self._services.values()):
@@ -202,6 +235,8 @@ class WorkloadApp:
                     "Your account can see your own work, and nothing else can "
                     "be changed from it.")
             ctx.service = self.service_for(ctx.user["id"])
+            if ctx.user["role"] == ROLE_MANAGER:
+                self._follow_open_unit(ctx)
             ctx.service.refresh()
         return Response.json(HTTPStatus.OK,
                              handler(ctx, request.query, request.body, *captured))
@@ -336,9 +371,8 @@ class WorkloadApp:
             return {"signed_out": False, "logout": ctx.site.get("logout")}
         self.accounts.end_session(ctx.token)
         if ctx.user:
-            service = self._services.pop(ctx.user["id"], None)
-            if service is not None:
-                service.close()
+            self.accounts.set_open_unit(ctx.user["id"], None)
+            self._drop_service(ctx.user["id"])
         ctx.clear_cookie = True
         return {"signed_out": True}
 
@@ -391,9 +425,7 @@ class WorkloadApp:
                 "delete them, and try again -- then upload them into the "
                 "account you bring across.")
         key, login = current["site_key"], current["site_login"]
-        service = self._services.pop(current["id"], None)
-        if service is not None:
-            service.close()
+        self._drop_service(current["id"])
         self.accounts.link_site(current["id"], None)
         if self.accounts.remove_if_empty(current["id"]):
             storage.remove_user_files(self.data_dir, current["id"])
@@ -431,7 +463,7 @@ class WorkloadApp:
                               in self.accounts.passwords().items()}}
 
     def create_user(self, ctx: Context, query, body) -> Dict[str, Any]:
-        password = (body.get("password") or "").strip()
+        password = str(body.get("password") or "").strip()
         generated = not password
         if generated:
             password = accounts_module.generated_password()
@@ -445,8 +477,8 @@ class WorkloadApp:
         return {"user": user, "password": password}
 
     def reset_password(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
-        target = int(user_id)
-        password = (body.get("password") or "").strip()
+        target = self._account_id(user_id)
+        password = str(body.get("password") or "").strip()
         generated = not password
         if generated:
             password = accounts_module.generated_password()
@@ -455,17 +487,26 @@ class WorkloadApp:
         return {"user_id": target, "password": password if generated else None}
 
     def set_admin(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
-        self.accounts.set_admin(int(user_id), bool(body.get("is_admin")))
-        return {"user": self.accounts.user(int(user_id))}
+        target = self._account_id(user_id)
+        self.accounts.set_admin(target, bool(body.get("is_admin")))
+        return {"user": self.accounts.user(target)}
+
+    def _account_id(self, value: str) -> int:
+        """An account's id from a path, or Not Found."""
+        try:
+            target = int(value)
+        except ValueError:
+            target = None
+        if target is None or self.accounts.user(target) is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is no such account.")
+        return target
 
     def delete_user(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
-        target = int(user_id)
+        target = self._account_id(user_id)
         if target == ctx.user["id"]:
             raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
                            "You cannot delete the account you are signed in to.")
-        service = self._services.pop(target, None)
-        if service is not None:
-            service.close()
+        self._drop_service(target)
         result = self.accounts.delete_user(target)
         storage.remove_user_files(self.data_dir, target)
         return result
@@ -541,6 +582,7 @@ class WorkloadApp:
         unit = self.accounts.create_unit(
             user_id, wanted or f"New unit {uuid.uuid4().hex[:6]}", "")
         path = None
+        before = self.accounts.open_unit_of(user_id)
         try:
             path = storage.new_unit(self.data_dir, user_id, unit["id"])
             self.accounts_update_filename(user_id, unit["id"], path.name)
@@ -548,12 +590,15 @@ class WorkloadApp:
             service = ctx.service or self.service_for(user_id)
             imported = service.import_exports(files)
         except Exception:
-            if ctx.service and ctx.service.unit \
-                    and ctx.service.unit.get("id") == unit["id"]:
+            if _is_open(ctx, unit["id"]):
                 ctx.service.close()
             self.accounts.delete_unit(user_id, unit["id"])
             if path is not None:
                 storage.remove_unit_file(self.data_dir, user_id, path.name)
+            # Back to the unit they had open before, as if nothing happened.
+            self.accounts.set_open_unit(user_id, before)
+            if before and ctx.service is not None:
+                self._follow_open_unit(ctx)
             raise
         if not wanted:
             self._name_after_exports(ctx, user_id, unit["id"],
@@ -572,8 +617,7 @@ class WorkloadApp:
                 unit = self.accounts.rename_unit(user_id, unit_id, candidate)
             except Exception:
                 continue
-            if ctx.service and ctx.service.unit \
-                    and ctx.service.unit.get("id") == unit_id:
+            if _is_open(ctx, unit_id):
                 ctx.service.unit = unit
             return
 
@@ -585,7 +629,7 @@ class WorkloadApp:
         """
         user_id = ctx.user["id"]
         data = self._uploaded_bytes(body)
-        name = body.get("name") or Path(body.get("filename", "workbook")).stem
+        name = body.get("name") or Path(str(body.get("filename") or "workbook")).stem
         unit = self.accounts.create_unit(user_id, name, "")
         try:
             path = storage.import_workbook(
@@ -609,15 +653,20 @@ class WorkloadApp:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
         data = self._uploaded_bytes(body)
         # Let go of it before it is overwritten underneath us.
-        if ctx.service and ctx.service.unit \
-                and ctx.service.unit.get("id") == unit_id:
+        was_open = _is_open(ctx, unit_id)
+        if was_open:
             ctx.service.close()
-        if storage.legacy.is_workbook(storage.unit_path(
-                self.data_dir, user_id, unit["filename"])):
-            # Still a workbook unit: bring it across first, so what it held
-            # is kept as a copy like any other.
-            self._unit_file(user_id, unit_id, unit["filename"])
-        result = storage.replace_unit_file(self.data_dir, user_id, unit_id, data)
+        try:
+            if storage.legacy.is_workbook(storage.unit_path(
+                    self.data_dir, user_id, unit["filename"])):
+                # Still a workbook unit: bring it across first, so what it
+                # held is kept as a copy like any other.
+                self._unit_file(user_id, unit_id, unit["filename"])
+            result = storage.replace_unit_file(self.data_dir, user_id, unit_id, data)
+        except Exception:
+            if was_open:                   # the upload was refused: as you were
+                self._follow_open_unit(ctx)
+            raise
         self.accounts_update_filename(user_id, unit_id, result["path"].name)
         opened = self.open_unit(ctx, query, body, unit_id)
         opened["replaced"] = {
@@ -649,6 +698,19 @@ class WorkloadApp:
 
     def open_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         user_id = ctx.user["id"]
+        service = ctx.service or self.service_for(user_id)
+        result = self._open(service, user_id, unit_id)
+        self.accounts.touch_unit(user_id, unit_id)
+        self.accounts.set_open_unit(user_id, unit_id)
+        return result
+
+    def close_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
+        self.accounts.set_open_unit(ctx.user["id"], None)
+        return ctx.service.close()
+
+    def _open(self, service: WorkloadService, user_id: int,
+              unit_id: str) -> Dict[str, Any]:
+        """Open one of this account's units in ``service``."""
         unit = self.accounts.unit(user_id, unit_id)
         if unit is None:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
@@ -662,11 +724,8 @@ class WorkloadApp:
             storage.backup_if_due(self.data_dir, user_id, path)
         except Exception:                  # pragma: no cover - a copy is a
             traceback.print_exc()          # nicety, never a reason not to open
-        service = ctx.service or self.service_for(user_id)
-        result = service.open(path, unit=unit,
-                              keep_copy=self._copier(user_id, path))
-        self.accounts.touch_unit(user_id, unit_id)
-        return result
+        return service.open(path, unit=unit,
+                            keep_copy=self._copier(user_id, path))
 
     def _copier(self, owner_id: int, path: Path):
         """What a service calls to keep a dated copy of the unit it has open."""
@@ -687,8 +746,7 @@ class WorkloadApp:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
         unit = self.accounts.rename_unit(ctx.user["id"], unit_id,
                                          body.get("name", ""))
-        if ctx.service and ctx.service.unit \
-                and ctx.service.unit.get("id") == unit_id:
+        if _is_open(ctx, unit_id):
             ctx.service.unit = unit
         return {"unit": unit}
 
@@ -697,9 +755,10 @@ class WorkloadApp:
         unit = self.accounts.unit(user_id, unit_id)
         if unit is None:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
-        if ctx.service and ctx.service.unit \
-                and ctx.service.unit.get("id") == unit_id:
+        if _is_open(ctx, unit_id):
             ctx.service.close()
+        if self.accounts.open_unit_of(user_id) == unit_id:
+            self.accounts.set_open_unit(user_id, None)
         self.accounts.delete_unit(user_id, unit_id)
         storage.remove_unit_file(self.data_dir, user_id, unit["filename"])
         return {"deleted": unit_id, "name": unit["name"]}
@@ -714,8 +773,7 @@ class WorkloadApp:
         if not path.is_file():
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit's data is missing.")
         path = self._unit_file(user_id, unit_id, unit["filename"])
-        if ctx.service and ctx.service.unit \
-                and ctx.service.unit.get("id") == unit_id:
+        if _is_open(ctx, unit_id):
             data = export_module.unit_workbook(ctx.service.workbook, unit["name"])
         else:
             data = export_module.unit_workbook(storage.Unit(path), unit["name"])
@@ -827,6 +885,12 @@ class WorkloadApp:
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                     f"{existing['username']} is a manager account; a manager "
                     f"cannot also be given one person's view.")
+            others = {m["owner_id"] for m in self.accounts.memberships(existing["id"])}
+            if others - {ctx.user["id"]}:
+                # Somebody else's team member: not yours to add to a unit, or
+                # to learn anything about.
+                raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "That username is taken. Choose another.")
             user = existing
 
         self.accounts.grant(user_id=user["id"], unit_id=unit["id"],
@@ -880,7 +944,11 @@ class WorkloadApp:
 
     def revoke_access(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
         unit = self._open_unit_or_refuse(ctx)
-        target = int(user_id)
+        try:
+            target = int(user_id)
+        except ValueError:
+            raise ApiError(HTTPStatus.NOT_FOUND,
+                           "That account has no access to this unit.")
         if self.accounts.membership(target, unit["id"]) is None:
             raise ApiError(HTTPStatus.NOT_FOUND,
                            "That account has no access to this unit.")
@@ -992,42 +1060,25 @@ class WorkloadApp:
             self.accounts.record_import(unit["id"], {
                 "ok": False, "error": str(body["failed"])[:500], "errors": []})
             return {"ok": False, "recorded": True}
-        service = self.service_for(user["id"])
-        service.refresh()
-        # The job imports into its own unit, whichever one the manager left
-        # open in the browser, and puts theirs back afterwards.
-        before = service.unit
-        switched = not before or before.get("id") != unit["id"]
-        if switched:
-            ctx.user, ctx.service = user, service
-            self.open_unit(ctx, query, body, unit["id"])
+        # A service of its own: whatever the manager has open in the browser,
+        # and anything they have staged there, is left exactly as it was.
+        service = WorkloadService(autosave=self.autosave)
         try:
+            self._open(service, user["id"], unit["id"])
             late = body.get("late") or []
             result = nightly.run(service, body.get("files") or [],
                                  late if isinstance(late, list) else [late])
-        except ApiError as error:
+        except (ApiError, ImportError_) as error:
+            message = error.message if isinstance(error, ApiError) else str(error)
+            errors = error.errors if isinstance(error, ApiError) else [message]
             self.accounts.record_import(unit["id"], {
-                "ok": False, "error": error.message, "errors": error.errors})
+                "ok": False, "error": message, "errors": errors})
             raise
         finally:
-            if switched:
-                self._reopen(user["id"], before)
+            service.close()
         result = {"ok": True, "unit": unit["name"], **result}
         self.accounts.record_import(unit["id"], result)
         return result
-
-    def _reopen(self, user_id: int, unit: Optional[Dict[str, Any]]) -> None:
-        """Put back the unit a manager had open, if it is still theirs."""
-        service = self.service_for(user_id)
-        mine = self.accounts.unit(user_id, unit["id"]) if unit else None
-        path = storage.unit_path(self.data_dir, user_id, mine["filename"]) \
-            if mine else None
-        if path is not None and path.is_file():
-            path = self._unit_file(user_id, mine["id"], mine["filename"])
-            service.open(path, unit=self.accounts.unit(user_id, mine["id"]),
-                         keep_copy=self._copier(user_id, path))
-        else:
-            service.close()
 
     # ------------------------------------------------------------------
     # the routes
@@ -1071,7 +1122,7 @@ class WorkloadApp:
             ("DELETE", "/api/units/{}", self.delete_unit, "manager"),
             ("GET", "/api/units/{}/download", self.download_unit, "manager"),
             ("POST", "/api/units/close",
-             lambda ctx, q, b: ctx.service.close(), "manager"),
+             self.close_unit, "manager"),
 
             # -- the workbook that account has open
             ("GET", "/api/status", lambda ctx, q, b: ctx.service.status(), "manager"),
@@ -1241,12 +1292,46 @@ def _cookie(name: str, value: str, *, secure: bool,
     return "; ".join(parts)
 
 
+def _is_open(ctx: "Context", unit_id: str) -> bool:
+    """Whether the request's service has this unit open."""
+    return bool(ctx.service and ctx.service.unit
+                and ctx.service.unit.get("id") == unit_id)
+
+
 def parse_cookies(header: Optional[str]) -> Dict[str, str]:
-    if not header:
+    """Cookies by name, read one at a time.
+
+    By hand rather than with ``SimpleCookie``, which gives up on the whole
+    header at the first cookie it dislikes -- one odd cookie from another app
+    on the same host would hide the session and sign everyone out.
+    """
+    cookies: Dict[str, str] = {}
+    for part in (header or "").split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep and name and name not in cookies:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            cookies[name] = value
+    return cookies
+
+
+def parse_body(raw: bytes, content_type: str) -> Dict[str, Any]:
+    """A request's JSON body, for the local server and WSGI alike.
+
+    Anything with a body must say it is JSON. A browser only sends that
+    cross-site after asking first, so a form on another site cannot post to
+    the API -- not even to sign somebody in to an account of its choosing.
+    """
+    if not raw.strip():
         return {}
-    jar = SimpleCookie()
+    if not (content_type or "").lower().startswith("application/json"):
+        raise ApiError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                       "Send the request as application/json.")
     try:
-        jar.load(header)
-    except Exception:                                   # pragma: no cover
-        return {}
-    return {key: morsel.value for key, morsel in jar.items()}
+        body = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Request body was not valid JSON.")
+    if not isinstance(body, dict):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Request body must be an object.")
+    return body

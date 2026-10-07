@@ -30,6 +30,7 @@ def request(app, method, path, body=None, cookie=None, https=False):
         "PATH_INFO": path,
         "QUERY_STRING": "",
         "CONTENT_LENGTH": str(len(raw)),
+        "CONTENT_TYPE": "application/json",
         "wsgi.input": io.BytesIO(raw),
         "wsgi.url_scheme": "https" if https else "http",
     }
@@ -114,6 +115,7 @@ class TestTheEntryPoint:
             "PATH_INFO": "/api/auth/login",
             "QUERY_STRING": "",
             "CONTENT_LENGTH": "5",
+            "CONTENT_TYPE": "application/json",
             "wsgi.input": io.BytesIO(b"{{{{{"),
             "wsgi.url_scheme": "http",
         }
@@ -122,7 +124,27 @@ class TestTheEntryPoint:
         body = b"".join(wsgi.application(
             environ, lambda s, h: captured.update(status=s)))
         assert captured["status"].startswith("400")
-        assert b"Bad request" in body
+        assert b"not valid JSON" in body
+
+    def test_a_form_from_another_site_cannot_sign_anyone_in(self, app):
+        raw = json.dumps({"username": "ahmed", "password": PASSWORD}).encode()
+        environ = {
+            "REQUEST_METHOD": "POST", "PATH_INFO": "/api/auth/login",
+            "QUERY_STRING": "", "CONTENT_LENGTH": str(len(raw)),
+            "CONTENT_TYPE": "text/plain", "wsgi.input": io.BytesIO(raw),
+            "wsgi.url_scheme": "http", "HTTP_ORIGIN": "https://elsewhere.example",
+        }
+        captured = {}
+        wsgi._app = app
+        wsgi.application(environ, lambda s, h: captured.update(status=s, headers=h))
+        assert captured["status"].startswith("415")
+        assert not any(name == "Set-Cookie" for name, _ in captured["headers"])
+
+    def test_one_odd_cookie_does_not_hide_the_session(self, app):
+        cookie = sign_in(app)
+        status, _headers, _body = request(
+            app, "GET", "/api/status", cookie='x={"a":1}; other=a b; ' + cookie)
+        assert status.startswith("200")
 
     def test_an_unknown_route_is_a_404(self, app):
         status, _headers, _body = request(app, "GET", "/api/nope")

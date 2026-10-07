@@ -13,6 +13,7 @@ the exact text to paste into the host's WSGI file for *this* checkout.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -116,11 +117,15 @@ def _check_code(report: Report, root: Path) -> None:
                    f"{defaults} is not there, so no new unit can be set up. "
                    f"Pull the code again.")
 
-    missing = [name for name in ("index.html", "login.html", "member.html",
-                                 "app.js", "member.js", "app.css", "charts.js",
-                                 "tables.js", "pocket.js", "planner.js", "checkins.js",
-                                 "manifest.json", "sw.js")
-               if not (root / "workload_app" / "static" / name).is_file()]
+    static = root / "workload_app" / "static"
+    pages = ("index.html", "login.html", "member.html")
+    wanted = set(pages) | {"sw.js", "offline.html"}
+    for page in pages:
+        if (static / page).is_file():
+            # Whatever a page loads itself, so a new script cannot be missed.
+            text = (static / page).read_text(encoding="utf-8", errors="replace")
+            wanted.update(ref for ref in re.findall(r'(?:src|href)="([^"/:#][^":#]*)"', text))
+    missing = sorted(name for name in wanted if not (static / name).is_file())
     if missing:
         report.add("bad", "The front end is incomplete",
                    f"missing: {', '.join(missing)}")

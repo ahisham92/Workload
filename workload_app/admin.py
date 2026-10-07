@@ -136,8 +136,21 @@ def _list(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _clean(username: str) -> str:
+    """Usernames are stored as typed into the sign-in form: folded to lower case."""
+    try:
+        return accounts_module.clean_username(username)
+    except AccountError:
+        return username
+
+
+def _find_user(db: Accounts, username: str):
+    wanted = _clean(username)
+    return next((u for u in db.users() if u["username"] == wanted), None)
+
+
 def _link(db: Accounts, data_dir: Path, args) -> int:
-    user = next((u for u in db.users() if u["username"] == args.username), None)
+    user = _find_user(db, args.username)
     if user is None:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
@@ -165,7 +178,7 @@ def _link(db: Accounts, data_dir: Path, args) -> int:
 
 
 def _password(db: Accounts, data_dir: Path, args) -> int:
-    user = next((u for u in db.users() if u["username"] == args.username), None)
+    user = _find_user(db, args.username)
     if user is None:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
@@ -181,7 +194,7 @@ def _password(db: Accounts, data_dir: Path, args) -> int:
 
 
 def _remove(db: Accounts, data_dir: Path, args) -> int:
-    user = next((u for u in db.users() if u["username"] == args.username), None)
+    user = _find_user(db, args.username)
     if user is None:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
@@ -200,7 +213,7 @@ def _remove(db: Accounts, data_dir: Path, args) -> int:
 def _import(db: Accounts, data_dir: Path, args) -> int:
     from . import library
 
-    user = next((u for u in db.users() if u["username"] == args.username), None)
+    user = _find_user(db, args.username)
     if user is None:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
@@ -229,7 +242,7 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
     """The console half of the app's ⭱ button, for a file already on the host."""
     from . import library
 
-    user = next((u for u in db.users() if u["username"] == args.username), None)
+    user = _find_user(db, args.username)
     if user is None:
         print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
@@ -274,7 +287,7 @@ def _units(db: Accounts, data_dir: Path, args) -> int:
 
     users = db.users()
     if args.username:
-        users = [u for u in users if u["username"] == args.username]
+        users = [u for u in users if u["username"] == _clean(args.username)]
         if not users:
             print(f"error: no account called {args.username}", file=sys.stderr)
             return 2
