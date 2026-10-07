@@ -1299,7 +1299,7 @@ function renderFormation(report) {
         el('p', { class: 'muted' },
           'Everyone in the unit by grade, the most senior at the back. The ring is how much '
           + `of their capacity ${periodName(report.period)} used; teammates are joined. `
-          + 'Choose someone to open their own report.')),
+          + 'Choose someone to open their profile.')),
       el('span', { class: 'legend formation-key' },
         ...[['ok', 'on plan'], ['warn', 'light'], ['bad', 'over, or far under']].map(
           ([key, label]) => el('span', { class: 'legend-item' },
@@ -1307,6 +1307,7 @@ function renderFormation(report) {
     charts.formation(rows, {
       groups: teams,
       onPick: (picked) => {
+        if (window.showcase) { window.showcase.profile(picked.id); return; }
         state.reportView = 'member';
         state.reportMember = picked.id;
         switchView('reports');
@@ -2614,6 +2615,7 @@ function switchView(view) {
   if (view === 'resourcing') loadResourcing();
   if (view === 'planner' && window.planner) window.planner.load();
   if (view === 'checkins' && window.checkins) window.checkins.load();
+  if (view === 'team' && window.showcase) window.showcase.teamCards();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
     section.classList.toggle('is-active', section.id === `view-${view}`);
