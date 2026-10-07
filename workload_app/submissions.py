@@ -39,7 +39,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from . import derive
 from . import planner

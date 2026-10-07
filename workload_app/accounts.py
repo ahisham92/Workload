@@ -384,11 +384,6 @@ class Accounts:
         with self._connect() as db:
             db.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
 
-    def set_display_name(self, user_id: int, display_name: str) -> None:
-        with self._connect() as db:
-            db.execute("UPDATE users SET display_name = ? WHERE id = ?",
-                       ((display_name or "").strip(), user_id))
-
     def seen(self, user_id: int) -> None:
         with self._connect() as db:
             db.execute("UPDATE users SET last_seen = ? WHERE id = ?",
@@ -463,10 +458,6 @@ class Accounts:
         with self._connect() as db:
             db.execute("DELETE FROM sessions WHERE token_hash = ?",
                        (_token_hash(token),))
-
-    def end_all_sessions(self, user_id: int) -> None:
-        with self._connect() as db:
-            db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
 
     # -- import keys -----------------------------------------------------
     #
