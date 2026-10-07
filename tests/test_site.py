@@ -353,3 +353,115 @@ class TestOnItsOwnNothingChanged:
         assert "site" not in who
         assert ask("POST", "/api/auth/link", {"username": "a", "password": "b"},
                    cookie=headers["Set-Cookie"].split(";")[0], mount="")[0] == 404
+
+
+class TestBringingUnitsFromTheOldSitesFolder:
+    """The old site kept its own folder; the tab keeps another. ``bring``
+    copies the units across and leaves the old folder exactly as it was."""
+
+    @pytest.fixture
+    def old_site(self, tmp_path, monkeypatch):
+        folder = tmp_path / "workload-data"
+        old = WorkloadApp(folder)
+        monkeypatch.setattr(wsgi, "_app", old)
+        user = old.accounts.create_user("ahmed", PASSWORD, is_admin=True)
+        token = old.accounts.start_session(user["id"])
+        cookie = f"workload_session={token}"
+        assert ask("POST", "/api/units", {"name": "Marine Structures"},
+                   cookie=cookie, mount="")[0] == 200
+        assert ask("POST", "/api/team", {"short_name": "Osama", "pattern": "*Osama*",
+                                         "available_hours": 160},
+                   cookie=cookie, mount="")[0] == 200
+        old.accounts.create_user("someone", PASSWORD)       # no units of their own
+        return folder
+
+    @staticmethod
+    def snapshot(folder):
+        import gc
+
+        gc.collect()        # an account database left open would still be folding in
+        return {p.relative_to(folder): p.read_bytes()
+                for p in sorted(folder.rglob("*")) if p.is_file()}
+
+    def test_the_unit_and_what_is_in_it_arrive_under_the_site_account(
+            self, app, old_site, monkeypatch, tmp_path, capsys):
+        from workload_app import admin
+
+        before = self.snapshot(old_site)
+        monkeypatch.setattr(wsgi, "_app", app)
+        ask("GET", "/api/auth/me", site=AHMED)              # opened the tab once
+        code = admin.main(["--data-dir", str(tmp_path / "instance"),
+                           "bring", str(old_site)])
+        assert code == 0, capsys.readouterr().err
+
+        units = ask("GET", "/api/units", site=AHMED)[2]["units"]
+        assert [u["name"] for u in units] == ["Marine Structures"]
+        assert ask("POST", f"/api/units/{units[0]['id']}/open", site=AHMED)[0] == 200
+        team = ask("GET", "/api/team", site=AHMED)[2]
+        assert "Osama" in json.dumps(team)
+        # The old site's folder is byte for byte what it was.
+        assert self.snapshot(old_site) == before
+
+    def test_running_it_again_brings_nothing_twice(
+            self, app, old_site, monkeypatch, tmp_path, capsys):
+        from workload_app import admin
+
+        monkeypatch.setattr(wsgi, "_app", app)
+        ask("GET", "/api/auth/me", site=AHMED)
+        argv = ["--data-dir", str(tmp_path / "instance"), "bring", str(old_site)]
+        assert admin.main(argv) == 0
+        assert admin.main(argv) == 0
+        assert admin.main(argv) == 0
+        names = sorted(u["name"] for u in ask("GET", "/api/units", site=AHMED)[2]["units"])
+        assert names == ["Marine Structures", "Marine Structures (old site)"]
+
+    def test_with_several_accounts_here_it_asks_which(
+            self, app, old_site, monkeypatch, tmp_path, capsys):
+        from workload_app import admin
+
+        monkeypatch.setattr(wsgi, "_app", app)
+        ask("GET", "/api/auth/me", site=AHMED)
+        ask("GET", "/api/auth/me", site=OSAMA)
+        argv = ["--data-dir", str(tmp_path / "instance"), "bring", str(old_site)]
+        assert admin.main(argv) == 2
+        assert "--to" in capsys.readouterr().err
+        assert admin.main(argv + ["--to", "ahmed@example.com"]) == 0
+        assert [u["name"] for u in ask("GET", "/api/units", site=AHMED)[2]["units"]] \
+            == ["Marine Structures"]
+        assert ask("GET", "/api/units", site=OSAMA)[2]["units"] == []
+
+    def test_before_the_tab_was_ever_opened_it_says_so(
+            self, app, old_site, tmp_path, capsys):
+        from workload_app import admin
+
+        assert admin.main(["--data-dir", str(tmp_path / "instance"),
+                           "bring", str(old_site)]) == 2
+        assert "open Workload in the site once" in capsys.readouterr().err
+
+    def test_a_unit_still_on_its_old_workbook_arrives_as_a_database(
+            self, app, source_path, monkeypatch, tmp_path, capsys):
+        """The old site may never have opened its unit since the move to
+        databases: the copy is brought across, the old folder is not."""
+        import shutil
+
+        from workload_app import admin, storage
+        from workload_app.accounts import Accounts
+
+        folder = tmp_path / "workload-data"
+        old = Accounts(folder / "accounts.db")
+        user = old.create_user("ahmed", PASSWORD)
+        unit = old.create_unit(user["id"], "Marine Structures", "a1b2c3d4.xlsx")
+        shutil.copy(source_path, storage.user_dir(folder, user["id"]) / "a1b2c3d4.xlsx")
+        before = self.snapshot(folder)
+
+        monkeypatch.setattr(wsgi, "_app", app)
+        ask("GET", "/api/auth/me", site=AHMED)
+        assert admin.main(["--data-dir", str(tmp_path / "instance"),
+                           "bring", str(folder)]) == 0, capsys.readouterr().err
+        assert self.snapshot(folder) == before
+        assert old.unit(user["id"], unit["id"])["filename"] == "a1b2c3d4.xlsx"
+        units = ask("GET", "/api/units", site=AHMED)[2]["units"]
+        assert [u["name"] for u in units] == ["Marine Structures"]
+        assert ask("POST", f"/api/units/{units[0]['id']}/open", site=AHMED)[0] == 200
+        names = json.dumps(ask("GET", "/api/team", site=AHMED)[2])
+        assert all(n in names for n in ("Ahmed", "Osama", "Kirolos"))

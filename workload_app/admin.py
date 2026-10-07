@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import accounts as accounts_module, deployment, storage
+from . import accounts as accounts_module, config as cfg, deployment, storage
 from .accounts import AccountError, Accounts
 
 
@@ -67,6 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("unit", help="the unit's name, or its id")
     restore.add_argument("workbook", type=Path, metavar="copy",
                          help="a .db copy from the backups folder, or a workbook")
+
+    bring = sub.add_parser(
+        "bring", help="copy an account's units from another Workload folder "
+                      "(the old site's) into an account here; that folder is "
+                      "only read, never changed")
+    bring.add_argument("source", type=Path,
+                       help="the other Workload data folder, e.g. ~/workload-data")
+    bring.add_argument("--from", dest="from_user", default=None,
+                       help="the account there (default: the only one with units)")
+    bring.add_argument("--to", dest="to_user", default=None,
+                       help="the account here: its username, or what it signs "
+                            "in to the site with (default: the only one here)")
 
     units = sub.add_parser(
         "units", help="what each unit actually holds: rows, hours, projects")
@@ -275,6 +287,103 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _bring(db: Accounts, data_dir: Path, args) -> int:
+    """Units from a Workload that ran somewhere else, copied into an account here.
+
+    For the day Workload becomes a tab of a bigger site: the old site's folder
+    is copied aside first and only the copy is opened, so the old site keeps
+    working on exactly what it had, and running this twice brings nothing twice.
+    """
+    import shutil
+    import tempfile
+
+    source = Path(args.source).expanduser()
+    if not (source / "accounts.db").is_file():
+        print(f"error: {source} is not a Workload folder (no accounts.db in it)",
+              file=sys.stderr)
+        return 2
+    if source.resolve() == Path(data_dir).resolve():
+        print("error: that is this folder; name the other one", file=sys.stderr)
+        return 2
+
+    target = _pick(db.users(), args.to_user, "here", "--to")
+    if target is None:
+        return 2
+
+    with tempfile.TemporaryDirectory(prefix="workload-bring-") as scratch:
+        copy = Path(scratch) / "copy"
+        # Its kept copies are not needed to bring the units, and can be large.
+        shutil.copytree(source, copy,
+                        ignore=shutil.ignore_patterns(cfg.BACKUP_DIRNAME))
+        old = Accounts(copy / "accounts.db")
+        owner = _pick([u for u in old.users() if args.from_user or u["units"]],
+                      args.from_user, f"at {source}", "--from")
+        if owner is None:
+            return 2
+
+        have = {u["name"].strip().lower() for u in db.units(target["id"])}
+        brought = []
+        for unit in old.units(owner["id"]):
+            name = unit["name"]
+            if name.strip().lower() in have:
+                name = f"{name} (old site)"
+                if name.strip().lower() in have:
+                    print(f"  {unit['name']!r}: already brought, left alone")
+                    continue
+            try:
+                found = storage.bring_across(copy, owner["id"], unit["id"],
+                                             unit["filename"])
+                storage._checkpoint(found["path"])
+                storage._check_unit_database(found["path"])
+            except Exception as exc:                    # noqa: BLE001 - said, then skipped
+                print(f"  {unit['name']!r}: could not be read ({exc}); skipped")
+                continue
+            made = db.create_unit(target["id"], name, "")
+            dest = storage._target(data_dir, target["id"], made["id"])
+            shutil.copyfile(found["path"], dest)
+            db.set_unit_filename(target["id"], made["id"], dest.name)
+            have.add(name.strip().lower())
+            brought.append(made)
+            print(f"  {unit['name']!r} is now {target['username']}'s unit {name!r}")
+
+    if brought and not db.open_unit_of(target["id"]):
+        db.set_open_unit(target["id"], brought[0]["id"])
+    print(f"Brought {len(brought)} unit(s) from {owner['username']} at {source} "
+          f"to {target['username']}"
+          + (f" ({target['site_login']})" if target.get("site_login") else "")
+          + f". Nothing in {source} was changed.")
+    if brought:
+        print("  Who was given access to them there is not carried over: "
+              "give it again from the Team tab.")
+    return 0
+
+
+def _pick(users, wanted: Optional[str], where: str, flag: str):
+    """One account out of ``users``: the one named, or the only one there is."""
+    if wanted:
+        key = str(wanted).strip().lower()
+        hits = [u for u in users
+                if key in {str(u["username"]).lower(),
+                           str(u.get("site_login") or "").lower()}]
+        if len(hits) == 1:
+            return hits[0]
+    elif len(users) == 1:
+        return users[0]
+    names = ", ".join(u["username"] + (f" ({u['site_login']})" if u.get("site_login") else "")
+                      for u in users)
+    if wanted:
+        print(f"error: no account {wanted!r} {where}. There are: {names or 'none'}",
+              file=sys.stderr)
+    elif not users:
+        print(f"error: no account {where} yet"
+              + (" -- open Workload in the site once first, so it has one"
+                 if flag == "--to" else ""), file=sys.stderr)
+    else:
+        print(f"error: more than one account {where}; say which with {flag}. "
+              f"There are: {names}", file=sys.stderr)
+    return None
+
+
 def _units(db: Accounts, data_dir: Path, args) -> int:
     """Say what is in each unit, straight from the files, for when the app
     looks empty and the question is whether the data is gone or unreachable."""
@@ -356,6 +465,7 @@ COMMANDS = {
     "check": _check,
     "units": _units,
     "restore": _restore,
+    "bring": _bring,
 }
 
 
