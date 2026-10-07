@@ -26,6 +26,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from . import derive
+from .model import ValidationError
 
 EVERYONE = "*"
 
@@ -40,11 +41,8 @@ LONGEST_DAYS = 120
 HALF_DAY_HOURS = 4.0
 
 
-class CalendarError(ValueError):
-    def __init__(self, errors: Sequence[str]):
-        errors = list(errors)
-        super().__init__("; ".join(errors))
-        self.errors = errors
+class CalendarError(ValidationError):
+    pass
 
 
 def workbook_holidays(wb) -> Set[str]:

@@ -350,41 +350,12 @@ def _spread(budget: float, start: Optional[_dt.date], end: Optional[_dt.date],
 
 def _hours_in(index: TimesheetIndex, number: str, period: Period,
               engineer: Optional[str] = None) -> float:
-    start, end = period.start, period.end
-    if start is None or end is None:
+    if period.start is None or period.end is None:
         return 0.0
+    between = (period.start, period.end)
     if is_proposal_code(number):
-        rows = [r for r in index.rows if r["job_type"] in (
-            "2-Proposals Chargeable", "3-Proposals Regular")]
-        year = None
-        import re
-        m = re.search(r"(\d{2})\s*$", number.strip())
-        if m:
-            year = 2000 + int(m.group(1))
-        chargeable = "chargable" in number.lower() or "chargeable" in number.lower()
-        wanted = "2-Proposals Chargeable" if chargeable else "3-Proposals Regular"
-        total = 0.0
-        for row in rows:
-            if row["job_type"] != wanted:
-                continue
-            if engineer and row["engineer"] != engineer:
-                continue
-            date = row["date"]
-            if date is None or not (start <= date <= end):
-                continue
-            if year is not None and date.year != year:
-                continue
-            total += row["hours"]
-        return total
-    total = 0.0
-    for row in index.by_job.get(number.strip(), ()):  # type: ignore[arg-type]
-        if engineer and row["engineer"] != engineer:
-            continue
-        date = row["date"]
-        if date is None or not (start <= date <= end):
-            continue
-        total += row["hours"]
-    return total
+        return index.hours_for_proposal(number, engineer=engineer, between=between)
+    return index.hours_for_job(number, engineer=engineer, between=between)
 
 
 # -- team and people -------------------------------------------------------

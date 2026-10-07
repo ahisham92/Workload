@@ -29,6 +29,8 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .model import ValidationError
+
 #: The template's columns, in order, and what each may be headed in a list
 #: somebody already keeps.
 COLUMNS: Sequence[Tuple[str, str, Sequence[str]]] = (
@@ -61,11 +63,8 @@ ACCEPTED_STEP = re.compile(r"accept|code 1|approv|comments closed|close ?out|fin
 HEADER_SEARCH_ROWS = 20
 
 
-class DrawingListError(ValueError):
-    def __init__(self, errors: Sequence[str]):
-        errors = list(errors)
-        super().__init__("; ".join(errors))
-        self.errors = errors
+class DrawingListError(ValidationError):
+    pass
 
 
 def _norm(text: Any) -> str:

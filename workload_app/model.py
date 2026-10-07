@@ -11,17 +11,21 @@ import datetime as _dt
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Union
 
 from . import config as cfg
 from .xlsx_io import from_serial
 
 
 class ValidationError(ValueError):
-    """Raised when a change would break one of the unit's own rules."""
+    """Raised when a change would break one of the unit's own rules.
 
-    def __init__(self, errors: Sequence[str]):
-        self.errors = list(errors)
+    Every input the app refuses is one of these, with every reason at once,
+    and the web layer answers all of them the same way (422).
+    """
+
+    def __init__(self, errors: Union[str, Sequence[str]]):
+        self.errors = [errors] if isinstance(errors, str) else list(errors)
         super().__init__("; ".join(self.errors))
 
 
@@ -54,6 +58,26 @@ def as_number(value: Any) -> Optional[float]:
         return float(text)
     except ValueError:
         return None
+
+
+def stored_date(value: Any) -> Optional[_dt.date]:
+    """A date as the app keeps one (ISO text), or a date already; else None.
+
+    Strict on purpose, unlike :func:`as_date`: a stored value is never typed by
+    hand, so day-first and month-first guesses have no place here.
+    """
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return from_serial(float(value)) if value > 0 else None
+    if isinstance(value, str) and value:
+        try:
+            return _dt.date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
 
 
 def as_date(value: Any) -> Optional[_dt.date]:

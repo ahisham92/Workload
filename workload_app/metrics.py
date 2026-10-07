@@ -45,12 +45,15 @@ class TimesheetIndex:
             self.by_job[row["job_number"]].append(row)
 
     def hours_for_job(self, job_number: str, *, phase: Optional[int] = None,
-                      engineer: Optional[str] = None) -> float:
+                      engineer: Optional[str] = None,
+                      between: Optional[Tuple[_dt.date, _dt.date]] = None) -> float:
         total = 0.0
         for row in self.by_job.get(job_number.strip(), ()):
             if phase is not None and row["phase"] != phase:
                 continue
             if engineer is not None and row["engineer"] != engineer:
+                continue
+            if not _within(row["date"], between):
                 continue
             total += row["hours"]
         return total
@@ -63,7 +66,9 @@ class TimesheetIndex:
         ]
         return (min(dates), max(dates)) if dates else (None, None)
 
-    def hours_for_proposal(self, code: str, *, engineer: Optional[str] = None) -> float:
+    def hours_for_proposal(self, code: str, *, engineer: Optional[str] = None,
+                           between: Optional[Tuple[_dt.date, _dt.date]] = None
+                           ) -> float:
         """Proposal effort, matched the way the Phasing sheet matches it."""
         job_type = PROPOSAL_JOB_TYPES[
             "chargeable" if "chargable" in code.lower() or "chargeable" in code.lower()
@@ -78,8 +83,18 @@ class TimesheetIndex:
                 continue
             if year is not None and (row["date"] is None or row["date"].year != year):
                 continue
+            if not _within(row["date"], between):
+                continue
             total += row["hours"]
         return total
+
+
+def _within(day: Optional[_dt.date],
+            between: Optional[Tuple[_dt.date, _dt.date]]) -> bool:
+    """Whether a row's day falls in ``between`` (inclusive); always, without one."""
+    if between is None:
+        return True
+    return day is not None and between[0] <= day <= between[1]
 
 
 def _year_suffix(code: str) -> Optional[int]:
