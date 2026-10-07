@@ -1,6 +1,7 @@
 """The xlsx layer must not disturb anything it was not asked to change."""
 
 import datetime as dt
+import re
 import zipfile
 
 import pytest
@@ -63,7 +64,7 @@ class TestSheetParsing:
                 assert raw.sheet(name).xml == zf.read(path).decode("utf-8"), name
 
     def test_reads_values_of_every_kind(self, raw):
-        assert raw.get_text("Inputs", "A6") == "N25178-0100D"
+        assert re.fullmatch(r"[A-Z]+\d+-\d{4}D", raw.get_text("Inputs", "A6"))
         assert raw.get_number("Inputs", "C6") == 2.4
         assert raw.get_date("Inputs", "D6") == dt.date(2026, 7, 1)
         assert raw.get_value("Inputs", "A5") == "Number"      # a header string

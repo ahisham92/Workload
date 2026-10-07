@@ -103,9 +103,9 @@ class TestWhoIsAsking:
     def test_changing_what_you_sign_in_with_does_not_lose_your_units(self, app):
         """The site's own identifier is the key; an address can be corrected."""
         unit_for(AHMED)
-        renamed = dict(AHMED, login="ahmed.mitwally@example.com", name="Ahmed M")
+        renamed = dict(AHMED, login="ahmed.mockridge@example.com", name="Ahmed M")
         _, _, who = ask("GET", "/api/auth/me", site=renamed)
-        assert who["user"]["site_login"] == "ahmed.mitwally@example.com"
+        assert who["user"]["site_login"] == "ahmed.mockridge@example.com"
         assert [u["name"] for u in ask("GET", "/api/units", site=renamed)[2]["units"]] \
             == ["Marine Structures"]
         # And somebody given the old address afterwards does not inherit them.

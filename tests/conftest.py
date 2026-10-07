@@ -100,3 +100,17 @@ def wb(unit_copy) -> Unit:
 def readonly_wb(migrated) -> Unit:
     """Shared handle; do not write through this one."""
     return Unit(migrated)
+
+
+#: Projects of the test workbook, by their place in its register.  The tests
+#: name a project this way rather than by its job number, which is real and
+#: has no business in a public repository.
+FIRST_PROJECT = 0      # its first deliverable is the register's first
+BUSY_PROJECT = 2       # all three engineers booked to it, several on phase 4
+FINISHED_PROJECT = 14  # fully earned, with a CPI well over one
+
+
+@pytest.fixture(scope="session")
+def project_numbers(readonly_wb) -> list:
+    """The test workbook's project numbers, in register order."""
+    return [p.number for p in readonly_wb.projects()]

@@ -48,20 +48,20 @@ D = dt.date
 
 def team_exports():
     ahmed = [
-        row("Ahmed Mitwally", "N25185-0100D", D(2026, 3, 1), 8, grade="Lead"),
-        row("Ahmed Mitwally", "N25185-0100D", D(2026, 8, 2), 8, phase=4,
+        row("Ahmed Mockridge", "T10001-0100D", D(2026, 3, 1), 8, grade="Lead"),
+        row("Ahmed Mockridge", "T10001-0100D", D(2026, 8, 2), 8, phase=4,
             deliverable="Detailed Design ST", grade="Lead"),
-        row("Ahmed Mitwally", "LEAVE", D(2026, 8, 3), 8, job_type="6-Additives",
+        row("Ahmed Mockridge", "LEAVE", D(2026, 8, 3), 8, job_type="6-Additives",
             phase=0, deliverable="", grade="Lead"),
         # Last booked years before everything else: finished, whatever the
         # status on the row says.
-        row("Ahmed Mitwally", "S12066-0100D", D(2019, 5, 1), 40, phase=4,
+        row("Ahmed Mockridge", "T10002-0100D", D(2019, 5, 1), 40, phase=4,
             deliverable="Tender Documents SB", grade="P1"),
     ]
     osama = [
-        row("Osama Ayman", "N25185-0100D", D(2026, 8, 4), 24, phase=4,
+        row("Osama Ashdown", "T10001-0100D", D(2026, 8, 4), 24, phase=4,
             deliverable="Detailed Design ST", grade="Professional"),
-        row("Osama Ayman", "E26084-0100D", D(2026, 8, 5), 4,
+        row("Osama Ashdown", "T10003-0100D", D(2026, 8, 5), 4,
             deliverable="Schematic Design - STR", status="Not Started",
             grade="Professional"),
     ]
@@ -86,7 +86,7 @@ class TestReadingTheTeamOutOfTheExports:
         blank.import_exports(team_exports())
         assert sorted(blank.workbook.engineer_names()) == ["Ahmed", "Osama"]
         team = {e["short_name"]: e for e in blank.workbook.team()}
-        assert team["Ahmed"]["pattern"] == "Ahmed Mitwally"
+        assert team["Ahmed"]["pattern"] == "Ahmed Mockridge"
         assert team["Ahmed"]["available_hours"] == pytest.approx(
             blank.workbook.hours_per_man_month())
 
@@ -102,7 +102,7 @@ class TestReadingTheTeamOutOfTheExports:
 
     def test_a_department_of_any_size_joins_the_team(self, blank):
         """A unit was once held to twelve people; the rest had no place."""
-        crowd = [row(f"Person{n} Surname", "N25185-0100D", D(2026, 8, 1), 8)
+        crowd = [row(f"Person{n} Surname", "T10001-0100D", D(2026, 8, 1), 8)
                  for n in range(40)]
         staged = blank.stage_exports([export(crowd, "department.xlsx")])
         assert staged["people_outside_workbook"] == []
@@ -112,7 +112,7 @@ class TestReadingTheTeamOutOfTheExports:
         assert result["people_outside_workbook"] == []
         assert result["data_check"]["rows_not_matching_pattern"] == 0
         index = metrics.TimesheetIndex(blank.workbook, blank.store)
-        assert index.hours_for_job("N25185-0100D") == pytest.approx(40 * 8)
+        assert index.hours_for_job("T10001-0100D") == pytest.approx(40 * 8)
         again = blank.stage_exports([export(crowd, "department.xlsx")])
         assert not any(p["new"] for p in again["people"])
 
@@ -130,7 +130,7 @@ class TestReadingTheTeamOutOfTheExports:
         assert "Osama" in check["verdict"]
         # Their hours are not lost: the project counts them.
         index = metrics.TimesheetIndex(blank.workbook, blank.store)
-        assert index.hours_for_job("N25185-0100D") == pytest.approx(16 + 24)
+        assert index.hours_for_job("T10001-0100D") == pytest.approx(16 + 24)
 
     def test_a_team_that_fits_has_nobody_outside(self, blank):
         staged = blank.stage_exports(team_exports())
@@ -152,7 +152,7 @@ class TestTheRegisterFromTheExports:
     def test_every_project_job_becomes_a_project(self, blank):
         result = blank.import_exports(team_exports())
         numbers = {p.number for p in blank.workbook.projects()}
-        assert numbers == {"N25185-0100D", "E26084-0100D", "S12066-0100D"}
+        assert numbers == {"T10001-0100D", "T10003-0100D", "T10002-0100D"}
         assert set(result["projects_added"]) == numbers
         # Leave is a charge code, never a project.
         assert "LEAVE" not in numbers
@@ -160,19 +160,19 @@ class TestTheRegisterFromTheExports:
     def test_dates_status_and_budget(self, blank):
         blank.import_exports(team_exports())
         projects = {p.number: p for p in blank.workbook.projects()}
-        live = projects["N25185-0100D"]
+        live = projects["T10001-0100D"]
         assert live.start == D(2026, 3, 1)
         assert live.end == D(2026, 8, 31)
         assert live.status == "Active"
         assert live.budget_mm == pytest.approx(0.3)      # 40 h / 185, rounded up
         assert derive.needs_confirming(live.notes)
-        assert projects["E26084-0100D"].status == "Not Started"
-        assert projects["S12066-0100D"].status == "Finalized"
+        assert projects["T10003-0100D"].status == "Not Started"
+        assert projects["T10002-0100D"].status == "Finalized"
 
     def test_a_deliverable_per_phase_weighted_and_split_by_hours(self, blank):
         blank.import_exports(team_exports())
         mine = {d.name: d for d in blank.workbook.deliverables()
-                if d.project_number == "N25185-0100D"}
+                if d.project_number == "T10001-0100D"}
         assert set(mine) == {"Concept Design SB", "Detailed Design ST"}
         concept, detail = mine["Concept Design SB"], mine["Detailed Design ST"]
         assert concept.phase_weight == pytest.approx(0.2)    # 8 of 40 hours
@@ -188,21 +188,21 @@ class TestTheRegisterFromTheExports:
     def test_a_finished_project_is_complete(self, blank):
         blank.import_exports(team_exports())
         (old,) = [d for d in blank.workbook.deliverables()
-                  if d.project_number == "S12066-0100D"]
+                  if d.project_number == "T10002-0100D"]
         assert old.type_code == "TD"
         steps = blank.workbook.reference()["credit_steps"]["TD"]
         assert old.step_no == max(s["step_no"] for s in steps)
 
     def test_a_project_already_in_the_register_is_left_alone(self, blank):
         blank.import_exports(team_exports())
-        detail = blank.project_detail("N25185-0100D")
+        detail = blank.project_detail("T10001-0100D")
         project = dict(detail["project"], name="Port Modernisation", budget_mm=26)
         blank.save_project_with_deliverables(
-            "N25185-0100D",
+            "T10001-0100D",
             {"project": project, "deliverables": detail["deliverables"]})
         result = blank.import_exports(team_exports())
         assert result["projects_added"] == []
-        kept = blank.workbook.project("N25185-0100D")
+        kept = blank.workbook.project("T10001-0100D")
         assert kept.name == "Port Modernisation"
         assert kept.budget_mm == 26
         # Saving it is what confirms it.
@@ -210,12 +210,12 @@ class TestTheRegisterFromTheExports:
 
     def test_proposal_effort_is_a_project_a_year(self, blank):
         bids = [
-            row("Ahmed Mitwally", "PS250346", D(2026, 2, 1), 10, phase=0,
+            row("Ahmed Mockridge", "PS990001", D(2026, 2, 1), 10, phase=0,
                 job_type="3-Proposals Regular", deliverable=""),
-            row("Ahmed Mitwally", "PE240049C", D(2025, 6, 1), 6, phase=0,
+            row("Ahmed Mockridge", "PE990002C", D(2025, 6, 1), 6, phase=0,
                 job_type="2-Proposals Chargeable", deliverable=""),
             # Too long ago to be worth a row of the register.
-            row("Ahmed Mitwally", "PE17262", D(2017, 6, 1), 6, phase=0,
+            row("Ahmed Mockridge", "PE99003", D(2017, 6, 1), 6, phase=0,
                 job_type="2-Proposals Chargeable", deliverable=""),
         ]
         blank.import_exports(team_exports() + [export(bids, "bids.xlsx")])
@@ -229,7 +229,7 @@ class TestTheRegisterFromTheExports:
     def test_hours_reach_the_figures(self, blank):
         blank.import_exports(team_exports())
         rows = {r["number"]: r for r in blank.projects()["metrics"]}
-        assert rows["N25185-0100D"]["actual_mm"] == pytest.approx(40 / 185, abs=1e-3)
+        assert rows["T10001-0100D"]["actual_mm"] == pytest.approx(40 / 185, abs=1e-3)
 
 
 class TestRules:
@@ -253,9 +253,9 @@ class TestRules:
 
     def test_short_names_are_unique(self):
         names = derive.short_names(
-            ["Ahmed Mitwally", "Ahmed Hassan", "Osama Ayman"], taken=["Osama"])
-        assert names == {"Ahmed Mitwally": "Ahmed M", "Ahmed Hassan": "Ahmed H",
-                         "Osama Ayman": "Osama A"}
+            ["Ahmed Mockridge", "Ahmed Hollowmere", "Osama Ashdown"], taken=["Osama"])
+        assert names == {"Ahmed Mockridge": "Ahmed M", "Ahmed Hollowmere": "Ahmed H",
+                         "Osama Ashdown": "Osama A"}
 
     def test_weights_always_total_one(self):
         weights = derive._round_weights([1, 1, 1])
@@ -309,15 +309,15 @@ class TestOverHttp:
         from test_server import call
         call(client, "/api/units/from-timesheets", "POST",
              {"files": team_exports()[:1]})
-        joiner = export([row("Kirolos Nazih", "AN23232-0100D", D(2026, 8, 6), 7,
+        joiner = export([row("Kirolos Northwind", "T10004-0100D", D(2026, 8, 6), 7,
                              deliverable="TENDER DOCUMENTS (SB)")])
         status, staged = call(client, "/api/timesheets/exports/stage", "POST",
                               {"files": [joiner]})
         assert status == 200
         assert staged["people"][0]["new"] is True
-        assert [p["number"] for p in staged["new_projects"]] == ["AN23232-0100D"]
+        assert [p["number"] for p in staged["new_projects"]] == ["T10004-0100D"]
         status, applied = call(client, "/api/timesheets/exports/apply", "POST",
                                {"token": staged["token"]})
         assert status == 200, applied
         assert applied["people_added"] == ["Kirolos"]
-        assert applied["projects_added"] == ["AN23232-0100D"]
+        assert applied["projects_added"] == ["T10004-0100D"]

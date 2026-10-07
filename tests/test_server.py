@@ -18,7 +18,7 @@ import pytest
 from workload_app import storage
 from workload_app.server import make_server
 
-from conftest import copy_unit
+from conftest import BUSY_PROJECT, FIRST_PROJECT, copy_unit
 
 PASSWORD = "a-good-long-password"
 
@@ -278,7 +278,7 @@ class TestWrites:
 
 
 class TestTimesheetEndpoints:
-    def _export(self, readonly_wb, name="Kirolos Nabil"):
+    def _export(self, readonly_wb, name="Kirolos Northwind"):
         openpyxl = pytest.importorskip("openpyxl")
         headers = readonly_wb.timesheet_headers("Kirolos")
         book = openpyxl.Workbook()
@@ -288,7 +288,7 @@ class TestTimesheetEndpoints:
         for day in range(1, 6):
             row = [None] * len(headers)
             row[index["Job Type"]] = "1-Projects"
-            row[index["JobNumber"]] = "N25185-0100D"
+            row[index["JobNumber"]] = readonly_wb.projects()[BUSY_PROJECT].number
             row[index["FullName"]] = name
             row[index["Date"]] = dt.date(2026, 9, day)
             row[index["Phase"]] = 4
@@ -332,7 +332,7 @@ class TestTimesheetEndpoints:
     def test_one_persons_export_is_refused_on_anothers_sheet(self, server, readonly_wb):
         status, staged = call(server, "/api/timesheets/stage", "POST", {
             "engineer": "Kirolos", "filename": "k.xlsx",
-            "content_base64": self._export(readonly_wb, name="Ahmed Mitwally"),
+            "content_base64": self._export(readonly_wb, name="Ahmed Mockridge"),
         })
         assert status == 200
         assert staged["errors"]
@@ -642,16 +642,18 @@ class TestProjectWithDeliverables:
         assert status == 422
         assert any("must total 100%" in m for m in body["errors"])
 
-    def test_the_detail_view_carries_its_figures(self, server):
-        _status, body = call(server, "/api/projects/N25185-0100D")
-        assert body["project"]["number"] == "N25185-0100D"
+    def test_the_detail_view_carries_its_figures(self, server, project_numbers):
+        number = project_numbers[BUSY_PROJECT]
+        _status, body = call(server, f"/api/projects/{number}")
+        assert body["project"]["number"] == number
         assert body["metrics"]["progress"] == pytest.approx(0.316, abs=0.001)
         assert len(body["deliverables"]) == 22
 
-    def test_editing_keeps_each_deliverable_on_its_own_row(self, server):
-        _status, before = call(server, "/api/projects/N25178-0100D")
+    def test_editing_keeps_each_deliverable_on_its_own_row(self, server, project_numbers):
+        number = project_numbers[FIRST_PROJECT]
+        _status, before = call(server, f"/api/projects/{number}")
         row = before["deliverables"][0]["row"]
-        status, body = call(server, "/api/projects/N25178-0100D/full", "PUT", {
+        status, body = call(server, f"/api/projects/{number}/full", "PUT", {
             "project": before["project"],
             "deliverables": [{**before["deliverables"][0], "name": "Renamed"}],
         })
@@ -778,7 +780,7 @@ class TestImportFilter:
             row = [None] * len(headers)
             row[index["Job Type"]] = "1-Projects"
             row[index["JobNumber"]] = job
-            row[index["FullName"]] = "Kirolos Nabil"
+            row[index["FullName"]] = "Kirolos Northwind"
             row[index["Date"]] = dt.date(2026, 9, (position % 28) + 1)
             row[index["Phase"]] = 1
             row[index["TotalHours"]] = 8.0
@@ -787,9 +789,9 @@ class TestImportFilter:
         book.save(buffer)
         return base64.b64encode(buffer.getvalue()).decode()
 
-    def test_unregistered_rows_are_left_out(self, server, readonly_wb):
-        content = self._export(readonly_wb,
-                               ["N25185-0100D"] * 3 + ["MYSTERY-0100D"] * 2)
+    def test_unregistered_rows_are_left_out(self, server, readonly_wb, project_numbers):
+        content = self._export(readonly_wb, [project_numbers[BUSY_PROJECT]] * 3
+                               + ["MYSTERY-0100D"] * 2)
         _status, staged = call(server, "/api/timesheets/stage", "POST", {
             "engineer": "Kirolos", "filename": "k.xlsx",
             "content_base64": content, "registered_only": True,
@@ -798,9 +800,10 @@ class TestImportFilter:
         assert staged["dropped_rows"] == 2
         assert staged["dropped"][0]["code"] == "MYSTERY-0100D"
 
-    def test_turning_the_filter_off_keeps_everything(self, server, readonly_wb):
-        content = self._export(readonly_wb,
-                               ["N25185-0100D"] * 3 + ["MYSTERY-0100D"] * 2)
+    def test_turning_the_filter_off_keeps_everything(self, server, readonly_wb,
+                                                    project_numbers):
+        content = self._export(readonly_wb, [project_numbers[BUSY_PROJECT]] * 3
+                               + ["MYSTERY-0100D"] * 2)
         _status, staged = call(server, "/api/timesheets/stage", "POST", {
             "engineer": "Kirolos", "filename": "k.xlsx",
             "content_base64": content, "registered_only": False,
@@ -808,8 +811,9 @@ class TestImportFilter:
         assert staged["row_count"] == 5
         assert staged["dropped_rows"] == 0
 
-    def test_absence_codes_are_kept(self, server, readonly_wb):
-        content = self._export(readonly_wb, ["LEAVE", "HOLIDAY", "N25185-0100D"])
+    def test_absence_codes_are_kept(self, server, readonly_wb, project_numbers):
+        content = self._export(readonly_wb, ["LEAVE", "HOLIDAY",
+                                             project_numbers[BUSY_PROJECT]])
         _status, staged = call(server, "/api/timesheets/stage", "POST", {
             "engineer": "Kirolos", "filename": "k.xlsx",
             "content_base64": content, "registered_only": True,
@@ -1063,7 +1067,7 @@ class TestAnImportNeverLosesRows:
             row = [None] * len(headers)
             row[index["Job Type"]] = "1-Projects"
             row[index["JobNumber"]] = numbers[position % len(numbers)]
-            row[index["FullName"]] = "Kirolos Nabil"
+            row[index["FullName"]] = "Kirolos Northwind"
             row[index["Date"]] = dt.date(2026, 1, 1) + dt.timedelta(
                 days=position % 300)
             row[index["Phase"]] = 4
