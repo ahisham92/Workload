@@ -1,4 +1,4 @@
-/* Workload — single page front end.
+/* Selecao+ (Workload) — single page front end.
  * The server owns every workbook rule; this file renders state and posts changes.
  */
 'use strict';
@@ -2344,7 +2344,7 @@ async function refreshAll() {
   state.projects = projects.projects;
   state.projectMetrics = projects.metrics;
 
-  $('#unit-title').textContent = status.unit ? status.unit.name : 'Workload';
+  $('#unit-title').textContent = status.unit ? status.unit.name : 'Selecao+';
   // The file lives on the server now, so its path is nobody's business but
   // the administrator's; what a person needs is which unit they are in.
   $('#workbook-path').textContent =
@@ -2588,7 +2588,7 @@ function renderReports() {
 
   setChildren($('#report-header'), 
     el('div', { class: 'print-head' },
-      el('h1', {}, data.unit ? data.unit.name : 'Workload'),
+      el('h1', {}, data.unit ? data.unit.name : 'Selecao+'),
       el('p', {}, `${REPORT_VIEWS.find(([k]) => k === state.reportView)[1]}`
         + ` · ${data.period.label} · as at ${data.as_at}`)));
 
@@ -3140,11 +3140,11 @@ function openSiteAccessModal(person) {
   if (!free.length) {
     openPanel(`Give ${person.short_name} access`, el('div', {},
       el('p', {}, people.length
-        ? 'Everybody who can open Workload on this site already has access to '
+        ? 'Everybody who can open Selecao+ on this site already has access to '
           + 'this unit as somebody.'
-        : 'Nobody else on this site has been given Workload yet.'),
+        : 'Nobody else on this site has been given Selecao+ yet.'),
       el('p', { class: 'muted' },
-        'Ask the administrator to make them an account with Workload ticked. '
+        'Ask the administrator to make them an account with Selecao+ ticked. '
         + 'They will then be in this list, and need no password from you.')));
     return;
   }
@@ -3155,7 +3155,7 @@ function openSiteAccessModal(person) {
       options: free.map((p) => ({ value: p.id,
         label: p.name && p.login && p.name !== p.login
           ? `${p.name} — ${p.login}` : (p.name || p.login) })),
-      hint: 'everyone who can open Workload on this site. They need no new '
+      hint: 'everyone who can open Selecao+ on this site. They need no new '
         + 'password: they sign in as they always do, and see their own figures '
         + 'in this unit and nothing else.' },
   ], async () => {

@@ -97,6 +97,8 @@ p { margin: 0 0 10px; }
 .mark { display: block; width: 32px; height: 32px; flex: none; }
 .mark svg { display: block; width: 100%; height: 100%; }
 .mark-bg { fill: var(--accent); }
+/* The plus in the name is the one accent the logo has. */
+.brand-plus { color: #FF5A1F; }
 /* The surface colour, so the bars read light on blue in daylight and dark on
    blue at night -- either way against the accent, never against the page. */
 .mark-bar { fill: var(--surface); }
