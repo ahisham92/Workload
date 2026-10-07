@@ -159,6 +159,7 @@ main { padding: 20px; max-width: 1500px; margin: 0 auto; }
 /* buttons */
 .btn {
   appearance: none; font: inherit; font-weight: 500; cursor: pointer;
+  white-space: nowrap;
   border-radius: var(--radius); padding: 7px 13px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
 }
