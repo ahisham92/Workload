@@ -13,7 +13,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .app import Request, WorkloadApp, parse_cookies
 from .service import ApiError, MAX_UPLOAD_BYTES
@@ -59,7 +59,9 @@ class Handler(BaseHTTPRequestHandler):
 
         request = Request(
             method=method,
-            path=parsed.path,
+            # Decoded, as a WSGI host's PATH_INFO already is: a name with a
+            # space in it reaches the route as "Engineer 1", not "Engineer%201".
+            path=unquote(parsed.path),
             query=parse_qs(parsed.query),
             body=body,
             cookies=parse_cookies(self.headers.get("Cookie")),
