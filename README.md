@@ -112,6 +112,13 @@ already have. It becomes a task of kind *Request*, so it is in the load, the
 task list and the staffing forecast like any other work, and it adds to the
 day rather than standing in for part of it.
 
+**Away** keeps people off the plan on days they are not in. Leave booked on a
+timesheet (a leave or holiday code, a half day or more) is read by itself,
+ahead or past; anything else is one line — who, from, to — or *Everybody* for
+a public holiday. Somebody away has an empty day, gets no requests, and is
+left out of the coming days and the staffing forecast for those days; their
+pace is read over the days they were in.
+
 **Next days** is each person's next few working days against a full load.
 **Hand over** part of somebody's work — a share of their time on a project, or
 a task — and every figure shows the effect before anything changes.

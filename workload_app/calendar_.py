@@ -49,19 +49,11 @@ class CalendarError(ValueError):
 
 
 def workbook_holidays(wb) -> Set[str]:
-    """The dates in the workbook's holiday table, as ISO strings."""
-    from . import tasks as task_sheet
+    """The unit's own public holidays, as ISO strings."""
     try:
-        sheet = wb.raw.sheet(cfg.SHEET_CALENDAR)
+        return {day.isoformat() for day in wb.holidays()}
     except Exception:                       # pragma: no cover - odd workbook
         return set()
-    out: Set[str] = set()
-    column = cfg.HOLIDAY_COLUMNS["date"]
-    for row in range(cfg.HOLIDAY_FIRST_ROW, cfg.HOLIDAY_LAST_ROW + 1):
-        day = task_sheet._date(sheet, f"{column}{row}")
-        if day and 2000 <= day.year <= 2100:
-            out.add(day.isoformat())
-    return out
 
 
 def leave_codes(wb) -> Set[str]:

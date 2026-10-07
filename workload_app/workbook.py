@@ -679,6 +679,17 @@ class WorkloadWorkbook:
         value = self._wb.get_number(cfg.SHEET_PROFIT_PLAN, cfg.PLAN_YEAR_CELL)
         return int(value) if value else _dt.date.today().year
 
+    def holidays(self) -> List[_dt.date]:
+        """The public holidays in the unit's own calendar (Work Calendar)."""
+        sheet = self._wb.sheet(cfg.SHEET_CALENDAR)
+        column = cfg.HOLIDAY_COLUMNS["date"]
+        out: List[_dt.date] = []
+        for row in range(cfg.HOLIDAY_FIRST_ROW, cfg.HOLIDAY_LAST_ROW + 1):
+            day = task_sheet._date(sheet, f"{column}{row}")
+            if day and 2000 <= day.year <= 2100:
+                out.append(day)
+        return sorted(set(out))
+
     def non_project_codes(self) -> Dict[str, str]:
         cols = cfg.NON_PROJECT_CODE_COLUMNS
         out: Dict[str, str] = {}

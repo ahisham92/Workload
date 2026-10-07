@@ -604,7 +604,61 @@ function renderDay() {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => shareDay(false) }, 'Share'),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => shareDay(true) }, 'Print'))),
     requestList(data),
-    plan.span === 'week' ? weekTable(data, shown) : dayCards(data.days[0], shown));
+    plan.span === 'week' ? weekTable(data, shown) : dayCards(data.days[0], shown),
+    awayPanel(data));
+}
+
+/* -- who is away ---------------------------------------------------------- */
+
+const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar' };
+
+function awayWhen(a) {
+  return a.start === a.end ? shortDate(a.start) : `${shortDate(a.start)} – ${shortDate(a.end)}`;
+}
+
+function awayText(a) {
+  return `${a.person === '*' ? 'Everybody' : a.person} · ${awayWhen(a)}`;
+}
+
+/** One line in: who, from, to. Everybody is a public holiday. */
+function markAway(data, name) {
+  const people = data.people.map((p) => ({ value: p.name, label: p.name }));
+  openModal('Away', [
+    { name: 'person', label: 'Who', type: 'select', full: true,
+      options: [{ value: '*', label: 'Everybody — a public holiday' }, ...people] },
+    { name: 'start', label: 'From', type: 'date' },
+    { name: 'end', label: 'To', type: 'date', hint: 'blank for one day' },
+    { name: 'note', label: 'Why', placeholder: 'Leave, site visit, course…', full: true },
+  ], async () => {
+    const values = modalValues();
+    const result = await api('/api/absences', { method: 'POST', body: values });
+    toast(`${awayText(result)} is off the plan.`, 'ok');
+    plan.needs = null;
+    await loadDay({ quiet: true });
+  }, { person: name || '*', start: data.date, end: '' });
+}
+
+function awayPanel(data) {
+  const away = data.away || [];
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' },
+      el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+      el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
+        'Someone is away')),
+    away.length ? el('ul', { class: 'request-list' }, away.map((a) => el('li', { class: 'request' },
+      el('span', { class: 'request-time' }, awayWhen(a)),
+      el('span', { class: 'request-what' }, el('b', {}, a.person === '*' ? 'Everybody' : a.person),
+        el('span', { class: 'muted small' },
+          [a.note, AWAY_SOURCE[a.source]].filter(Boolean).map((t) => ` · ${t}`).join(''))),
+      a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+        try {
+          await api(`/api/absences/${a.id}/remove`, { method: 'POST' });
+          plan.needs = null;
+          await loadDay({ quiet: true });
+        } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+      } }, 'Remove') : el('span'))))
+      : el('p', { class: 'muted small' },
+        'Leave booked on timesheets shows here by itself. Add anything else, or a public holiday, so nobody is planned on a day they are not in.'));
 }
 
 function quickAdd(data) {
@@ -694,7 +748,8 @@ function dayCards(day, shown) {
     return el('div', { class: 'empty' }, `${dayName(day.date)} is not a working day.`);
   }
   const people = shown(day.people).filter((p) => p.blocks.length || p.over_hours);
-  const idle = shown(day.people).filter((p) => !p.blocks.length && !p.over_hours);
+  const away = shown(day.people).filter((p) => p.away);
+  const idle = shown(day.people).filter((p) => !p.away && !p.blocks.length && !p.over_hours);
   return el('div', {},
     el('div', { class: 'day-grid' }, people
       .sort((a, b) => (a.team_name || '').localeCompare(b.team_name || '') || a.name.localeCompare(b.name))
@@ -702,8 +757,9 @@ function dayCards(day, shown) {
         el('header', {},
           el('b', {}, p.name),
           el('span', { class: 'muted small' }, [p.grade_label, p.team_name].filter(Boolean).join(' · ')),
-          el('span', { class: `pill ${p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
-            p.over_hours ? `${fmt.hours(p.over_hours)} h over`
+          el('span', { class: `pill ${p.away ? 'pill-bad' : p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
+            p.away ? 'away — hand these on'
+              : p.over_hours ? `${fmt.hours(p.over_hours)} h over`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
         el('ol', { class: 'day-blocks' }, p.blocks.map((b) => el('li', {
           class: `block block-${b.kind} ${b.done ? 'is-done' : ''}`,
@@ -712,7 +768,11 @@ function dayCards(day, shown) {
         el('span', { class: 'block-what' },
           KIND_LABEL[b.kind] ? el('span', { class: 'block-kind' }, KIND_LABEL[b.kind]) : null,
           b.project && b.title !== b.project ? el('span', { class: 'code' }, `${b.project} `) : null,
-          b.title))))))),
+          b.title)))),
+        p.away ? null : el('button', { class: 'linkish day-away', type: 'button',
+          onclick: () => markAway(plan.dayData, p.name) }, 'Mark away')))),
+    away.length ? el('p', { class: 'small' },
+      el('b', {}, 'Away: '), away.map((p) => p.name).join(', '), '.') : null,
     idle.length ? el('p', { class: 'muted small' },
       `Nothing booked lately and nothing planned: ${idle.map((p) => p.name).join(', ')}.`) : null);
 }
@@ -722,6 +782,7 @@ function weekTable(data, shown) {
   const cell = (day, name) => {
     const p = day.people.find((x) => x.name === name);
     if (!day.working_day || !p) return el('td', { class: 'muted' }, '—');
+    if (p.away && !p.blocks.length) return el('td', { class: 'muted' }, 'away');
     const load = data.days[0] ? (p.hours + p.over_hours) / (day.hours_per_day || 1) : null;
     return el('td', {
       class: 'num week-cell clickable', 'data-sort': String(load),
@@ -747,9 +808,12 @@ function dayText(data) {
   for (const day of data.days) {
     lines.push(`${dayName(day.date)}${unit}`);
     if (!day.working_day) { lines.push('  Not a working day.', ''); continue; }
+    const off = day.people.filter((p) => p.away
+      && (plan.team === 'all' || p.team_id === plan.team)).map((p) => p.name);
+    if (off.length) lines.push(`  Away: ${off.join(', ')}`);
     for (const p of day.people) {
       if (plan.team !== 'all' && p.team_id !== plan.team) continue;
-      if (!p.blocks.length && !p.over_hours) continue;
+      if (p.away || (!p.blocks.length && !p.over_hours)) continue;
       lines.push(`${p.name}${p.team_name ? ` (${p.team_name})` : ''}`
         + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h over` : ''));
       for (const b of p.blocks) {
