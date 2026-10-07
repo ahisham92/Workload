@@ -27,7 +27,7 @@ from . import (calendar_, config as cfg, daily, derive,
                tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
-from .workbook import ValidationError, WorkloadWorkbook, iso
+from .workbook import ValidationError, WorkloadWorkbook, iso, outside_message
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 #: How far ahead the Planner lists who will be away.
@@ -585,6 +585,9 @@ class WorkloadService:
                 record["engineer"] = people[record["full_name"]]["name"]
 
             plan = self._plan(records)
+            outside = self._without_a_place(people)
+            if outside:
+                warnings.append(outside_message(outside))
             token = uuid.uuid4().hex
             self._staged[token] = {"records": records, "people": people,
                                    "files": [p.source_name for p in parsed]}
@@ -606,6 +609,7 @@ class WorkloadService:
                                         if r["full_name"] == full), 2)}
                     for full, info in people.items()),
                     key=lambda p: -p["hours"]),
+                "people_outside_workbook": outside,
                 "new_projects": derive.describe(plan["fits"]),
                 "projects_left_out": derive.describe(plan["left_out"]),
             }
@@ -645,6 +649,7 @@ class WorkloadService:
             placed = people_module.teams_from_timesheets(
                 store, lambda: uuid.uuid4().hex[:12])
             projects = self._add_derived_projects()
+            placed = set(wb.engineer_names())
             result = {
                 "teams_from_timesheets": placed,
                 "rows_written": written,
@@ -652,6 +657,8 @@ class WorkloadService:
                 "mode": mode,
                 "people": sorted(by_person),
                 "people_added": people_added,
+                "people_outside_workbook": [
+                    name for name in sorted(by_person) if name not in placed],
                 **projects,
             }
             result["save"] = self._commit()
@@ -737,7 +744,8 @@ class WorkloadService:
             elif len(wb.engineers()) < cfg.MAX_ENGINEERS:
                 wb.add_engineer(body)
             # Past the workbook's twelve, a person is on the roster and in
-            # Resourcing from their rows alone, which is all those need.
+            # Resourcing from their rows alone. They are not dropped: the
+            # import and the data check both name them (_without_a_place).
             added.append(info["name"])
         # Placeholders still unused once real people are in: remove them, so
         # nobody is ranked against "Engineer 3".
@@ -746,6 +754,28 @@ class WorkloadService:
             for name in spare:
                 wb.remove_engineer(name)
         return added
+
+    def _without_a_place(self, people: Dict[str, Dict[str, Any]]) -> List[str]:
+        """Who these people include that the workbook will have no room for.
+
+        The same count _set_up_people makes: unused placeholders first, then
+        the room left under the cap, in the order the files name people.
+        Anybody already here without a place stays without one.
+        """
+        wb = self.workbook
+        engineers = wb.engineers()
+        placed = {e.short_name for e in engineers}
+        holding = set(self.store.people_with_rows())
+        room = sum(1 for e in engineers
+                   if _placeholder(e.short_name) and e.short_name not in holding)
+        room += max(0, cfg.MAX_ENGINEERS - len(engineers))
+        out: List[str] = []
+        for info in people.values():
+            if info["new"] and room > 0:
+                room -= 1
+            elif info["new"] or info["name"] not in placed:
+                out.append(info["name"])
+        return out
 
     def _plan(self, records: Sequence[Dict[str, Any]]) -> Dict[str, List]:
         """The projects these rows add, and which would not fit."""

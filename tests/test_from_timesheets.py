@@ -11,7 +11,7 @@ import shutil
 
 import pytest
 
-from workload_app import derive, storage
+from workload_app import derive, metrics, storage
 from workload_app.service import ApiError, WorkloadService
 
 openpyxl = pytest.importorskip("openpyxl")
@@ -111,6 +111,34 @@ class TestReadingTheTeamOutOfTheExports:
         assert len(blank.store.people_with_rows()) == 14
         again = blank.stage_exports([export(crowd, "department.xlsx")])
         assert not any(p["new"] for p in again["people"])
+
+    def test_nobody_past_the_workbook_goes_unmentioned(self, blank):
+        crowd = [row(f"Person{n} Surname", "N25185-0100D", D(2026, 8, 1), 8)
+                 for n in range(14)]
+        staged = blank.stage_exports([export(crowd, "department.xlsx")])
+        outside = staged["people_outside_workbook"]
+        assert outside == ["Person12", "Person13"]
+        assert any("Person12, Person13" in w for w in staged["warnings"])
+
+        result = blank.apply_exports(staged["token"])
+        assert result["people_outside_workbook"] == outside
+        check = result["data_check"]
+        assert check["people_outside_workbook"] == outside
+        assert "Person12, Person13" in check["verdict"]
+        assert check["rows_not_matching_pattern"] == 0
+        # Their hours are not lost: the project counts them.
+        index = metrics.TimesheetIndex(blank.workbook, blank.store)
+        assert index.hours_for_job("N25185-0100D") == pytest.approx(14 * 8)
+
+        again = blank.stage_exports([export(crowd, "department.xlsx")])
+        assert again["people_outside_workbook"] == outside
+
+    def test_a_team_that_fits_has_nobody_outside(self, blank):
+        staged = blank.stage_exports(team_exports())
+        assert staged["people_outside_workbook"] == []
+        result = blank.apply_exports(staged["token"])
+        assert result["people_outside_workbook"] == []
+        assert result["data_check"]["people_outside_workbook"] == []
 
     def test_a_file_that_is_not_an_export_is_refused_and_writes_nothing(
             self, blank):
