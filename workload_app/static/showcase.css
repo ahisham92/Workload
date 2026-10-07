@@ -283,3 +283,29 @@ body.bd-dragging { cursor: grabbing; user-select: none; }
   .scape-btn { width: 38px; height: 38px; }
   .bd-col { flex-basis: 150px; }
 }
+
+/* ------------------------------------------------------- 3D (WebGL) */
+.scape3d { position: relative; overflow: hidden; border-radius: 14px; border: 1px solid var(--border);
+  background:
+    radial-gradient(ellipse 80% 70% at 50% 30%, color-mix(in srgb, var(--accent) 10%, var(--surface)) 0, transparent 70%),
+    linear-gradient(180deg, var(--surface) 0, var(--surface-2) 100%);
+  touch-action: none; }
+.scape3d canvas { display: block; cursor: grab; outline: none; }
+.scape3d canvas:active { cursor: grabbing; }
+.scape3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.scape3d-label { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 11.5px;
+  color: var(--muted); will-change: transform; }
+.scape3d-row { color: var(--text); font-weight: 650; max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+  padding: 2px 18px 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, transparent); box-shadow: 0 1px 3px rgb(0 0 0 / .08); }
+.scape3d-row::after { content: ''; position: absolute; right: 7px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px;
+  border-radius: 50%; background: var(--dot, var(--muted)); }
+.scape3d-today { color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: .06em; }
+.scape3d-glass { color: var(--accent); font-weight: 650; font-size: 10.5px; }
+.scape3d-reset { position: absolute; right: 10px; top: 10px; }
+.scape3d-hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 11.5px;
+  color: var(--muted); background: color-mix(in srgb, var(--surface) 85%, transparent); padding: 4px 10px;
+  border-radius: 999px; border: 1px solid var(--border); pointer-events: none; transition: opacity .4s; white-space: nowrap; }
+.scape3d-hint.is-gone { opacity: 0; }
+@media (max-width: 700px) { .scape3d-row { max-width: 112px; font-size: 10.5px; padding: 1px 15px 1px 6px; }
+  .scape3d-row::after { right: 5px; width: 6px; height: 6px; margin-top: -3px; } }

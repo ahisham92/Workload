@@ -890,7 +890,7 @@
     if (!groups.length) return null;
     const weeks = needs.weeks || [];
     return {
-      rows: groups.map((g) => ({ label: `${g.team_name} ${g.role === 'drafting' ? '(drafting)' : ''}`.trim() })),
+      rows: groups.map((g) => ({ label: g.role === 'drafting' ? `${g.team_name} · drafting` : g.team_name })),
       cols: weeks.map((w) => shortWeek(w.from)),
       values: groups.map((g) => g.weeks.map((w) => (w.capacity_hours ? w.load : (w.demand_hours ? 2.2 : null)))),
       now: 0,
@@ -932,17 +932,23 @@
           el('p', { class: 'muted' },
             scape.mode === 'people'
               ? 'Each block is one person\'s week: its height is how much of their hours they booked, '
-                + 'the sheet of glass is a full load. Behind the dashed line are the weeks the timesheets '
-                + 'hold, in front of it the next two as laid out. Drag sideways to turn it, tap a block to read it.'
+                + 'the sheet of glass is a full load. Left of the blue line are the weeks the timesheets '
+                + 'hold, right of it the next two as laid out. Turn it with a finger, pinch to zoom, tap a block to read it.'
               : 'Each block is a team\'s week: work forecast against the people in it. Above the glass '
-                + 'the team needs more people that week. Drag sideways to turn it, tap a block to read it.')),
+                + 'the team needs more people that week. Turn it with a finger, pinch to zoom, tap a block to read it.')),
         el('div', { class: 'subtabs scape-modes' }, pick('people', 'People'), pick('teams', 'Teams ahead'))),
       stage,
       el('div', { class: 'legend scape-legend' },
-        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--bad)' }), 'over a full load'),
-        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--ok)' }), 'about right'),
-        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--accent)' }), 'room to take more')));
-    landscape(stage, model);
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-1)' }), 'room to take more'),
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-3)' }), 'about right'),
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-4)' }), 'heavy'),
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--bad)' }), 'over a full load')));
+    // The real 3D when the phone can draw it; the flat drawing if not.
+    try {
+      const three = await import('./load3d.js');
+      if (stage.isConnected && three.render(stage, model)) return;
+    } catch (error) { /* no WebGL or no modules: fall through */ }
+    if (stage.isConnected) landscape(stage, model);
   }
 
   /* ----------------------------------------------------------- wiring */
