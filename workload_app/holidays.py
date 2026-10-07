@@ -23,6 +23,7 @@ the same one tap.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 #: Expected first days, by Gregorian year.  Lunar: an announcement can move
@@ -300,9 +301,9 @@ def guess(text: str) -> Optional[str]:
              "abu dhabi": "AE", "uae": "AE", "doha": "QA", "qatar": "QA",
              "kuwait": "KW", "amman": "JO", "jordan": "JO", "beirut": "LB",
              "lebanon": "LB", "muscat": "OM", "oman": "OM", "manama": "BH",
-             "bahrain": "BH", "london": "GB", " uk": "GB"}
+             "bahrain": "BH", "london": "GB", "uk": "GB"}
     for hint, code in hints.items():
-        if hint in f" {words}":
+        if re.search(rf"\b{re.escape(hint)}\b", words):
             return code
     return None
 
