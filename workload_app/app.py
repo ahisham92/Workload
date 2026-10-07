@@ -37,6 +37,7 @@ from .accounts import (AccountError, Accounts, ROLE_MANAGER,
 from .library import NotAWorkbook
 from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
 from .calendar_ import CalendarError
+from .incoming import IncomingError
 from .drawings import DrawingsError
 from .people import PeopleError
 from .intake import IntakeError
@@ -156,7 +157,7 @@ class WorkloadApp:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
         except (ValidationError, TaskError, PeopleError, PlanError,
-                DrawingsError, IntakeError, CalendarError) as exc:
+                DrawingsError, IntakeError, CalendarError, IncomingError) as exc:
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -1003,6 +1004,11 @@ class WorkloadApp:
              lambda ctx, q, b, move_id: ctx.service.remove_plan_move(_int(move_id), b),
              "manager"),
             ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
+            ("POST", "/api/planned-work",
+             lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),
+            ("POST", "/api/planned-work/{}/remove",
+             lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
+             "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
             ("POST", "/api/requests",
              lambda ctx, q, b: ctx.service.add_request(b), "manager"),

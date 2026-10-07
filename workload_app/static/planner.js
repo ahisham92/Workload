@@ -79,7 +79,7 @@ async function openPlanner({ quiet = false } = {}) {
   } else if (plan.view === 'people') {
     try {
       plan.needs = plan.needs || await api('/api/needs');
-      setChildren($('#planner-body'), renderNeeds(plan.needs));
+      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
     } catch (error) {
       if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
     }
@@ -229,8 +229,8 @@ function stat(label, value, toneName) {
 function renderNeeds(needs) {
   if (!needs) return null;
   const alerts = needs.alerts || [];
-  const level = { now: 'bad', soon: 'warn', room: 'ok', ok: 'ok' };
-  const label = { now: 'ask now', soon: 'ask soon', room: 'room', ok: 'fine' };
+  const level = { now: 'bad', soon: 'warn', cover: 'warn', room: 'ok', ok: 'ok' };
+  const label = { now: 'ask now', soon: 'ask soon', cover: 'hand over', room: 'room', ok: 'fine' };
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
       el('div', {},
@@ -250,6 +250,70 @@ function renderNeeds(needs) {
         a.kind === 'need' ? needWeeks(needs, a) : null)))
       : el('p', { class: 'muted' }, 'Nobody to forecast for yet.'),
     needsFootnote(needs));
+}
+
+const COMING_STATUS = {
+  'waiting': ['warn', 'starts later'], 'due to start': ['warn', 'nobody booking yet'],
+  'started': ['ok', 'being booked'], 'used up': ['muted', 'hours used up — at its pace now'],
+  'taken over': ['muted', 'on its own figures now'],
+};
+
+/** A project just assigned: one line, and the forecast above counts it. */
+function workComing(needs) {
+  if (!needs) return null;
+  const coming = needs.coming || [];
+  const today = needs.today;
+  const name = el('input', { type: 'text', placeholder: 'Project just assigned, e.g. Safaga berth 3',
+    'aria-label': 'Project', class: 'grow' });
+  const job = el('input', { type: 'text', placeholder: 'Job no.', 'aria-label': 'Job number',
+    class: 'job-input' });
+  const team = el('select', { 'aria-label': 'Team' },
+    el('option', { value: '' }, (needs.teams || []).length ? 'Which team?' : 'The unit'),
+    ...(needs.teams || []).map((t) => el('option', { value: t.id }, t.name)));
+  const hours = el('input', { type: 'number', min: '1', step: '10', placeholder: 'Hours',
+    'aria-label': 'Rough hours', class: 'num-input' });
+  const start = el('input', { type: 'date', 'aria-label': 'Starts', value: today });
+  const end = el('input', { type: 'date', 'aria-label': 'Ends' });
+  const add = async () => {
+    if (!name.value.trim() && !job.value.trim()) { name.focus(); return; }
+    if (!Number(hours.value)) { hours.focus(); return; }
+    try {
+      const result = await api('/api/planned-work', { method: 'POST', body: {
+        name: name.value, job_number: job.value, team_id: team.value,
+        hours: hours.value, start: start.value, end: end.value } });
+      plan.needs = result.needs;
+      toast(`${result.name} is in the forecast from ${shortDate(result.start)} to ${shortDate(result.end)}.`, 'ok');
+      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+    } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  return el('section', { class: 'panel' },
+    el('h3', {}, 'Work coming'),
+    el('p', { class: 'muted' },
+      'A project just assigned, before anybody books to it. Its rough hours are spread from start to end and counted above; '
+      + 'what gets booked to its job number is taken off, and once it is confirmed on Projects its own figures take over.'),
+    el('div', { class: 'quick-add' }, name,
+      el('div', { class: 'quick-add-options' }, job, team, hours,
+        el('label', { class: 'inline-date' }, el('span', { class: 'muted small' }, 'from'), start),
+        el('label', { class: 'inline-date' }, el('span', { class: 'muted small' }, 'to'), end),
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: add }, 'Add'))),
+    coming.length ? el('ul', { class: 'request-list' }, coming.map((c) => {
+      const [tone, text] = COMING_STATUS[c.status] || ['muted', c.status];
+      return el('li', { class: 'request' },
+        el('span', { class: 'request-time' }, `${shortDate(c.start)} – ${shortDate(c.end)}`),
+        el('span', { class: 'request-what' }, el('b', {}, c.name),
+          el('span', { class: 'muted small' }, [c.job_number && c.job_number !== c.name ? c.job_number : '',
+            c.team_name, `${fmt.hours(c.hours)} h`, c.booked ? `${fmt.hours(c.booked)} h booked` : '']
+            .filter(Boolean).map((t) => ` · ${t}`).join('')),
+          ' ', el('span', { class: `pill pill-${tone}` }, text)),
+        el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          try {
+            const result = await api(`/api/planned-work/${c.id}/remove`, { method: 'POST' });
+            plan.needs = result.needs;
+            setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+          } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+        } }, 'Remove'));
+    })) : null);
 }
 
 /** The weeks behind an ask, as a strip of small bars: work against people. */

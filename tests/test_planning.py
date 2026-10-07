@@ -276,6 +276,57 @@ class TestWhenToAskForPeople:
         assert span[1][0] == dt.date(2026, 10, 12)
 
 
+class TestWorkComing:
+    def _berths(self, unit):
+        return next(t for t in unit.store.teams() if t["name"] == "BERTHS")["id"]
+
+    def _group(self, data, team, role="engineering"):
+        return next(g for g in data["groups"] if g["team_name"] == team and g["role"] == role)
+
+    def test_a_project_just_assigned_counts_from_its_start(self, unit):
+        before = unit.needs()
+        result = unit.add_planned_work({
+            "name": "New berth at Safaga", "team_id": self._berths(unit),
+            "hours": 600, "start": "2026-10-12", "end": "2026-11-20"})
+        after = result["needs"]
+        item = next(c for c in after["coming"] if c["name"] == "New berth at Safaga")
+        assert item["status"] == "waiting" and item["in_horizon"] == pytest.approx(600)
+        # Nothing in the week it has not started; a share of 100 h a week after.
+        week0 = [self._group(d, "BERTHS")["weeks"][0]["demand_hours"] for d in (before, after)]
+        week1 = [sum(self._group(d, "BERTHS", r)["weeks"][1]["demand_hours"]
+                     for r in ("engineering", "drafting")) for d in (before, after)]
+        assert week0[0] == pytest.approx(week0[1])
+        assert week1[1] - week1[0] == pytest.approx(100, abs=1)
+        assert any(a["kind"] == "need" and a["team_name"] == "BERTHS" for a in after["alerts"])
+
+    def test_bookings_use_it_up_and_are_not_counted_twice(self, unit):
+        unit.add_planned_work({"name": "Concept", "job_number": "n2-0100d",
+                               "team_id": self._berths(unit), "hours": 200,
+                               "start": "2026-09-01", "end": "2026-12-31"})
+        item = unit.needs()["coming"][0]
+        # Osama's 4 h a day for three weeks are already booked to it.
+        assert item["status"] == "started"
+        assert item["booked"] == pytest.approx(60) and item["left"] == pytest.approx(140)
+        assert not any(a["number"] == "N2-0100D" for a in unit.needs()["assumed"])
+        unit.add_planned_work({"name": "Small", "job_number": "N1-0100D",
+                               "hours": 50, "start": "2026-09-01", "end": "2026-12-31"})
+        small = next(c for c in unit.needs()["coming"] if c["name"] == "Small")
+        assert small["status"] == "used up" and small["in_horizon"] == 0
+
+    def test_nonsense_is_refused_and_a_line_can_go(self, unit):
+        from workload_app.incoming import IncomingError
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "", "hours": 100})
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "X", "hours": 0})
+        with pytest.raises(IncomingError):
+            unit.add_planned_work({"name": "X", "hours": 10, "start": "2026-11-01",
+                                   "end": "2026-10-01"})
+        made = unit.add_planned_work({"name": "X", "hours": 10})
+        assert made["end"] == "2026-12-31"           # three months by default
+        assert unit.remove_planned_work(made["id"])["needs"]["coming"] == []
+
+
 class TestTheDayFillsItself:
     def test_everybody_s_day_is_laid_out_from_their_pace(self, unit):
         data = unit.day_plan({})
@@ -355,6 +406,13 @@ class TestTimeAway:
         assert week(after, 1)["capacity_hours"] == 0
         assert week(after, 1)["away_days"] == 5
         assert week(before, 1)["capacity_hours"] > 0
+
+    def test_a_week_short_because_somebody_is_away_is_a_handover_not_a_hire(self, unit):
+        unit.add_absence({"person": "Osama", "start": "2026-10-12", "end": "2026-10-16"})
+        alerts = [a for a in unit.needs()["alerts"]
+                  if a["team_name"] == "BERTHS" and a["role"] == "engineering"]
+        assert [a["kind"] for a in alerts] == ["cover"]
+        assert "Next days" in alerts[0]["detail"] and "5 days away" in alerts[0]["detail"]
 
     def test_nonsense_is_refused_and_a_typed_absence_can_go(self, unit):
         from workload_app.calendar_ import CalendarError

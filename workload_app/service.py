@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, config as cfg, daily, derive,
                drawings as drawings_module, holidays as holidays_module,
-               intake, library, metrics, needs as needs_module,
+               incoming, intake, library, metrics, needs as needs_module,
                people as people_module, submissions as submissions_module,
                planner as planner_module, progress, reports,
                tasks as task_sheet, timesheets)
@@ -1138,13 +1138,31 @@ class WorkloadService:
                 requests=[(name, t.due, t.hours_each())
                           for t in inputs["tasks"]
                           if intake.is_request(t) and not t.done and t.due
-                          for name in t.assignees])
+                          for name in t.assignees],
+                planned=self.store.planned_work(),
+                team_names={t["id"]: t["name"] for t in self.store.teams()})
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",
                                  "deliverables_with_drawings",
                                  "deliverables_without")}
+            data["teams"] = [{"id": t["id"], "name": t["name"]}
+                             for t in sorted(self.store.teams(), key=lambda t: t["name"])]
             return data
+
+    def add_planned_work(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """A project just assigned: one line, and the forecast counts it."""
+        with self._lock:
+            item = incoming.clean(body, teams=[t["id"] for t in self.store.teams()],
+                                  today=_today())
+            new_id = self.store.add_planned_work(**item)
+            return {"id": new_id, **item, "needs": self.needs()}
+
+    def remove_planned_work(self, item_id: int) -> Dict[str, Any]:
+        with self._lock:
+            if not self.store.remove_planned_work(item_id):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such project coming.")
+            return {"removed": item_id, "needs": self.needs()}
 
     # -- the day, requests as they come in, and the submissions plan -------
     def day_plan(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
