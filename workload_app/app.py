@@ -37,15 +37,8 @@ from . import (accounts as accounts_module, export as export_module,
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
-from .service import ApiError, MAX_UPLOAD_BYTES, WorkloadService, _flag, _int, _stage, _year
-from .calendar_ import CalendarError
-from .drawing_list import DrawingListError
-from .incoming import IncomingError
-from .drawings import DrawingsError
-from .people import PeopleError
-from .intake import IntakeError
-from .planner import PlanError
-from .tasks import TaskError
+from .service import (ApiError, WorkloadService, _decode, _flag,
+                      _int, _stage, _year)
 from .timesheets import ImportError_
 from .model import ValidationError
 from .xlsx_io import XlsxError
@@ -191,9 +184,7 @@ class WorkloadApp:
         except ApiError as exc:
             response = Response.json(exc.status,
                                      {"error": exc.message, "errors": exc.errors})
-        except (ValidationError, TaskError, PeopleError, PlanError,
-                DrawingsError, IntakeError, CalendarError, IncomingError,
-                DrawingListError) as exc:
+        except ValidationError as exc:     # every refused input, whichever module
             response = Response.json(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": "The change was rejected.", "errors": exc.errors})
@@ -648,9 +639,7 @@ class WorkloadApp:
         through; what it held is kept as a copy first.
         """
         user_id = ctx.user["id"]
-        unit = self.accounts.unit(user_id, unit_id)
-        if unit is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        unit = self._own_unit(user_id, unit_id)
         data = self._uploaded_bytes(body)
         # Let go of it before it is overwritten underneath us.
         was_open = _is_open(ctx, unit_id)
@@ -677,24 +666,11 @@ class WorkloadApp:
         return opened
 
     def _uploaded_bytes(self, body: Dict[str, Any]) -> bytes:
-        content = body.get("content_base64")
-        if not content:
-            raise ApiError(HTTPStatus.BAD_REQUEST, "No file was uploaded.")
-        try:
-            data = base64.b64decode(content)
-        except Exception:
-            raise ApiError(HTTPStatus.BAD_REQUEST, "The upload was not valid base64.")
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                           f"That file is larger than the "
-                           f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.")
-        return data
+        return _decode(body.get("content_base64"))
 
     def accounts_update_filename(self, user_id: int, unit_id: str,
                                  filename: str) -> None:
-        with self.accounts._connect() as db:           # noqa: SLF001 - same package
-            db.execute("UPDATE units SET filename = ? WHERE id = ? AND user_id = ?",
-                       (filename, unit_id, user_id))
+        self.accounts.set_unit_filename(user_id, unit_id, filename)
 
     def open_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         user_id = ctx.user["id"]
@@ -708,12 +684,17 @@ class WorkloadApp:
         self.accounts.set_open_unit(ctx.user["id"], None)
         return ctx.service.close()
 
-    def _open(self, service: WorkloadService, user_id: int,
-              unit_id: str) -> Dict[str, Any]:
-        """Open one of this account's units in ``service``."""
+    def _own_unit(self, user_id: int, unit_id: str) -> Dict[str, Any]:
+        """One of this account's units; anybody else's is simply not found."""
         unit = self.accounts.unit(user_id, unit_id)
         if unit is None:
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        return unit
+
+    def _open(self, service: WorkloadService, user_id: int,
+              unit_id: str) -> Dict[str, Any]:
+        """Open one of this account's units in ``service``."""
+        unit = self._own_unit(user_id, unit_id)
         path = storage.unit_path(self.data_dir, user_id, unit["filename"])
         if not path.is_file():
             raise ApiError(HTTPStatus.NOT_FOUND,
@@ -742,8 +723,7 @@ class WorkloadApp:
     def rename_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         # Look first, so a unit that is not this account's is refused the same
         # way everywhere: not found, rather than a rule about names.
-        if self.accounts.unit(ctx.user["id"], unit_id) is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        self._own_unit(ctx.user["id"], unit_id)
         unit = self.accounts.rename_unit(ctx.user["id"], unit_id,
                                          body.get("name", ""))
         if _is_open(ctx, unit_id):
@@ -752,9 +732,7 @@ class WorkloadApp:
 
     def delete_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         user_id = ctx.user["id"]
-        unit = self.accounts.unit(user_id, unit_id)
-        if unit is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        unit = self._own_unit(user_id, unit_id)
         if _is_open(ctx, unit_id):
             ctx.service.close()
         if self.accounts.open_unit_of(user_id) == unit_id:
@@ -766,9 +744,7 @@ class WorkloadApp:
     def download_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         """Everything the unit holds, as a spreadsheet to keep or send on."""
         user_id = ctx.user["id"]
-        unit = self.accounts.unit(user_id, unit_id)
-        if unit is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        unit = self._own_unit(user_id, unit_id)
         path = storage.unit_path(self.data_dir, user_id, unit["filename"])
         if not path.is_file():
             raise ApiError(HTTPStatus.NOT_FOUND, "That unit's data is missing.")
@@ -986,9 +962,7 @@ class WorkloadApp:
         if not unit:
             raise ApiError(HTTPStatus.CONFLICT,
                            "Open the unit first; access is given per unit.")
-        owned = self.accounts.unit(ctx.user["id"], unit["id"])
-        if owned is None:
-            raise ApiError(HTTPStatus.NOT_FOUND, "That unit is not yours.")
+        owned = self._own_unit(ctx.user["id"], unit["id"])
         return owned
 
     # -- the nightly import ----------------------------------------------

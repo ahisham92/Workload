@@ -24,6 +24,8 @@ import math
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from .model import ValidationError
+
 #: What somebody is, in the order they rank. The label is what the app shows.
 GRADES = [
     ("senior", "Senior"),
@@ -68,10 +70,8 @@ def role_label(role: str, count: Optional[float] = None) -> str:
     return "draftsmen" if role == ROLE_DRAFTING else "engineers"
 
 
-class PeopleError(ValueError):
-    def __init__(self, message: str):
-        super().__init__(message)
-        self.errors = [message]
+class PeopleError(ValidationError):
+    pass
 
 
 def grade_label(key: str) -> str:

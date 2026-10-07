@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import config as cfg, progress
-from .model import as_text
+from .model import as_text, stored_date
 from .tasks import Task
 from .unit import Unit
 from .xlsx_io import Workbook, col_to_index, from_serial, index_to_col
@@ -302,7 +302,7 @@ def _non_project_codes(wb: Workbook) -> List[Dict[str, str]]:
 def _holidays(wb: Workbook) -> List[Dict[str, Any]]:
     out = []
     for row in range(cfg.HOLIDAY_FIRST_ROW, cfg.HOLIDAY_LAST_ROW + 1):
-        day = _date(wb.get_value(cfg.SHEET_CALENDAR,
+        day = stored_date(wb.get_value(cfg.SHEET_CALENDAR,
                                  f"{cfg.HOLIDAY_COLUMNS['date']}{row}"))
         if day and 2000 <= day.year <= 2100:
             out.append({"day": day, "name": wb.get_text(
@@ -339,17 +339,6 @@ def _phasing(wb: Workbook, projects: List[Dict[str, Any]]
             if value is not None:
                 out.setdefault(project["number"], {})[start] = value
     return out
-
-
-def _date(value: Any) -> Optional[_dt.date]:
-    if isinstance(value, (int, float)) and value > 0:
-        return from_serial(float(value))
-    if isinstance(value, str) and value:
-        try:
-            return _dt.date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None
 
 
 def _tasks(wb: Workbook) -> Tuple[List[Task], Optional[Dict[str, Any]]]:
@@ -403,8 +392,8 @@ def _tasks(wb: Workbook) -> Tuple[List[Task], Optional[Dict[str, Any]]]:
             assignees=[a.strip() for a in assignees.split(",") if a.strip()],
             required_hours=number(f"{cols['required_hours']}{row}"),
             actual_hours=number(f"{cols['actual_hours']}{row}"),
-            start=_date(sheet.get_value(f"{cols['start']}{row}")),
-            due=_date(sheet.get_value(f"{cols['due']}{row}")),
+            start=stored_date(sheet.get_value(f"{cols['start']}{row}")),
+            due=stored_date(sheet.get_value(f"{cols['due']}{row}")),
             status=text(f"{cols['status']}{row}") or cfg.TASK_STATUSES[0],
             kind=text(f"{cols['kind']}{row}") or cfg.TASK_KINDS[0],
             series=text(f"{cols['series']}{row}"),

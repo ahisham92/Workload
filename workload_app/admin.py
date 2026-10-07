@@ -230,9 +230,7 @@ def _import(db: Accounts, data_dir: Path, args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     path = result["path"]
-    with db._connect() as connection:                  # noqa: SLF001 - same package
-        connection.execute("UPDATE units SET filename = ? WHERE id = ?",
-                           (path.name, unit["id"]))
+    db.set_unit_filename(user["id"], unit["id"], path.name)
     print(f"{source.name} is now {user['username']}'s unit {unit['name']!r}.")
     print(f"  stored at {path}; the workbook itself is not kept or read again")
     return 0
@@ -269,9 +267,7 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
     except (library.NotAWorkbook, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    with db._connect() as connection:                  # noqa: SLF001 - same package
-        connection.execute("UPDATE units SET filename = ? WHERE id = ?",
-                           (result["path"].name, unit["id"]))
+    db.set_unit_filename(user["id"], unit["id"], result["path"].name)
     print(f"{unit['name']!r} now holds {source.name} "
           f"({source.stat().st_size / 1_048_576:.1f} MB).")
     if result["backup"]:

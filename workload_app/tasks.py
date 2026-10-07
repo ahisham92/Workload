@@ -16,14 +16,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from . import config as cfg, progress
 from .xlsx_io import from_serial
+from .model import ValidationError
 
 
-class TaskError(Exception):
-    """A task the list will not accept, with every reason at once."""
-
-    def __init__(self, errors: Sequence[str]):
-        super().__init__("; ".join(errors))
-        self.errors = list(errors)
+class TaskError(ValidationError):
+    pass
 
 
 # --------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from . import config as cfg
 from . import derive
 from . import people as people_module
 from . import tasks as task_sheet
+from .model import ValidationError
 
 #: Working days of bookings a pace is read from.
 LOOKBACK_DAYS = 10
@@ -56,11 +57,8 @@ MAX_SUGGESTIONS = 8
 STALE_AFTER_DAYS = 21
 
 
-class PlanError(ValueError):
-    def __init__(self, errors: Sequence[str]):
-        errors = list(errors)
-        super().__init__("; ".join(errors))
-        self.errors = errors
+class PlanError(ValidationError):
+    pass
 
 
 # --------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from . import config as cfg
 from . import people as people_module
 from . import tasks as task_sheet
+from .model import ValidationError
 
 #: Slots start on the quarter hour.
 STEP_MINUTES = 15
@@ -32,11 +33,8 @@ STEP_MINUTES = 15
 LONGEST_HOURS = 80.0
 
 
-class IntakeError(ValueError):
-    def __init__(self, errors: Sequence[str]):
-        errors = list(errors)
-        super().__init__("; ".join(errors))
-        self.errors = errors
+class IntakeError(ValidationError):
+    pass
 
 
 def _at(day: _dt.date, hhmm: str) -> _dt.datetime:

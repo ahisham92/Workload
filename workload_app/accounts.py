@@ -563,6 +563,11 @@ class Accounts:
             raise AccountError(f"You already have a unit called {name}.")
         return self.unit(user_id, unit_id)              # type: ignore[return-value]
 
+    def set_unit_filename(self, user_id: int, unit_id: str, filename: str) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE units SET filename = ? WHERE id = ? AND user_id = ?",
+                       (filename, unit_id, user_id))
+
     def set_open_unit(self, user_id: int, unit_id: Optional[str]) -> None:
         with self._connect() as db:
             db.execute("UPDATE users SET open_unit_id = ? WHERE id = ?",

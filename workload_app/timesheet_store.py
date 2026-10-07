@@ -28,6 +28,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .model import stored_date
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rows (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,19 +172,6 @@ def now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def _as_date(value: Any) -> Optional[_dt.date]:
-    if isinstance(value, _dt.datetime):
-        return value.date()
-    if isinstance(value, _dt.date):
-        return value
-    if isinstance(value, str) and value:
-        try:
-            return _dt.date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None
-
-
 class TimesheetStore:
     """One unit's timesheet rows.  Cheap to construct; a connection per call."""
 
@@ -227,7 +216,7 @@ class TimesheetStore:
         stamp = now()
         payload = []
         for row in rows:
-            day = _as_date(row.get("date") if "date" in row else row.get("day"))
+            day = stored_date(row.get("date") if "date" in row else row.get("day"))
             phase = row.get("phase")
             payload.append((
                 person,
@@ -280,7 +269,7 @@ class TimesheetStore:
             "job_number": row["job_number"],
             "job_name": row["job_name"],
             "full_name": row["full_name"],
-            "date": _as_date(row["day"]),
+            "date": stored_date(row["day"]),
             "phase": row["phase"],
             "regular_hours": row["regular_hours"],
             "overtime_hours": row["overtime_hours"],
@@ -324,7 +313,7 @@ class TimesheetStore:
             row = db.execute(
                 "SELECT MIN(day) AS lo, MAX(day) AS hi FROM rows "
                 "WHERE day IS NOT NULL").fetchone()
-        return _as_date(row["lo"]), _as_date(row["hi"])
+        return stored_date(row["lo"]), stored_date(row["hi"])
 
     def jobs_seen(self) -> List[Dict[str, Any]]:
         """Every job number in the rows, with the name and effort behind it.

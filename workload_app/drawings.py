@@ -24,6 +24,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from . import people as people_module
+from .model import ValidationError
 
 #: The most drawings one deliverable can be said to have, which is only there
 #: to catch a typo -- a stray extra zero -- rather than to set a policy.
@@ -34,10 +35,8 @@ MAX_PER_DELIVERABLE = 100_000
 KEEP = object()
 
 
-class DrawingsError(ValueError):
-    def __init__(self, message: str):
-        super().__init__(message)
-        self.errors = [message]
+class DrawingsError(ValidationError):
+    pass
 
 
 def clean_count(value: Any) -> Optional[int]:
