@@ -42,7 +42,7 @@ def headlines(result):
 
 class TestGrades:
     def test_the_four_a_unit_uses(self):
-        assert ppl.GRADE_KEYS == ["senior", "engineer", "junior", "bim"]
+        assert ppl.GRADE_KEYS == ["senior", "engineer", "junior", "bim", "drafter"]
         assert ppl.grade_label("bim") == "BIM modeller"
 
     def test_an_unknown_grade_is_refused_by_name(self):

@@ -62,7 +62,8 @@ TO_CONFIRM = "Set up from timesheets: confirm the name, budget and progress."
 
 #: Grades in the export, mapped onto the establishment's own.
 _GRADE_RULES: Sequence[Tuple[str, str]] = (
-    (r"bim|model+er|draft|cad", "bim"),
+    (r"draft|\bcad\b", "drafter"),
+    (r"bim|model+er", "bim"),
     (r"lead|principal|head|manager|director|senior|^p[3-9]\b", "senior"),
     (r"^p[12]\b|engineer", "engineer"),
     (r"professional|junior|graduate|trainee|assistant|^p0\b", "junior"),
