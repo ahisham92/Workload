@@ -1664,10 +1664,14 @@ class Unit:
                 raise ValidationError([f"{number} is not a project in the register."])
             name = project.name
         start = data.get("start")
+        try:
+            start = _dt.date.fromisoformat(str(start)) if start else None
+        except ValueError:
+            raise ValidationError(["The start is not a date."])
         return task_list.generate_meetings(
             self, engineers=self.engineer_names(),
             project_number=number, project_name=name,
-            start=_dt.date.fromisoformat(start) if start else None,
+            start=start,
             weeks=data.get("weeks"), weekday=data.get("weekday"),
             hours=data.get("hours"))
 

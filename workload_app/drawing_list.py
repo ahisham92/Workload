@@ -180,6 +180,10 @@ def read(data: bytes, filename: str = "") -> List[Dict[str, Any]]:
         sheets = sorted(book.worksheets,
                         key=lambda s: ("drawing" not in s.title.lower(), s.title))
         for sheet in sheets:
+            # Some tools write a stub dimension that read-only mode believes.
+            reset = getattr(sheet, "reset_dimensions", None)
+            if reset is not None:
+                reset()
             rows = list(sheet.iter_rows(values_only=True))
             for at, cells in enumerate(rows[:HEADER_SEARCH_ROWS]):
                 columns = _header_map(cells or ())
