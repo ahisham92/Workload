@@ -404,18 +404,19 @@ There is no limit to the register: every project job on the exports becomes a
 project, with a deliverable for every phase booked.
 
 **Every night, on its own** — the exports come out of BISpark, which only a
-browser on the company network can reach, so the export runs on the manager's
-own PC. *Download the PC kit* on the Timesheets tab gives a zip; `setup.bat` in
-it installs a private Python with Playwright, asks for the report link, runs
-the export once in a window you can watch, and schedules it for 12:00 am. Each
-night it opens the report in Edge (signed in with the Windows login, so no
-password is kept anywhere), exports *Work Breakdown per Project* as underlying
-data and posts it to `/api/nightly/timesheets`, signed with the unit's import
-key. The import is the same replace as the tab's, with one guard: an export
-holding over 10% fewer rows for someone than are already stored is refused, so
-a narrowed date filter cannot wipe history while nobody is watching. The tab
-shows when the last import ran and whether it worked, failures on the PC
-included. Only the key's digest is stored; a new kit cancels the old key. See
+PC on the company network can reach, so they are fetched there, with nothing
+installed: PowerShell and Task Scheduler come with Windows. The manager pastes
+the export request once (the browser's *Copy as PowerShell* of the Export
+click) and names the team's shared folder; the request is kept with the unit,
+never in this repository. *Kit for the team's PCs* is a zip with no key: at
+12:00 am each PC sends BISpark that request, signed in with its own Windows
+login, and copies the spreadsheet to the shared folder. *Kit for my PC* also
+holds the unit's import key: at 1:00 am it does the same and then posts every
+export in the folder to `/api/nightly/timesheets`. The import is the tab's own
+replace, with one guard: an export holding over 10% fewer rows for someone than
+are stored is refused. The tab shows when the last import ran, whether it
+worked, and whose export was not refreshed. `pause.bat`, `resume.bat` and
+`remove.bat` in each kit stop it; *Stop nightly imports* cancels the key. See
 `workload_app/nightly.py` and `workload_app/data/nightly/`.
 
 **Projects** — the register, and behind each row the project's own page: its
