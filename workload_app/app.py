@@ -1193,7 +1193,8 @@ class WorkloadApp:
         self.accounts.record_import(unit["id"], result)
         # Fresh timesheets can change what needs the manager: tell their phone.
         try:
-            notify.run(self, user_ids=[user["id"]], unit_ids=[unit["id"]])
+            notify.run(self, user_ids=notify.people_of_unit(self, user["id"], unit["id"]),
+                       unit_ids=[unit["id"]])
         except Exception:                  # pragma: no cover - a notification
             traceback.print_exc()          # never fails an import
         return result
@@ -1222,10 +1223,13 @@ class WorkloadApp:
             device.pop("auth")
             device.pop("p256dh")
             devices.append(device)
+        manager = ctx.user["role"] == ROLE_MANAGER
         return {"public_key": notify.keys_for(self.data_dir).public,
                 "devices": devices,
                 "messages": self.accounts.push_messages(user_id),
-                "task": notify.task_command(self)}
+                "about": notify.ABOUT_MANAGER if manager else notify.ABOUT_MEMBER,
+                # The host's scheduled task is the manager's to set up, once.
+                "task": notify.task_command(self) if manager else None}
 
     def push_subscribe(self, ctx: Context, query, body) -> Dict[str, Any]:
         endpoint = str(body.get("endpoint") or "").strip()
@@ -1376,11 +1380,11 @@ class WorkloadApp:
             ("GET", "/api/checkins", lambda ctx, q, b: ctx.service.checkins(), "manager"),
             ("GET", "/api/weekly", lambda ctx, q, b: ctx.service.weekly(), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),
-            ("GET", "/api/push", self.push_status, "manager"),
-            ("POST", "/api/push/devices", self.push_subscribe, "manager"),
-            ("DELETE", "/api/push/devices/{}", self.push_unsubscribe, "manager"),
-            ("POST", "/api/push/test", self.push_test, "manager"),
-            ("POST", "/api/push/check", self.push_check, "manager"),
+            ("GET", "/api/push", self.push_status, "user"),
+            ("POST", "/api/push/devices", self.push_subscribe, "user"),
+            ("DELETE", "/api/push/devices/{}", self.push_unsubscribe, "user"),
+            ("POST", "/api/push/test", self.push_test, "user"),
+            ("POST", "/api/push/check", self.push_check, "user"),
             ("GET", "/api/units/together", self.units_together, "manager"),
             ("POST", "/api/planned-work",
              lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),

@@ -1,12 +1,15 @@
-"""Notifications on the manager's phone.
+"""Notifications on the phones of the manager and the team.
 
-What is sent is what the app already flags: the weekly report being ready,
-somebody who needs to ease off, a submission that is late or due tomorrow,
-people to ask for, timesheets that have stopped coming in.  Each has a key, and
+What is sent is what the app already flags.  A manager hears that the weekly
+report is ready, somebody needs to ease off, a submission is late or due
+tomorrow, people should be asked for, timesheets have stopped coming in.  A
+team member hears about their own week and deadlines and, when they lead
+people, about their team: who needs to ease off and what of theirs is due.
+Any phone works: Android in the browser, an iPhone from the home-screen app.  Each has a key, and
 a key is sent once: the same thing is never pushed twice.
 
-A run looks at every unit of every manager who has turned notifications on,
-and sends each phone one notification for everything new -- one line when
+A run looks at every unit of everybody who has turned notifications on, and
+sends each phone one notification for everything new -- one line when
 there is one thing, "3 things need you" when there are several.  It runs
 
 * from the host's scheduled task, ``python -m workload_app.admin notify``
@@ -34,9 +37,18 @@ URL_CHECKINS = "./#checkins"
 URL_PLANNER = "./#planner"
 URL_RESOURCING = "./#resourcing"
 URL_TIMESHEETS = "./#timesheets"
+#: A team member's own page.
+URL_MINE = "./"
 #: Whoever the push service should contact about the sender, when the phone
 #: did not say where the app was opened.
 FALLBACK_CONTACT = "https://github.com/ahisham92/Workload"
+#: What each kind of account is told about, as the app says it.
+ABOUT_MANAGER = ("Your phone is told when the weekly report is ready, and when something "
+                 "needs you: someone who needs to ease off, a late submission or one due "
+                 "tomorrow, people to ask for, timesheets that stopped coming in.")
+ABOUT_MEMBER = ("Your phone is told about your week at its start, and when a submission "
+                "of yours is late or due tomorrow. If you lead people, you also hear who "
+                "in your team needs to ease off and what of theirs is due.")
 #: A phone whose push service keeps refusing is given up on after this many.
 GIVE_UP_AFTER = 10
 
@@ -74,26 +86,8 @@ def alerts(report: Dict[str, Any], checkins: Dict[str, Any], *, today: _dt.date,
                     + "Agree what can wait or move to someone with room.",
             "url": URL_CHECKINS,
         })
-    tomorrow = _next_working_day(today, checkins)
-    for item in report["this_week"]["due"]:
-        if item["late"]:
-            out.append({
-                "key": f"late:{item['row']}:{item['was_due']}",
-                "title": f"{prefix}Late: {item['name']}",
-                "body": f"{item['project']} was due {_short(_day(item['was_due']))}. "
-                        "Agree a new date.",
-                "url": URL_PLANNER,
-            })
-        elif tomorrow and item["date"] == tomorrow:
-            out.append({
-                "key": f"due:{item['row']}:{item['date']}",
-                "title": f"{prefix}Due tomorrow: {item['name']}",
-                "body": f"{item['project']}"
-                        + (f", {round(item['progress'] * 100)}% done"
-                           if item.get("progress") is not None else "")
-                        + (f". With {', '.join(item['people'])}." if item["people"] else "."),
-                "url": URL_PLANNER,
-            })
+    out += _due_alerts(report["this_week"]["due"], _next_working_day(today, checkins),
+                       prefix=prefix, url=URL_PLANNER)
     for ask in report.get("staffing") or []:
         if ask.get("severity") != "now":
             continue
@@ -103,6 +97,84 @@ def alerts(report: Dict[str, Any], checkins: Dict[str, Any], *, today: _dt.date,
             "body": ask.get("detail", ""),
             "url": URL_RESOURCING,
         })
+    return out
+
+
+def _due_alerts(items: Sequence[Dict[str, Any]], tomorrow: Optional[str], *,
+                prefix: str, url: str) -> List[Dict[str, Any]]:
+    """A late submission, or one due on the next working day."""
+    out = []
+    for item in items:
+        if item["late"]:
+            out.append({
+                "key": f"late:{item['row']}:{item['was_due']}",
+                "title": f"{prefix}Late: {item['name']}",
+                "body": f"{item['project']} was due {_short(_day(item['was_due']))}. "
+                        "Agree a new date.",
+                "url": url,
+            })
+        elif tomorrow and item["date"] == tomorrow:
+            out.append({
+                "key": f"due:{item['row']}:{item['date']}",
+                "title": f"{prefix}Due tomorrow: {item['name']}",
+                "body": f"{item['project']}"
+                        + (f", {round(item['progress'] * 100)}% done"
+                           if item.get("progress") is not None else "")
+                        + (f". With {', '.join(item['people'])}." if item["people"] else "."),
+                "url": url,
+            })
+    return out
+
+
+def member_alerts(report: Dict[str, Any], checkins: Dict[str, Any], engineer: str, *,
+                  today: _dt.date, prefix: str = "") -> List[Dict[str, Any]]:
+    """What a team member is told: their own deadlines, and -- when they lead
+    people -- their team's: who needs to ease off, what is late or due.
+
+    Nobody outside their own team is named, and none of the manager's other
+    figures are in it.
+    """
+    week = report["week_start"]
+    led = next((l["people"] for l in checkins.get("leading") or []
+                if l["name"] == engineer), [])
+    team = set(led)
+    people = {p["name"]: p for p in checkins.get("people") or []}
+    mine = [d for d in report["this_week"]["due"] if engineer in d["people"]]
+    theirs = [d for d in report["this_week"]["due"]
+              if engineer not in d["people"] and team & set(d["people"])]
+    ease = [n for n in led if people.get(n, {}).get("signal", {}).get("key") == "rest"]
+    me = people.get(engineer) or {}
+
+    lines = []
+    if mine:
+        late = sum(1 for d in mine if d["late"])
+        lines.append(f"{len(mine)} submission{'s' if len(mine) != 1 else ''} with you this week"
+                     + (f", {late} late." if late else "."))
+    else:
+        lines.append("No submissions due with you this week.")
+    if me.get("free_week") is not None:
+        lines.append(f"{me['free_week']:g} h free in your week.")
+    if led:
+        lines.append(f"Your team: {len(theirs)} due"
+                     + (f", {', '.join(ease)} need{'s' if len(ease) == 1 else ''} to ease off."
+                        if ease else "."))
+    out: List[Dict[str, Any]] = [{
+        "key": f"week:{engineer}:{week}",
+        "title": f"{prefix}Your week" + (" and your team's" if led else ""),
+        "body": " ".join(lines),
+        "url": URL_MINE,
+    }]
+    for name in ease:
+        reasons = people[name]["signal"].get("reasons") or []
+        out.append({
+            "key": f"rest:{name}:{week}",
+            "title": f"{prefix}{name} needs to ease off",
+            "body": (f"{reasons[0].capitalize()}. " if reasons else "")
+                    + "Agree with them what can wait, and tell your manager.",
+            "url": URL_MINE,
+        })
+    out += _due_alerts(mine + theirs, _next_working_day(today, checkins),
+                       prefix=prefix, url=URL_MINE)
     return out
 
 
@@ -123,8 +195,10 @@ def summary(messages: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                 "url": only.get("url") or URL_WEEKLY, "tag": only["key"]}
     titles = [m["title"] for m in messages]
     body = "\n".join(titles[:4]) + (f"\nand {len(titles) - 4} more" if len(titles) > 4 else "")
+    urls = {m.get("url") for m in messages}
     return {"title": f"{len(messages)} things need you", "body": body,
-            "url": URL_WEEKLY, "tag": "selecao-summary"}
+            "url": urls.pop() if len(urls) == 1 else URL_WEEKLY,
+            "tag": "selecao-summary"}
 
 
 Sender = Callable[..., int]
@@ -170,47 +244,89 @@ def _reason(error: Exception) -> str:
     return str(error) or type(error).__name__
 
 
-def check_unit(app, user_id: int, unit: Dict[str, Any], *, several: bool,
-               today: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
-    """The new alerts of one unit, kept so they are not sent again."""
-    from .service import WorkloadService, _today
+class _Views:
+    """Each unit's report and Check-ins, worked out once per run however
+    many people are told about it."""
 
-    service = WorkloadService(autosave=app.autosave)
-    try:
-        app._open(service, user_id, unit["id"])
-        report = service.weekly()
-        view = service.checkins()
-    finally:
-        service.close()
-    prefix = f"{unit['name']}: " if several else ""
-    found = alerts(report, view, today=today or _today(), prefix=prefix)
-    return app.accounts.new_push_messages(user_id, unit["id"], found)
+    def __init__(self, app):
+        self.app = app
+        self._seen: Dict[str, Any] = {}
+
+    def of(self, owner_id: int, unit_id: str):
+        if unit_id not in self._seen:
+            from .service import WorkloadService
+
+            service = WorkloadService(autosave=self.app.autosave)
+            try:
+                self.app._open(service, owner_id, unit_id)
+                self._seen[unit_id] = (service.weekly(), service.checkins())
+            finally:
+                service.close()
+        return self._seen[unit_id]
+
+
+def _new_for_manager(app, views: _Views, user_id: int, unit_ids, today, errors, log):
+    units = app.accounts.units(user_id)
+    fresh: List[Dict[str, Any]] = []
+    for unit in units:
+        if unit_ids is not None and unit["id"] not in unit_ids:
+            continue
+        try:
+            report, view = views.of(user_id, unit["id"])
+        except Exception as error:             # one bad unit never stops the rest
+            errors.append(f"{unit['name']}: {error}")
+            if log:
+                traceback.print_exc(file=log)
+            continue
+        prefix = f"{unit['name']}: " if len(units) > 1 else ""
+        fresh += app.accounts.new_push_messages(
+            user_id, unit["id"], alerts(report, view, today=today, prefix=prefix))
+    return fresh
+
+
+def _new_for_member(app, views: _Views, user_id: int, unit_ids, today, errors, log):
+    granted = app.accounts.memberships(user_id)
+    fresh: List[Dict[str, Any]] = []
+    for row in granted:
+        if unit_ids is not None and row["unit_id"] not in unit_ids:
+            continue
+        try:
+            report, view = views.of(row["owner_id"], row["unit_id"])
+        except Exception as error:
+            errors.append(f"{row['unit_name']}: {error}")
+            if log:
+                traceback.print_exc(file=log)
+            continue
+        prefix = f"{row['unit_name']}: " if len(granted) > 1 else ""
+        fresh += app.accounts.new_push_messages(
+            user_id, row["unit_id"],
+            member_alerts(report, view, row["engineer"], today=today, prefix=prefix))
+    return fresh
 
 
 def run(app, *, user_ids: Optional[Sequence[int]] = None,
         unit_ids: Optional[Sequence[str]] = None,
         sender: Optional[Sender] = None, log=None) -> Dict[str, Any]:
-    """Look at every unit of every manager with a phone, and send what is new."""
+    """Look at every unit of everybody with a phone, and send what is new.
+
+    A manager hears about each of their units; a team member about their own
+    deadlines and, if they lead people, their team's.
+    """
+    from .service import _today
+
     keys = keys_for(app.data_dir)
     owners = sorted({d["user_id"] for d in app.accounts.push_devices()})
     if user_ids is not None:
         owners = [o for o in owners if o in set(user_ids)]
+    views = _Views(app)
+    today = _today()
     report = {"accounts": 0, "sent": 0, "new": 0, "failed": 0, "errors": []}
     for user_id in owners:
         user = app.accounts.user(user_id)
-        if user is None or user.get("role") != "manager":
+        if user is None:
             continue
-        units = app.accounts.units(user_id)
-        fresh: List[Dict[str, Any]] = []
-        for unit in units:
-            if unit_ids is not None and unit["id"] not in unit_ids:
-                continue
-            try:
-                fresh += check_unit(app, user_id, unit, several=len(units) > 1)
-            except Exception as error:         # one bad unit never stops the rest
-                report["errors"].append(f"{unit['name']}: {error}")
-                if log:
-                    traceback.print_exc(file=log)
+        find = _new_for_manager if user.get("role") == "manager" else _new_for_member
+        fresh = find(app, views, user_id, unit_ids, today, report["errors"], log)
         report["accounts"] += 1
         report["new"] += len(fresh)
         if not fresh:
@@ -226,13 +342,18 @@ def run(app, *, user_ids: Optional[Sequence[int]] = None,
     return report
 
 
+def people_of_unit(app, owner_id: int, unit_id: str) -> List[int]:
+    """Everybody to tell when this unit changes: its manager, and the people
+    who were given access to it."""
+    return [owner_id] + [m["user_id"] for m in app.accounts.unit_members(unit_id)]
+
+
 def test(app, user_id: int, *, sender: Optional[Sender] = None) -> List[Dict[str, Any]]:
     """A notification now, to every phone of the account, to show it works."""
     return deliver(app.accounts, keys_for(app.data_dir), user_id, {
         "title": "Notifications are on",
-        "body": "Selecao+ will tell you here when the weekly report is ready "
-                "and when something needs you.",
-        "url": URL_WEEKLY, "tag": "selecao-test"}, sender=sender)
+        "body": "Selecao+ will tell you here when something needs you.",
+        "url": "./", "tag": "selecao-test"}, sender=sender)
 
 
 def task_command(app) -> str:

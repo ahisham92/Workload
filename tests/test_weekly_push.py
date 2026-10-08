@@ -362,3 +362,63 @@ class TestNotifications:
                 "need:t:engineering:2"} <= keys
         due = next(f for f in found if f["key"].startswith("due:"))
         assert due["title"] == "Due tomorrow: Deck GA" and "50% done" in due["body"]
+
+
+# --------------------------------------------------------------------------
+# the team's own phones
+# --------------------------------------------------------------------------
+
+class TestTeamPhones:
+    def member(self, app, username, engineer):  # noqa: F811
+        from workload_app.accounts import ROLE_MEMBER
+        unit_id = app.accounts.units(app.accounts.users()[0]["id"])[0]["id"]
+        user = app.accounts.create_user(username, "a long password 123", role=ROLE_MEMBER)
+        app.accounts.grant(user_id=user["id"], unit_id=unit_id, engineer=engineer)
+        phone = Phone(f"https://fcm.googleapis.com/fcm/send/{username}")
+        keys = phone.subscription()["keys"]
+        app.accounts.add_push_device(user["id"], endpoint=phone.endpoint, auth=keys["auth"],
+                                     p256dh=keys["p256dh"], label="Android phone, Chrome")
+        return user, phone
+
+    def test_a_team_lead_hears_about_their_team(self, app):  # noqa: F811
+        team(app)
+        ask("PUT", "/api/people/Amal", {"grade": "manager"})
+        amal, amal_phone = self.member(app, "amal", "Amal")
+        dina, dina_phone = self.member(app, "dina", "Dina")
+        service = Service([amal_phone, dina_phone])
+        result = notify.run(app, sender=service)
+        assert result["sent"] == 2, result
+        got = {endpoint: message for endpoint, message, *_ in service.got}
+        lead = got[amal_phone.endpoint]
+        assert "Your week and your team's" in lead["body"]
+        assert lead["url"] == "./"          # their own page; they have no Weekly tab
+        titles = {m["title"] for m in app.accounts.push_messages(amal["id"])}
+        assert "Bassem needs to ease off" in titles
+        assert "Your week and your team's" in titles
+        # Dina leads nobody: her own week, and nobody else's name.
+        mine = app.accounts.push_messages(dina["id"])
+        assert [m["title"] for m in mine] == ["Your week"]
+        assert "Bassem" not in json.dumps(mine) and "Amal" not in json.dumps(mine)
+        # Nothing twice.
+        assert notify.run(app, sender=service)["new"] == 0
+
+    def test_a_member_turns_it_on_from_their_page(self, app, monkeypatch):  # noqa: F811
+        team(app)
+        from workload_app.accounts import ROLE_MEMBER
+        me = ask("GET", "/api/auth/me")[1]["user"]["id"]
+        app.accounts.set_role(me, ROLE_MEMBER)
+        monkeypatch.setattr(app.accounts, "set_role", lambda *a, **k: None)
+        status, view = ask("GET", "/api/push")
+        assert status == 200
+        assert view["task"] is None and "your week" in view["about"]
+        phone = Phone()
+        status, _ = ask("POST", "/api/push/devices", phone.subscription())
+        assert status == 200
+        assert ask("GET", "/api/weekly")[0] == 403
+
+    def test_a_nightly_import_tells_the_team_too(self, app):  # noqa: F811
+        team(app)
+        amal, phone = self.member(app, "amal", "Amal")
+        owner = app.accounts.users()[0]["id"]
+        unit_id = app.accounts.units(owner)[0]["id"]
+        assert amal["id"] in notify.people_of_unit(app, owner, unit_id)

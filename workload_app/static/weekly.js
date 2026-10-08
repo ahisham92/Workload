@@ -3,14 +3,13 @@
  * The Weekly tab. The server puts the report together from what Check-ins,
  * the staffing forecast and the submissions plan already work out
  * (workload_app/weekly.py); nothing here is typed in. Below it, the switch
- * that lets this phone be told when the report is ready and when something
- * needs the manager (workload_app/notify.py, sw.js).
+ * for notifications on this phone (push.js).
  *
  * Built on app.js's helpers (el, api, setChildren, fmt, toast, switchView).
  */
 'use strict';
 
-const week = { data: null, push: null, busy: false };
+const week = { data: null, busy: false };
 
 const WK_TONE_LABEL = { bad: 'First', warn: 'This week', ok: 'When you can' };
 
@@ -33,7 +32,7 @@ async function loadWeekly() {
     week.busy = false;
   }
   renderWeekly();
-  loadPush();
+  if (window.selecaoPush) window.selecaoPush.show($('#weekly-push'));
 }
 
 /* ------------------------------------------------------------ the report */
@@ -164,189 +163,6 @@ async function downloadWeekly() {
   }
 }
 
-/* ------------------------------------------------------ notifications */
-
-const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window
-  && 'Notification' in window && window.isSecureContext;
-const isAppleDevice = () => /iphone|ipad|ipod/i.test(navigator.userAgent)
-  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const onHomeScreen = () => window.matchMedia('(display-mode: standalone)').matches
-  || window.navigator.standalone === true;
-
-function keyBytes(text) {
-  const padded = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
-  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
-}
-
-function deviceLabel() {
-  const ua = navigator.userAgent;
-  const kind = /iphone/i.test(ua) ? 'iPhone' : /ipad/i.test(ua) ? 'iPad'
-    : /android/i.test(ua) ? 'Android phone' : /windows/i.test(ua) ? 'Windows PC'
-      : /mac/i.test(ua) ? 'Mac' : 'Browser';
-  const browser = /edg\//i.test(ua) ? 'Edge' : /chrome|crios/i.test(ua) ? 'Chrome'
-    : /firefox|fxios/i.test(ua) ? 'Firefox' : /safari/i.test(ua) ? 'Safari' : '';
-  return browser && !/iphone|ipad/i.test(kind) ? `${kind}, ${browser}` : kind;
-}
-
-async function currentSubscription() {
-  if (!pushSupported()) return null;
-  const registration = await navigator.serviceWorker.getRegistration();
-  return registration ? registration.pushManager.getSubscription() : null;
-}
-
-async function loadPush() {
-  try {
-    week.push = await api('/api/push', { quiet: true });
-    week.subscription = await currentSubscription();
-  } catch (error) {
-    week.push = null;
-  }
-  renderPush();
-}
-
-function renderPush() {
-  const box = $('#weekly-push');
-  const p = week.push;
-  if (!box) return;
-  if (!p) { setChildren(box); box.hidden = true; return; }
-  box.hidden = false;
-  const here = week.subscription
-    && p.devices.some((d) => d.fingerprint && d.fingerprint === week.fingerprint);
-  let action;
-  if (!pushSupported()) {
-    action = el('div', { class: 'msg msg-warn' }, isAppleDevice() && !onHomeScreen()
-      ? 'On an iPhone, notifications work from the home-screen app: tap Share, then '
-        + '"Add to Home Screen", open Selecao+ from there and come back to this tab.'
-      : 'This browser cannot show notifications. Open Selecao+ on your phone instead.');
-  } else if (here) {
-    action = el('div', { class: 'row-actions' },
-      el('span', { class: 'pill pill-ok' }, 'On for this phone'),
-      el('button', { class: 'btn btn-sm', type: 'button', onclick: testPush }, 'Send a test'),
-      el('button', { class: 'btn btn-sm', type: 'button', onclick: checkPush }, 'Check now'),
-      el('button', { class: 'btn btn-sm', type: 'button', onclick: disablePush }, 'Turn off'));
-  } else {
-    action = el('div', { class: 'row-actions' },
-      el('button', { class: 'btn btn-primary', type: 'button', onclick: enablePush },
-        'Turn on notifications on this phone'));
-  }
-  const devices = p.devices.length ? el('ul', { class: 'wk-lines' }, p.devices.map((d) => el('li', {},
-    el('span', { class: `wk-dot wk-dot-${d.failures ? 'warn' : 'ok'}` }),
-    el('b', {}, d.label || 'A phone'),
-    d.fingerprint === week.fingerprint ? ' (this one)' : '',
-    `, on since ${wkDay(d.added_at.slice(0, 10))}`,
-    d.last_ok_at ? `, last reached ${wkDay(d.last_ok_at.slice(0, 10))}` : '',
-    d.failures ? el('span', { class: 'v-warn' }, `. Not reached the last ${d.failures} time${d.failures === 1 ? '' : 's'}: ${d.last_error || ''}`) : ''))) : null;
-  const sent = p.messages.length ? el('details', { class: 'wk-sent' },
-    el('summary', {}, `Sent lately (${p.messages.length})`),
-    el('ul', { class: 'wk-lines' }, p.messages.map((m) => el('li', {},
-      el('span', { class: 'muted small' }, `${wkDay(m.created_at.slice(0, 10), { day: 'numeric', month: 'short' })} `),
-      el('b', {}, m.title), m.body ? el('div', { class: 'small muted' }, m.body) : null)))) : null;
-  setChildren(box,
-    el('div', { class: 'panel-head' }, el('div', {},
-      el('h3', {}, 'Notifications on your phone'),
-      el('p', { class: 'muted' }, 'Your phone is told when the weekly report is ready, and when '
-        + 'something needs you: someone who needs to ease off, a late submission or one due '
-        + 'tomorrow, people to ask for, timesheets that stopped coming in. Each thing once, '
-        + 'never twice. Nothing goes by email.'))),
-    action,
-    devices,
-    p.devices.length ? el('div', { class: 'wk-task' },
-      el('p', { class: 'small' }, el('b', {}, 'So they arrive on their own every morning: '),
-        'on PythonAnywhere open the Tasks tab, set a daily time before work (04:00 UTC is 7 am in Riyadh, 6 or 7 am in Cairo), '
-        + 'paste this line, and press Create. Once is enough.'),
-      el('div', { class: 'wk-task-line' },
-        el('code', {}, p.task),
-        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyTask(p.task) }, 'Copy'))) : null,
-    sent);
-}
-
-async function fingerprintOf(subscription) {
-  if (!subscription || !window.crypto || !crypto.subtle) return null;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(subscription.endpoint));
-  return [...new Uint8Array(digest)].slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function enablePush() {
-  try {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      toast('Notifications were not allowed. Allow them for Selecao+ in the phone\'s Settings, then try again.', 'bad');
-      return;
-    }
-    await navigator.serviceWorker.register('sw.js');
-    const registration = await navigator.serviceWorker.ready;
-    const key = keyBytes(week.push.public_key);
-    let subscription = await registration.pushManager.getSubscription();
-    if (subscription) {
-      // Made with another server key (or another installation): start again.
-      const held = subscription.options && subscription.options.applicationServerKey;
-      const same = held && new Uint8Array(held).join() === key.join();
-      if (!same) { await subscription.unsubscribe(); subscription = null; }
-    }
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true, applicationServerKey: key });
-    }
-    await api('/api/push/devices', { method: 'POST', body: {
-      ...subscription.toJSON(), label: deviceLabel(), site: window.location.origin } });
-    toast('Notifications are on. A test is on its way.', 'ok');
-    await testPush();
-  } catch (error) {
-    toast(error.message || 'Notifications could not be turned on.', 'bad');
-  }
-  await loadPushWithPrint();
-}
-
-async function loadPushWithPrint() {
-  week.subscription = await currentSubscription();
-  week.fingerprint = await fingerprintOf(week.subscription);
-  await loadPush();
-}
-
-async function disablePush() {
-  const mine = week.push.devices.find((d) => d.fingerprint === week.fingerprint);
-  try {
-    if (week.subscription) await week.subscription.unsubscribe();
-    if (mine) await api(`/api/push/devices/${mine.id}`, { method: 'DELETE' });
-    toast('Notifications are off on this phone.', 'ok');
-  } catch (error) {
-    toast(error.message, 'bad');
-  }
-  await loadPushWithPrint();
-}
-
-async function testPush() {
-  try {
-    const result = await api('/api/push/test', { method: 'POST' });
-    const failed = result.results.filter((r) => !r.ok);
-    if (failed.length) toast(`Not sent to ${failed.map((f) => f.label || 'a phone').join(', ')}: ${failed[0].error}`, 'bad');
-    else toast('Test sent. It should show on the phone in a few seconds.', 'ok');
-  } catch (error) {
-    toast(error.message, 'bad');
-  }
-  await loadPush();
-}
-
-async function checkPush() {
-  try {
-    const result = await api('/api/push/check', { method: 'POST' });
-    toast(result.new ? `${result.new} new thing${result.new === 1 ? '' : 's'} sent to your phone.`
-      : 'Nothing new since the last notification.', result.failed ? 'bad' : 'ok');
-  } catch (error) {
-    toast(error.message, 'bad');
-  }
-  await loadPush();
-}
-
-async function copyTask(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('Copied. Paste it on the PythonAnywhere Tasks tab.', 'ok');
-  } catch (error) {
-    toast('Select the line and copy it.', 'bad');
-  }
-}
-
 /* ------------------------------------------------------------- wiring */
 
 (function wireWeekly() {
@@ -356,10 +172,4 @@ async function copyTask(text) {
   if (download) download.addEventListener('click', downloadWeekly);
 }());
 
-window.weekly = {
-  load: async () => {
-    week.subscription = await currentSubscription().catch(() => null);
-    week.fingerprint = await fingerprintOf(week.subscription).catch(() => null);
-    return loadWeekly();
-  },
-};
+window.weekly = { load: loadWeekly };

@@ -123,6 +123,10 @@ async function load() {
     state.chosen = true;
   }
   render();
+  if (window.selecaoPush && !state.pushShown) {
+    state.pushShown = true;
+    window.selecaoPush.show($('#member-push'));
+  }
 }
 
 function render() {
