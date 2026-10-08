@@ -1413,6 +1413,7 @@ function wirePlanner() {
 window.planner = {
   load: () => { plan.needs = null; plan.submissions = null; return openPlanner(); },
   board: () => { plan.view = 'handovers'; switchView('planner'); },
+  open: (view) => { plan.view = view; switchView('planner'); },
   afterRefresh: () => {
     plan.needs = null;
     plan.submissions = null;
