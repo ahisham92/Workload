@@ -90,7 +90,7 @@ class TestWhoIsAsking:
         assert who["user"]["display_name"] == "Ahmed"
         assert who["user"]["role"] == "manager"
         assert who["site"] == {"home": "/", "label": "AHM", "logout": "/logout",
-                               "login": "ahmed@example.com"}
+                               "login": "ahmed@example.com", "admin": False}
 
         status, headers, _ = ask("GET", "/login.html", site=AHMED)
         assert status == 303
@@ -599,3 +599,143 @@ class TestLinkedByEmail:
             "email": "not an email"}, site=AHMED)
         assert status == 422
         assert "not an email address" in refused["error"]
+
+
+SARA = {"id": 5, "login": "sara", "email": "sara@example.com", "name": "Sara",
+        "home": "/", "label": "AHM", "logout": "/logout"}
+KARIM = {"id": 6, "login": "karim", "email": "karim@example.com", "name": "Karim",
+         "home": "/", "label": "AHM", "logout": "/logout"}
+ADMIN = dict(AHMED, admin=True)
+
+
+def a_unit_with_a_team(site=AHMED):
+    """Sara (senior) leads a team with Nour (engineer); Karim is a senior
+    outside it; Osama is a junior in nobody's team."""
+    unit_for(site)
+    for name, email in (("Sara", "sara@example.com"),
+                        ("Nour", "nour.ali@example.com"),
+                        ("Karim", "karim@example.com"),
+                        ("Osama", "osama@example.com")):
+        with_email(site, name, email)
+    for name, grade in (("Sara", "senior"), ("Nour", "engineer"),
+                        ("Karim", "senior"), ("Osama", "junior")):
+        assert ask("PUT", f"/api/people/{name}", {"grade": grade}, site=site)[0] == 200
+    status, _, team = ask("POST", "/api/teams", {"name": "Jetties", "lead": "Sara"},
+                          site=site)
+    assert status == 200, team
+    team_id = team["team"]["id"]
+    for name in ("Sara", "Nour"):
+        assert ask("PUT", f"/api/people/{name}", {"team_id": team_id},
+                   site=site)[0] == 200
+
+
+def looks_at(site, person=None):
+    path = "/api/me" + (f"?person={person}" if person else "")
+    environ_query = path.split("?", 1)
+    status, _, body = ask_query("GET", environ_query[0],
+                                environ_query[1] if len(environ_query) > 1 else "",
+                                site=site)
+    return status, body
+
+
+def ask_query(method, path, query, *, site):
+    environ = {
+        "REQUEST_METHOD": method, "SCRIPT_NAME": "/workload", "PATH_INFO": path,
+        "QUERY_STRING": query, "CONTENT_LENGTH": "0",
+        "CONTENT_TYPE": "application/json", "wsgi.input": io.BytesIO(b""),
+        "wsgi.url_scheme": "http", wsgi.SITE_KEY: site,
+    }
+    seen = {}
+
+    def start_response(status, headers):
+        seen["status"] = int(status.split()[0])
+
+    payload = b"".join(wsgi.application(environ, start_response))
+    return seen["status"], None, json.loads(payload)
+
+
+class TestWhoSeesWhom:
+    """An engineer sees themselves; a senior also sees the people they lead;
+    the manager sees the unit; the site's administrator sees every unit."""
+
+    def test_an_engineer_sees_only_themselves(self, app):
+        a_unit_with_a_team()
+        status, mine = looks_at(NOUR)
+        assert status == 200, mine
+        assert mine["engineer"] == "Nour" and mine["people"] == ["Nour"]
+        for other in ("Sara", "Karim", "Osama", "Nobody"):
+            assert looks_at(NOUR, other)[0] == 404
+            assert ask_query("GET", "/api/me/day", f"person={other}",
+                             site=NOUR)[0] == 404
+            assert ask_query("GET", "/api/me/timesheet", f"person={other}",
+                             site=NOUR)[0] == 404
+
+    def test_a_senior_sees_themselves_and_the_people_they_lead(self, app):
+        a_unit_with_a_team()
+        status, mine = looks_at(SARA)
+        assert status == 200, mine
+        assert mine["people"] == ["Sara", "Nour"]
+        status, theirs = looks_at(SARA, "Nour")
+        assert status == 200, theirs
+        assert theirs["engineer"] == "Nour" and theirs["me"] == "Sara"
+        assert ask_query("GET", "/api/me/day", "person=Nour", site=SARA)[0] == 200
+        assert ask_query("GET", "/api/me/timesheet", "person=Nour",
+                         site=SARA)[0] == 200
+
+    def test_a_senior_sees_nobody_outside_their_team_or_above_them(self, app):
+        a_unit_with_a_team()
+        for other in ("Karim", "Osama"):
+            assert looks_at(SARA, other)[0] == 404
+            assert ask_query("GET", "/api/me/day", f"person={other}",
+                             site=SARA)[0] == 404
+        # Nor does leading make them a manager: the unit's own figures stay shut.
+        assert ask("GET", "/api/projects", site=SARA)[0] == 403
+        assert ask("GET", "/api/team", site=SARA)[0] == 403
+
+    def test_a_senior_leading_nobody_sees_only_themselves(self, app):
+        a_unit_with_a_team()
+        assert looks_at(KARIM)[1]["people"] == ["Karim"]
+        assert looks_at(KARIM, "Nour")[0] == 404
+
+    def test_a_senior_never_changes_what_is_theirs(self, app):
+        """Marks and time off are written for the account's own person, whoever
+        they are looking at."""
+        a_unit_with_a_team()
+        app.tell_in_background = False
+        status, _, said = ask("POST", "/api/me/help",
+                              {"note": "need a hand", "person": "Nour"}, site=SARA)
+        assert status == 200, said
+        _, _, checkins = ask("GET", "/api/checkins", site=AHMED)
+        asked = {p["name"]: p.get("asks") for p in checkins["people"] if p.get("asks")}
+        assert list(asked) == ["Sara"]
+
+    def test_a_manager_sees_the_whole_unit_and_no_other(self, app):
+        a_unit_with_a_team()
+        assert ask("GET", "/api/team", site=AHMED)[0] == 200
+        unit_for(OSAMA, "Buildings")
+        _, _, together = ask("GET", "/api/units/together", site=OSAMA)
+        assert [u["name"] for u in together["units"]] == ["Buildings"]
+        assert together["everyone"] is False
+
+    def test_the_site_administrator_sees_every_unit(self, app):
+        a_unit_with_a_team(ADMIN)
+        unit_for(OSAMA, "Buildings")
+        _, _, who = ask("GET", "/api/auth/me", site=ADMIN)
+        assert who["site"]["admin"] is True
+        status, _, together = ask("GET", "/api/units/together", site=ADMIN)
+        assert status == 200, together
+        assert together["everyone"] is True
+        assert sorted(u["name"] for u in together["units"]) == \
+            ["Buildings · Osama", "Marine Structures"]
+        # Seeing is all: Osama's unit is never opened for changing.
+        assert ask("GET", "/api/units", site=ADMIN)[2]["units"][0]["name"] \
+            == "Marine Structures"
+
+    def test_nobody_else_is_an_administrator_by_saying_so(self, app):
+        a_unit_with_a_team()
+        unit_for(OSAMA, "Buildings")
+        assert ask("GET", "/api/auth/me", site=AHMED)[2]["site"]["admin"] is False
+        for fake in ("true", 1, "yes"):
+            site = dict(AHMED, admin=fake)
+            _, _, together = ask("GET", "/api/units/together", site=site)
+            assert together["everyone"] is False

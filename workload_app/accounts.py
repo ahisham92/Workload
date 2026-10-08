@@ -677,6 +677,16 @@ class Accounts:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def all_units(self) -> List[Dict[str, Any]]:
+        """Every unit of every account, with whose it is: for the site's
+        administrator, who looks across every team."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT u.*, COALESCE(NULLIF(o.display_name, ''), o.username) "
+                "AS owner_name FROM units u JOIN users o ON o.id = u.user_id "
+                "ORDER BY u.name").fetchall()
+        return [dict(row) for row in rows]
+
     def unit(self, user_id: int, unit_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as db:
             row = db.execute("SELECT * FROM units WHERE id = ? AND user_id = ?",
