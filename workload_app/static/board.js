@@ -7,8 +7,8 @@
  * kept. Same moves, same server sums as the list below it -- this is only
  * another way to make them.
  *
- * Built on planner.js's `plan`, tryMoves, commitMoves and suggestMoves, and
- * app.js's helpers.
+ * Built on planner.js's `plan`, tryMoves, commitMoves, suggestMoves and loadTone,
+ * and app.js's helpers.
  */
 'use strict';
 
@@ -21,7 +21,6 @@
   const SHARES = [[0.25, '¼'], [0.5, '½'], [0.75, '¾'], [1, 'All']];
 
   const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
-  const loadClass = (v) => (v === null || v === undefined ? '' : v > 1.0001 ? 'bad' : v < 0.8 ? 'warn' : 'ok');
 
   function shown(data) {
     return data.people.filter((p) => plan.team === 'all' || (p.team_id || '__none__') === plan.team);
@@ -70,10 +69,10 @@
       tabindex: target ? '0' : null,
       onclick: target ? () => hand(board.picked.person, board.picked.item, p.name) : null,
     },
-    el('span', { class: `bd-ring t-${loadClass(after)}`, style: `--fill:${(fill * 360).toFixed(0)}deg` },
+    el('span', { class: `bd-ring t-${loadTone(after)}`, style: `--fill:${(fill * 360).toFixed(0)}deg` },
       avatar(p.name, 40)),
     el('span', { class: 'bd-person-name' }, p.name),
-    el('span', { class: `bd-person-load v-${loadClass(after)}` },
+    el('span', { class: `bd-person-load v-${loadTone(after)}` },
       moved ? `${pct(before)} → ${pct(after)}` : pct(after)));
   }
 
@@ -94,7 +93,7 @@
     },
     avatar(person.name, size),
     el('span', { class: 'bd-token-name' }, person.name),
-    el('span', { class: `bd-token-hours v-${loadClass(person.after.load)}` },
+    el('span', { class: `bd-token-hours v-${loadTone(person.after.load)}` },
       `${fmt.hours(h)} h`,
       Math.abs(delta) > 0.05 ? el('em', {}, ` ${delta > 0 ? '+' : '−'}${fmt.hours(Math.abs(delta))}`) : null));
     if (!gone) draggable(node, person, item);
@@ -151,7 +150,7 @@
       ? el('div', { class: 'bd-effect' },
         el('span', {}, 'Over a full load ', el('b', { class: s.over_after < s.over_before ? 'v-ok' : s.over_after > s.over_before ? 'v-bad' : '' },
           `${s.over_before} → ${s.over_after}`)),
-        el('span', {}, 'Busiest ', el('b', { class: `v-${loadClass(s.peak_after)}` },
+        el('span', {}, 'Busiest ', el('b', { class: `v-${loadTone(s.peak_after)}` },
           `${pct(s.peak_before)} → ${pct(s.peak_after)}`)),
         el('span', {}, 'With room ', el('b', {}, `${s.room_before} → ${s.room_after}`)))
       : null;
@@ -252,7 +251,7 @@
       if (target) hand(person, item, target);
     };
     node.addEventListener('pointerup', finish);
-    node.addEventListener('pointercancel', (e) => { start = null; clear(); });
+    node.addEventListener('pointercancel', () => { start = null; clear(); });
     node.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();

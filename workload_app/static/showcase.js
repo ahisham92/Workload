@@ -927,7 +927,6 @@
     const out = [];
     const go = (label, action) => el('button', { class: 'btn btn-sm', type: 'button', onclick: action }, label);
     const board = () => window.planner && window.planner.board();
-    const people = new Map((data.people || []).map((p) => [p.name, p]));
     if (model) {
       for (const m of model.moves) {
         const from = model.byName.get(m.from); const to = model.byName.get(m.to);
@@ -1071,6 +1070,6 @@
     }
   }
 
-  window.showcase = { profile, teamCards, landscape, renderScape };
+  window.showcase = { profile, teamCards };
   wire();
 }());

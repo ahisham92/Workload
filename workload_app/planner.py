@@ -307,7 +307,7 @@ def _state(*, rates, assignees, tasks_by_id, window: List[_dt.date],
     # Drawings in hand: what is left on a project, shared out by who is
     # working on it at the pace this state has.
     on_project: Dict[str, float] = defaultdict(float)
-    for (person, project), rate in rates.items():
+    for (_person, project), rate in rates.items():
         on_project[project] += rate
 
     out: Dict[str, Dict[str, Any]] = {}

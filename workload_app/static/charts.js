@@ -631,6 +631,5 @@ function escape(text) {
 }
 
 window.charts = {
-  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation,
-  legend, figure, escape, SERIES,
+  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation, escape,
 };

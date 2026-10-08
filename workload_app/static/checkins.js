@@ -5,7 +5,7 @@
  * calendar (workload_app/checkins.py); nothing here is typed in.
  *
  * Built on app.js's helpers (el, api, setChildren, engineerColor, fmt) and
- * charts.js's svgEl and hoverable.
+ * charts.js's svgEl, hoverable and escape.
  */
 'use strict';
 
@@ -225,7 +225,7 @@ function freeGrid(people, data) {
         style: `--free:${share.toFixed(2)}`,
         'data-sort': day.free,
       }, day.free >= 0.5 ? fmt.hours(day.free) : day.over > 0 ? `+${fmt.hours(day.over)}` : '·');
-      hoverable(cell, `<b>${escapeHtml(p.name)}, ${ciDay(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}</b>`
+      hoverable(cell, `<b>${charts.escape(p.name)}, ${ciDay(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}</b>`
         + `<br>${fmt.hours(day.free)} h free · ${fmt.hours(day.booked)} h planned`
         + (day.over > 0 ? `<br>${fmt.hours(day.over)} h more than fits the day` : ''));
       return cell;
@@ -262,7 +262,7 @@ function canTake(people) {
 
 /* --------------------------------------------------------- per person */
 
-function loadBars(weeks, color) {
+function loadBars(weeks) {
   const w = 220, h = 64, pad = 2;
   const peak = Math.max(1.3, ...weeks.map((x) => x.load || 0));
   const step = w / weeks.length;
@@ -341,7 +341,7 @@ function personCard(p, data) {
           + (p.leads ? ` · leads ${p.leads}, ${ciHours(p.leading_hours)} a day on it` : ''))),
       el('span', { class: `pill pill-${SIGNAL_TONE[s.key]}` }, s.label)),
     el('div', { class: 'ci-chart' },
-      loadBars(p.weeks, color),
+      loadBars(p.weeks),
       el('div', { class: 'eng-trend-labels' },
         el('span', {}, ciDay(data.weeks[0], { day: 'numeric', month: 'short' })),
         el('span', {}, 'line = their hours'),
@@ -398,10 +398,6 @@ function seenButton(point) {
   }, 'Seen');
 }
 
-function escapeHtml(text) {
-  return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
 /* ------------------------------------------- the strip on Overview */
 
 function renderCheckinSummary() {
@@ -450,5 +446,4 @@ function renderCheckinSummary() {
 window.checkins = {
   load: loadCheckins,
   summary: () => loadCheckins(true),
-  reset: () => { checkin.data = null; },
 };

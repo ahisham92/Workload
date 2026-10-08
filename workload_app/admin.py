@@ -123,10 +123,7 @@ def main(argv=None) -> int:
 
 
 def _add(db: Accounts, data_dir: Path, args) -> int:
-    password = args.password or _ask_password()
-    generated = password is None
-    if generated:
-        password = accounts_module.generated_password()
+    password, generated = _password_from(args)
     role = accounts_module.ROLE_MEMBER if args.member else accounts_module.ROLE_MANAGER
     user = db.create_user(args.username, password, display_name=args.name,
                           is_admin=args.admin, role=role)
@@ -166,10 +163,17 @@ def _find_user(db: Accounts, username: str):
     return next((u for u in db.users() if u["username"] == wanted), None)
 
 
-def _link(db: Accounts, data_dir: Path, args) -> int:
-    user = _find_user(db, args.username)
+def _named_user(db: Accounts, username: str):
+    """:func:`_find_user`, saying so on stderr when there is no such account."""
+    user = _find_user(db, username)
     if user is None:
-        print(f"error: no account called {args.username}", file=sys.stderr)
+        print(f"error: no account called {username}", file=sys.stderr)
+    return user
+
+
+def _link(db: Accounts, data_dir: Path, args) -> int:
+    user = _named_user(db, args.username)
+    if user is None:
         return 2
     if args.site_id:
         # Somebody who opened the Workload tab before this was run was given
@@ -195,14 +199,10 @@ def _link(db: Accounts, data_dir: Path, args) -> int:
 
 
 def _password(db: Accounts, data_dir: Path, args) -> int:
-    user = _find_user(db, args.username)
+    user = _named_user(db, args.username)
     if user is None:
-        print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
-    password = args.password or _ask_password()
-    generated = password is None
-    if generated:
-        password = accounts_module.generated_password()
+    password, generated = _password_from(args)
     db.set_password(user["id"], password)
     print(f"Password changed for {user['username']}; every session was ended.")
     if generated:
@@ -211,9 +211,8 @@ def _password(db: Accounts, data_dir: Path, args) -> int:
 
 
 def _remove(db: Accounts, data_dir: Path, args) -> int:
-    user = _find_user(db, args.username)
+    user = _named_user(db, args.username)
     if user is None:
-        print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
     if not args.yes:
         answer = input(f"Delete {user['username']} and every unit they have? "
@@ -230,9 +229,8 @@ def _remove(db: Accounts, data_dir: Path, args) -> int:
 def _import(db: Accounts, data_dir: Path, args) -> int:
     from . import library
 
-    user = _find_user(db, args.username)
+    user = _named_user(db, args.username)
     if user is None:
-        print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
     source = Path(args.workbook).expanduser()
     if not source.is_file():
@@ -257,9 +255,8 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
     """The console half of the app's ⭱ button, for a file already on the host."""
     from . import library
 
-    user = _find_user(db, args.username)
+    user = _named_user(db, args.username)
     if user is None:
-        print(f"error: no account called {args.username}", file=sys.stderr)
         return 2
     wanted = str(args.unit).strip().lower()
     units = db.units(user["id"])
@@ -463,6 +460,15 @@ def _check(db, data_dir, args) -> int:
     report = deployment.check(args.data_dir)
     print(deployment.render(report))
     return 0 if report.ok else 1
+
+
+def _password_from(args):
+    """The password given or typed, else a generated one; and whether it was."""
+    password = args.password or _ask_password()
+    generated = password is None
+    if generated:
+        password = accounts_module.generated_password()
+    return password, generated
 
 
 def _ask_password() -> Optional[str]:

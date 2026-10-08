@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from . import busy_calendar
 from . import calendar_
 from . import tasks as task_sheet
+from .busy_calendar import _clock
+from .checkins import week_start
 
 MANAGER_GRADE = "manager"
 
@@ -99,13 +101,6 @@ def support_hours(led: Sequence[Dict[str, Any]], config: Dict[str, Any]) -> floa
     minutes = sum(PER_PERSON_MINUTES.get(p.get("grade") or "", 20) for p in led)
     ceiling = task_sheet.hours_per_day(config) * MAX_SUPPORT_SHARE
     return _quarter(min(minutes / 60.0, ceiling))
-
-
-def _week_start(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
-    # A Sunday-to-Thursday week starts on the Sunday on or before the day.
-    if 6 in config["work_days"] and 4 not in config["work_days"]:
-        return day - _dt.timedelta(days=(day.weekday() + 1) % 7)
-    return day - _dt.timedelta(days=day.weekday())
 
 
 def _working(first: _dt.date, days: int, config: Dict[str, Any]) -> List[_dt.date]:
@@ -274,7 +269,7 @@ class Plan:
     def development_day(self, name: str, day: _dt.date) -> Optional[_dt.date]:
         """The day of ``day``'s week that holds ``name``'s development time:
         the last working day of the week they are in."""
-        week = _working(_week_start(day, self.config), 7, self.config)
+        week = _working(week_start(day, self.config), 7, self.config)
         here = [d for d in week if not calendar_.is_away(self.config, name, d)]
         return here[-1] if here else None
 
@@ -329,8 +324,8 @@ class Plan:
             return []
         start = _dt.datetime.combine(day, _clock(config["day_start"]))
         close = _dt.datetime.combine(day, _clock(config["day_end"]))
-        week = _working(_week_start(day, config), 7, config)
-        fortnight_start = _week_start(day, config)
+        week = _working(week_start(day, config), 7, config)
+        fortnight_start = week_start(day, config)
         if (fortnight_start.toordinal() // 7) % ONE_TO_ONE_EVERY_WEEKS:
             fortnight_start -= _dt.timedelta(days=7)
         fortnight = _working(fortnight_start, 7 * ONE_TO_ONE_EVERY_WEEKS, config)
@@ -358,8 +353,8 @@ class Plan:
             # Not on a team-meeting day: the first working day of either week.
             # The same list from any day of the fortnight, so each person
             # gets exactly one.
-            firsts = {min(d for d in fortnight if _week_start(d, config) == w)
-                      for w in {_week_start(d, config) for d in fortnight}}
+            firsts = {min(d for d in fortnight if week_start(d, config) == w)
+                      for w in {week_start(d, config) for d in fortnight}}
             days = [d for d in fortnight if d not in firsts] or fortnight
             for i, person in enumerate(sorted(led, key=lambda p: p["name"].lower())):
                 if days[i % len(days)] != day:
@@ -406,11 +401,6 @@ def _moment(value: Any) -> _dt.datetime:
     return value if isinstance(value, _dt.datetime) else _dt.datetime.fromisoformat(value)
 
 
-def _clock(hhmm: str) -> _dt.time:
-    hours, minutes = (int(x) for x in str(hhmm).split(":")[:2])
-    return _dt.time(hours, minutes)
-
-
 # --------------------------------------------------------------------------
 # agendas
 # --------------------------------------------------------------------------
@@ -436,7 +426,7 @@ def agenda(meeting: Dict[str, Any], *, checkpoints: Mapping[str, Sequence[Dict[s
                      "pick up next.")
         return lines
 
-    week = _working(_week_start(day, config), 7, config)
+    week = _working(week_start(day, config), 7, config)
     end = week[-1] if week else day
     due = sorted((t for t in tasks if not t.done and t.due and day <= t.due <= end
                   and (set(t.assignees) & set(meeting["with"] + [meeting["leader"]]))),

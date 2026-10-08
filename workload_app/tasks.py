@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from . import config as cfg, progress
 from .xlsx_io import from_serial
-from .model import ValidationError
+from .model import ValidationError, iso
 
 
 class TaskError(ValidationError):
@@ -82,8 +82,8 @@ class Task:
             "assignees": list(self.assignees),
             "required_hours": self.required_hours,
             "actual_hours": self.actual_hours,
-            "start": _iso(self.start),
-            "due": _iso(self.due),
+            "start": iso(self.start),
+            "due": iso(self.due),
             "status": self.status,
             "kind": self.kind,
             "series": self.series,
@@ -102,10 +102,6 @@ class Task:
                 self.progress_mode, stage=self.stage, code=self.review_code,
                 revisions=self.revisions),
         }
-
-
-def _iso(value: Optional[_dt.date]) -> Optional[str]:
-    return value.isoformat() if value else None
 
 
 def _parse_date(value: Any) -> Optional[_dt.date]:
@@ -593,7 +589,7 @@ def generate_meetings(wb: Any, *, engineers: Sequence[str],
 
     if added:
         write_all(wb, existing)
-    return {"added": len(added), "series": series, "from": _iso(first),
+    return {"added": len(added), "series": series, "from": iso(first),
             "weekday": weekday, "hours": hours}
 
 
@@ -679,8 +675,8 @@ def load(tasks: Sequence[Task], engineers: Sequence[str],
 
     ranked = sorted(per.values(), key=lambda e: -(e["load"] or 0))
     return {
-        "from": _iso(today),
-        "to": _iso(end),
+        "from": iso(today),
+        "to": iso(end),
         "weeks": weeks,
         "working_days": len(days),
         "hours_per_day": round(a_day, 2),

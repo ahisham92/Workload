@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
+from .model import as_number
 from .xlsx_io import CellValue, from_serial
 
 #: How far into the file to look for the header row.
@@ -273,27 +274,8 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
 
 def _coerce_number(value: Any) -> Optional[float]:
     """A finite number, or None: NaN and infinity are not hours."""
-    number = _parse_number(value)
+    number = as_number(value)
     return number if number is not None and math.isfinite(number) else None
-
-
-def _parse_number(value: Any) -> Optional[float]:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip().replace(",", "")
-    if not text:
-        return None
-    if text.endswith("%"):
-        try:
-            return float(text[:-1]) / 100.0
-        except ValueError:
-            return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
 
 
 # --------------------------------------------------------------------------
@@ -359,10 +341,8 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
 
     width = len(ts_headers)
     rows: List[List[CellValue]] = []
-    blank_rows = 0
     for source_row in grid[header_index + 1:]:
         if not any(cell not in (None, "") for cell in source_row):
-            blank_rows += 1
             continue
         row: List[CellValue] = [None] * width
         for source_index, target in positions.items():

@@ -330,9 +330,6 @@ class Unit:
         """Never: every change is written as it is made."""
         return False
 
-    def save(self, *, backup: bool = True) -> Dict[str, Any]:
-        return {"saved": True, "backup": None, "path": str(self.path)}
-
     def reload(self) -> None:
         self._forget(self._read_revision())
 
@@ -1441,23 +1438,6 @@ class Unit:
                         row["quarter_start"]] = row["mm"]
             return out
         return self._cached("phasing", build)
-
-    def set_phasing(self, project_number: str,
-                    values: Dict[str, Optional[float]]) -> None:
-        with self._write() as db:
-            for quarter, mm in values.items():
-                day = as_date(quarter)
-                if day is None:
-                    continue
-                if mm is None:
-                    db.execute("DELETE FROM phasing WHERE project_number = ? "
-                               "AND quarter_start = ?",
-                               (project_number, day.isoformat()))
-                else:
-                    db.execute(
-                        "INSERT OR REPLACE INTO phasing (project_number, "
-                        "quarter_start, mm) VALUES (?, ?, ?)",
-                        (project_number, day.isoformat(), float(mm)))
 
     # -- timesheets ----------------------------------------------------------
     def timesheet_headers(self, engineer: Optional[str] = None) -> List[str]:
