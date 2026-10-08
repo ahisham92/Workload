@@ -991,6 +991,14 @@ class WorkloadApp:
         row, service = self._mine(ctx, query, body)
         return service.remove_my_time_off(row["engineer"], mark_id)
 
+    def my_week(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.my_week(row["engineer"], query)
+
+    def my_slip_reason(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.set_slip_reason(body or {}, engineer=row["engineer"])
+
     #: Set to False by tests: the phones are told on a thread of its own.
     tell_in_background = True
 
@@ -1380,6 +1388,8 @@ class WorkloadApp:
             ("POST", "/api/me/marks/{}/undo", self.undo_my_mark, "user"),
             ("POST", "/api/me/off", self.add_my_time_off, "user"),
             ("POST", "/api/me/off/{}/remove", self.remove_my_time_off, "user"),
+            ("GET", "/api/me/week", self.my_week, "user"),
+            ("POST", "/api/me/week/reason", self.my_slip_reason, "user"),
             ("POST", "/api/marks/{}/seen",
              lambda ctx, q, b, mark_id: ctx.service.seen_mark(_int(mark_id)), "manager"),
 
@@ -1502,6 +1512,20 @@ class WorkloadApp:
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
             ("POST", "/api/requests",
              lambda ctx, q, b: ctx.service.add_request(b), "manager"),
+            ("POST", "/api/requests/preview",
+             lambda ctx, q, b: ctx.service.request_preview(b), "manager"),
+            ("GET", "/api/plan-review",
+             lambda ctx, q, b: ctx.service.plan_review(q), "manager"),
+            ("POST", "/api/plan-review/lock",
+             lambda ctx, q, b: ctx.service.lock_week(b), "manager"),
+            ("POST", "/api/plan-review/reason",
+             lambda ctx, q, b: ctx.service.set_slip_reason(b), "manager"),
+            ("GET", "/api/what-ifs", lambda ctx, q, b: ctx.service.what_ifs(), "manager"),
+            ("POST", "/api/what-ifs",
+             lambda ctx, q, b: ctx.service.save_what_if(b), "manager"),
+            ("DELETE", "/api/what-ifs/{}",
+             lambda ctx, q, b, what_if_id: ctx.service.remove_what_if(_int(what_if_id)),
+             "manager"),
             ("POST", "/api/requests/{}/done",
              lambda ctx, q, b, task_id: ctx.service.finish_request(_int(task_id)),
              "manager"),

@@ -25,6 +25,7 @@ const plan = {
   data: null,         // the outlook for those moves
   needs: null,        // the forecast: who needs more people
   open: new Set(),    // people whose work is expanded
+  whatIfs: null,      // the what-ifs kept, with their figures
   busy: false,
 };
 
@@ -49,7 +50,8 @@ function shortDate(iso) {
 
 /* ------------------------------------------------------------ loading */
 
-const PLANNER_VIEWS = [['today', 'Today'], ['handovers', 'Planning board'],
+const PLANNER_VIEWS = [['today', 'Today'], ['review', 'Plan vs actual'],
+  ['handovers', 'Planning board'],
   ['submissions', 'Submissions'], ['people', 'More people']];
 
 function renderPlannerTabs() {
@@ -74,6 +76,8 @@ async function openPlanner({ quiet = false } = {}) {
       if (shown && plan.view === 'today' && !document.hidden
           && $('#modal-backdrop').hidden) loadDay({ quiet: true });
     }, 60000);
+  } else if (plan.view === 'review') {
+    await window.planReview.open($('#planner-body'));
   } else if (plan.view === 'submissions') {
     await loadSubmissions({ quiet });
   } else if (plan.view === 'people') {
@@ -202,6 +206,7 @@ function renderPlanner() {
         el('summary', {}, 'Each person\u2019s work, as a list'), whoHasWhat(data))
       : whoHasWhat(data),
     movesPanel(data),
+    whatIfPanel(data),
     drawingsPanel(data.drawings));
 }
 
@@ -497,6 +502,7 @@ function openHandover(person, item) {
 /* -- the handovers ------------------------------------------------------ */
 
 function moveText(move) {
+  if (move.kind === 'extra') return `New work "${move.project}" for ${move.to}, ${fmt.hours(move.hours)} h`;
   if (move.kind === 'task') return `Task "${move.name}" from ${move.from} to ${move.to}`;
   const share = move.share >= 0.999 ? 'All' : `${Math.round(move.share * 100)}%`;
   return `${share} of ${move.from}'s time on ${move.project}${move.name && move.name !== move.project ? ` (${move.name})` : ''} to ${move.to}`;
@@ -514,9 +520,12 @@ function movesPanel(data) {
           + `a share of a project is then kept until ${dayName(data.to)} and lapses by itself; a task is simply reassigned.`)),
       el('div', { class: 'row-actions' },
         el('button', { class: 'btn btn-sm', type: 'button', onclick: suggestMoves }, 'Suggest handovers'),
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => tryNewWork(data) }, 'Try new work'),
         trying.length ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => tryMoves([]) }, 'Clear') : null,
-        trying.length ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: commitMoves },
-          `Commit ${trying.length}`) : null)),
+        trying.length ? el('button', { class: 'btn btn-sm', type: 'button', onclick: keepWhatIf }, 'Keep as a what-if') : null,
+        trying.length && !trying.some((m) => m.kind === 'extra')
+          ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: commitMoves },
+            `Commit ${trying.length}`) : null)),
     trying.length
       ? el('ul', { class: 'plan-moves' }, trying.map((move, i) => el('li', {},
           el('span', {}, moveText(move)),
@@ -531,6 +540,104 @@ function movesPanel(data) {
         el('span', { class: 'muted small' }, ` · ${shortDate(move.start)} to ${shortDate(move.end)}`),
         el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => undoSaved(move) }, 'Undo')))))
       : null);
+}
+
+/* -- what-ifs kept to compare ------------------------------------------- */
+
+function tryNewWork(data) {
+  const people = data.people.filter((p) => p.capacity || p.after.hours).map((p) => p.name);
+  openModal('Try new work', [
+    { name: 'project', label: 'What is it', placeholder: 'e.g. New berth, tender' },
+    { name: 'to', label: 'Who would do it', type: 'select', options: people },
+    { name: 'hours', label: `Hours over the next ${plan.days} working days`, type: 'number', min: 1, step: 1 },
+  ], async (values) => {
+    const move = { kind: 'extra', project: String(values.project || '').trim(),
+      to: values.to, hours: Number(values.hours) };
+    if (!move.project || !move.hours) {
+      showModalErrors(['Say what the work is and roughly how many hours.']);
+      return;
+    }
+    closeModal();
+    await tryMoves([...plan.moves, move]);
+  }, { to: people[0], hours: 20 });
+}
+
+function keepWhatIf() {
+  openModal('Keep this as a what-if', [
+    { name: 'name', label: 'Name it', placeholder: 'e.g. Berth tender comes in, Kirolos helps' },
+  ], async (values) => {
+    try {
+      await api('/api/what-ifs', { method: 'POST',
+        body: { name: values.name, days: plan.days, moves: plan.moves } });
+      closeModal();
+      toast('Kept. Compare it with the others under What-ifs.', 'ok');
+      plan.whatIfs = null;
+      await loadPlanner({ quiet: true });
+    } catch (error) {
+      showModalErrors(error.errors || [error.message]);
+    }
+  });
+}
+
+async function removeWhatIf(item) {
+  if (!window.confirm(`Delete the what-if "${item.name}"?`)) return;
+  try {
+    await api(`/api/what-ifs/${item.id}`, { method: 'DELETE' });
+    plan.whatIfs = null;
+    renderPlanner();
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+function whatIfPanel(data) {
+  const host = el('section', { class: 'panel' });
+  const draw = (list) => {
+    const now = data.summary;
+    const baseline = { over: now.over_before, room: now.room_before, peak: now.peak_before };
+    const rows = list.what_ifs.map((w) => {
+      const s = w.summary || {};
+      return el('tr', {},
+        el('td', {}, el('b', {}, w.name),
+          el('div', { class: 'muted small' }, w.stale ? (w.errors || []).join(' ')
+            : w.moves.map(moveText).join('; '))),
+        el('td', { class: 'num' }, w.stale ? '—' : String(s.over_after)),
+        el('td', { class: 'num' }, w.stale ? '—' : String(s.room_after)),
+        el('td', { class: 'num' }, w.stale ? '—' : fmt.pct0(s.peak_after)),
+        el('td', { class: 'num' }, w.stale ? '—' : fmt.hours(s.hours)),
+        el('td', {}, el('div', { class: 'wi-actions' },
+          w.stale ? null : el('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+            plan.days = w.days;
+            tryMoves(w.moves.map((m) => ({ ...m })));
+          } }, 'Open'),
+          el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => removeWhatIf(w) }, 'Delete'))));
+    });
+    setChildren(host,
+      el('div', { class: 'panel-head' },
+        el('div', {},
+          el('h3', {}, 'What-ifs'),
+          el('p', { class: 'muted' },
+            'Try handovers or new work below, then keep it as a what-if to compare. '
+            + 'Each one is worked out again from today\u2019s figures every time you look.'))),
+      list.what_ifs.length
+        ? el('div', { class: 'table-wrap' }, el('table', { class: 'wi-table' },
+          el('thead', {}, el('tr', {}, el('th', {}, 'What-if'), el('th', { class: 'num' }, 'Over a full load'),
+            el('th', { class: 'num' }, 'With room'), el('th', { class: 'num' }, 'Busiest'),
+            el('th', { class: 'num' }, 'Hours of work'), el('th', {}, ''))),
+          el('tbody', {},
+            el('tr', { class: 'muted' }, el('td', {}, 'As things are'),
+              el('td', { class: 'num' }, String(baseline.over)), el('td', { class: 'num' }, String(baseline.room)),
+              el('td', { class: 'num' }, fmt.pct0(baseline.peak)), el('td', { class: 'num' }, ''), el('td', {}, '')),
+            ...rows)))
+        : el('p', { class: 'muted' }, 'None kept yet. "Try new work" or hand work over, then "Keep as a what-if".'));
+  };
+  if (plan.whatIfs) draw(plan.whatIfs);
+  else {
+    setChildren(host, el('div', { class: 'empty' }, 'Loading what-ifs\u2026'));
+    api('/api/what-ifs', { quiet: true }).then((list) => { plan.whatIfs = list; draw(list); })
+      .catch(() => setChildren(host, el('p', { class: 'muted' }, 'What-ifs could not be loaded.')));
+  }
+  return host;
 }
 
 /* -- drawings ---------------------------------------------------------- */
@@ -855,25 +962,41 @@ function quickAdd(data) {
     el('option', { value: '' }, 'No project'),
     ...data.projects.map((p) => el('option', { value: p.number },
       p.name && p.name !== p.number ? `${p.number} ${p.name}` : p.number)));
-  const add = async () => {
-    if (!title.value.trim()) { title.focus(); return; }
+  const urgency = el('select', { 'aria-label': 'How urgent' },
+    el('option', { value: 'urgent' }, 'Urgent: start now'),
+    el('option', { value: 'room' }, 'When there is room'));
+  const bodyOf = (extra = {}) => {
     const choice = who.value;
-    const body = {
+    return {
       title: title.value.trim(), hours: Number(hours.value), due: due.value,
-      project_number: project.value,
+      project_number: project.value, urgency: urgency.value,
       role: choice.startsWith('person:') ? 'engineering' : choice,
       person: choice.startsWith('person:') ? choice.slice(7) : '',
       now: (() => { const d = new Date(); return `${isoDay(d)}T${d.toTimeString().slice(0, 5)}`; })(),
+      ...extra,
     };
+  };
+  const add = async (extra = {}) => {
+    if (!title.value.trim()) { title.focus(); return; }
     try {
-      const result = await api('/api/requests', { method: 'POST', body });
+      const result = await api('/api/requests', { method: 'POST', body: bodyOf(extra) });
       if (result.save) markSaved(result.save);
       toast(`${result.person}, ${slotText(result.start, result.end)}`
         + (result.late ? ' — later than wanted' : ''), result.late ? 'bad' : 'ok');
       title.value = '';
       plan.needs = null;
       if (state.tasks) state.tasks = null;
+      closeModal();
       await loadDay({ quiet: true });
+    } catch (error) {
+      toast((error.errors || [error.message]).join(' '), 'bad');
+    }
+  };
+  const preview = async () => {
+    if (!title.value.trim()) { title.focus(); return; }
+    try {
+      const view = await api('/api/requests/preview', { method: 'POST', body: bodyOf() });
+      showPushes(view, add);
     } catch (error) {
       toast((error.errors || [error.message]).join(' '), 'bad');
     }
@@ -881,8 +1004,72 @@ function quickAdd(data) {
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   return el('div', { class: 'quick-add' },
     title,
-    el('div', { class: 'quick-add-options' }, hours, due, who, project,
-      el('button', { class: 'btn btn-primary', type: 'button', onclick: add }, 'Add')));
+    el('div', { class: 'quick-add-options' }, hours, due, who, project, urgency,
+      el('button', { class: 'btn', type: 'button', onclick: preview,
+        title: 'See what it pushes back and what it costs before adding it' }, 'What does it push?'),
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: () => add() }, 'Add')));
+}
+
+/* -- what a request pushes, before it is added ----------------------------- */
+
+function pushedList(option) {
+  if (option.nothing) return null;
+  return el('ul', { class: 'pr-list' }, option.pushed.map((p) => el('li', {},
+    p.kind === 'task'
+      ? el('span', { class: `pill ${p.late ? 'pill-bad' : 'pill-ok'}` },
+        p.late ? `Late by ${p.days_late} day${p.days_late === 1 ? '' : 's'}` : 'Still on time')
+      : el('span', { class: 'pill pill-warn' }, 'Slips'),
+    el('span', { class: 'pr-what' },
+      `${fmt.hours(p.hours)} h of `, el('b', {}, p.title),
+      el('span', { class: 'muted small' },
+        p.kind === 'task'
+          ? `${p.job ? ` · ${p.job}` : ''}${p.due ? ` · due ${dayName(p.due)}` : ''}`
+            + `${p.late_until ? `, done about ${dayName(p.late_until)}` : ''}`
+          : p.kind === 'job' ? ` · ${p.job} project work moves later` : '')))));
+}
+
+function pushOption(option, { heading, best, onAdd }) {
+  const tone = option.nothing ? 'is-ok' : option.late_tasks ? 'is-bad' : '';
+  const cost = [];
+  if (option.pushed_hours) {
+    cost.push(`${fmt.hours(option.pushed_hours)} h of planned work`
+      + (option.pushed_mm ? ` (${option.pushed_mm.toFixed(2)} man-months)` : ''));
+  }
+  if (option.overtime_hours) cost.push(`or ${fmt.hours(option.overtime_hours)} h of overtime to keep it all on time`);
+  return el('div', { class: `ur-option ${best ? 'is-best' : ''}` },
+    el('h4', {}, heading, best ? el('span', { class: 'pill pill-ok' }, 'Costs least') : null),
+    el('div', { class: 'muted small' },
+      `${option.person} · ${slotText(option.start, option.end)}`
+      + (option.late ? ' · later than wanted' : '')),
+    el('p', { class: `ur-verdict ${tone}` }, option.verdict),
+    cost.length ? el('p', { class: 'small' }, `Cost: ${cost.join(', ')}.`) : null,
+    pushedList(option),
+    el('div', { class: 'ur-foot' },
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, 'Add it this way')));
+}
+
+function showPushes(view, add) {
+  const options = [
+    { option: view.urgent, heading: `Urgent, ${view.urgent.person}`,
+      body: { person: view.urgent.person, urgency: 'urgent' } },
+    { option: view.room, heading: `When ${view.room.person} has room`,
+      body: { person: view.room.person, urgency: 'room' } },
+    ...view.others.map((o) => ({ option: o, heading: `Urgent, ${o.person} instead`,
+      body: { person: o.person, urgency: 'urgent' } })),
+  ];
+  // Cheapest: on time first, then the fewest hours pushed.
+  const score = (o) => (o.late ? 1000 : 0) + o.late_tasks * 100 + o.pushed_hours;
+  const best = options.reduce((a, b) => (score(b.option) < score(a.option) ? b : a));
+  const r = view.request;
+  openPanel(`What "${r.title}" pushes`,
+    el('div', {},
+      el('p', { class: 'muted' },
+        `${fmt.hours(r.hours)} h, wanted by ${dayName(r.due)}${r.project_number ? `, on ${r.project_number}` : ''}. `
+        + 'Each way below shows the planned work it would push back and what that costs. Nothing is added until you pick one.'),
+      view.budget ? el('p', { class: 'small' },
+        `${view.budget.job} has ${view.budget.remaining_mm} man-months of budget left; this uses about ${view.budget.uses_mm} of it.`) : null,
+      el('div', { class: 'ur-options' }, options.map((o) => pushOption(o.option, {
+        heading: o.heading, best: o === best, onAdd: () => add(o.body) })))));
 }
 
 function slotText(start, end) {

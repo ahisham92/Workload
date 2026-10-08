@@ -51,6 +51,7 @@ async function loadMyDay(unit) {
   renderMyDay();
   renderTimeOff();
   renderSheet();
+  if (window.planReview) window.planReview.mine($('#myweek'), myDay.unit);
 }
 
 async function refreshDay() {
