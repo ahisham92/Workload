@@ -16,6 +16,8 @@ const plan = {
   span: 'day',        // day | week
   dayData: null,      // everybody's day (or week), as the server laid it out
   calendars: null,    // whose Outlook calendar is linked (busy times only)
+  meetings: null,     // meetings typed in by hand, still to come
+  me: '',             // who the manager is on the team, if they said
   calendarsOpen: false,
   submissions: null,  // the drafted submissions plan
   chosen: new Set(),  // submissions ticked to confirm
@@ -652,6 +654,61 @@ async function loadDay({ quiet = false } = {}) {
     return;
   }
   if (!plan.calendars) refreshCalendars();
+  if (!plan.meetings) loadMeetings();
+}
+
+/* -- meetings typed in --------------------------------------------------- */
+
+async function loadMeetings() {
+  try {
+    const [list, me] = await Promise.all([api('/api/meetings', { quiet: true }),
+      api('/api/team/me', { quiet: true }).catch(() => ({ me: '' }))]);
+    plan.meetings = list;
+    plan.me = me.me || '';
+    renderDay();
+  } catch (error) { /* the panel waits for the next load */ }
+}
+
+async function addMeeting(body) {
+  try {
+    await api('/api/meetings', { method: 'POST', body });
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+    return false;
+  }
+  toast(`Added. ${body.people.length === 1 ? 'Their' : 'Everyone\'s'} day now keeps that time.`, 'ok');
+  plan.needs = null;
+  plan.meetings = null;
+  await loadDay({ quiet: true });
+  return true;
+}
+
+async function removeMeeting(m) {
+  try {
+    await api(`/api/meetings/${m.id}/remove`, { method: 'POST' });
+  } catch (error) { toast(error.message, 'bad'); return; }
+  plan.needs = null;
+  plan.meetings = null;
+  await loadDay({ quiet: true });
+}
+
+function meetingsPanel(data) {
+  const list = plan.meetings;
+  if (!list) return null;
+  return el('section', { class: 'panel meet-panel' },
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, list.meetings.length ? `Meetings (${list.meetings.length} coming up)` : 'Meetings'),
+        el('p', { class: 'muted small' }, 'Client, other trades and internal meetings. Put one in once, with who goes; it comes off their free time, the Planner and the Forecast.')),
+      el('button', { class: 'btn btn-sm', type: 'button',
+        onclick: () => { plan.meetingsOpen = !plan.meetingsOpen; renderDay(); } },
+      plan.meetingsOpen ? 'Close' : 'Add a meeting')),
+    plan.meetingsOpen ? meetingForm({ day: data.date, people: list.people,
+      ticked: plan.me ? [plan.me] : [], add: addMeeting }) : null,
+    meetingList(list.meetings.slice(0, plan.meetingsAll ? 200 : 6), { remove: removeMeeting }),
+    list.meetings.length > 6 ? el('button', { class: 'linkish', type: 'button',
+      onclick: () => { plan.meetingsAll = !plan.meetingsAll; renderDay(); } },
+    plan.meetingsAll ? 'Show fewer' : `Show all ${list.meetings.length}`) : null);
 }
 
 /* -- Outlook meetings ------------------------------------------------------ */
@@ -700,7 +757,9 @@ async function unlinkCalendar(person) {
 
 function calendarPanel() {
   const cal = plan.calendars;
-  if (!cal) return null;
+  // Only once somebody has a calendar link in: where Outlook cannot publish,
+  // meetings are put in by hand above.
+  if (!cal || !cal.linked) return null;
   const people = cal.people || [];
   const problems = people.filter((p) => p.linked && p.problem);
   const hours = people.reduce((sum, p) => sum + (p.linked ? p.hours_next_7_days : 0), 0);
@@ -766,6 +825,7 @@ function renderDay() {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => shareDay(true) }, 'Print'))),
     requestList(data),
     plan.span === 'week' ? weekTable(data, shown) : dayCards(data.days[0], shown),
+    meetingsPanel(data),
     calendarPanel(),
     awayPanel(data));
 }

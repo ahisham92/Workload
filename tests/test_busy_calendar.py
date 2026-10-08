@@ -416,3 +416,97 @@ class TestRoutes:
                              ("PUT", "/api/me/calendar")):
             status, _ = call(anonymous, path, method, {"link": self.LINK})
             assert status == 401, path
+
+
+class TestMeetingsTypedIn:
+    """Meetings put in by hand: a client, another trade, internal."""
+
+    def body(self, **extra):
+        return {"title": "Design review", "kind": "client", "day": "2026-10-12",
+                "start": "10:00", "end": "11:30", "people": ["Dina"], **extra}
+
+    def test_checked_as_typed(self):
+        from workload_app import meetings
+        with pytest.raises(meetings.MeetingError) as caught:
+            meetings.clean(self.body(end="09:00", people=["Nobody"], kind="party"),
+                           people=["Dina"], today=TODAY)
+        assert len(caught.value.errors) == 3
+        made = meetings.clean(self.body(repeat="weekly", until="2026-11-02"),
+                              people=["Dina"], today=TODAY)
+        assert made["until"] == "2026-11-02" and made["people"] == ["Dina"]
+
+    def test_a_weekly_meeting_falls_each_week(self):
+        from workload_app import meetings
+        row = {"id": 1, **meetings.clean(self.body(repeat="weekly", until="2026-11-02"),
+                                         people=["Dina"], today=TODAY)}
+        days = [m["start"].date().isoformat() for m in meetings.occurrences(
+            [row], dt.date(2026, 10, 15), dt.date(2026, 12, 31))]
+        assert days == ["2026-10-19", "2026-10-26", "2026-11-02"]
+
+    def test_in_the_plan_once_with_outlook(self):
+        at = lambda h, m=0: dt.datetime.combine(MONDAY, dt.time(h, m))   # noqa: E731
+        plan = management.Plan(roster(("Dina", "engineer")), [], CONFIG, today=MONDAY,
+                               outlook={"Dina": [(at(11), at(12))]},
+                               typed=[{"id": 1, "title": "Design review", "kind": "client",
+                                       "people": ["Dina"], "start": at(10), "end": at(11, 30)}])
+        blocks = plan.day_blocks(MONDAY)[2]
+        assert [(b["kind"], b["start"], b["end"]) for b in blocks] == [
+            ("typed", at(10), at(11, 30)), ("outlook", at(11, 30), at(12))]
+
+    @pytest.fixture
+    def unit(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKLOAD_TODAY", TODAY.isoformat())
+        service = WorkloadService(storage.new_unit(tmp_path, 1, "unit-one"))
+        service.import_exports([
+            export("amal", booking("Amal Ashdown", "N1-0100D", 6)),
+            export("dina", booking("Dina Ashgrove", "N2-0100D", 4)),
+        ])
+        return service
+
+    def test_on_the_day_with_its_title(self, unit):
+        made = unit.add_meeting(self.body(day=TODAY.isoformat(), people=["Dina", "Amal"],
+                                          kind="trade", title="MEP coordination"))
+        day = unit.day_plan({})["days"][0]
+        for name in ("Dina", "Amal"):
+            person = next(p for p in day["people"] if p["name"] == name)
+            block = next(b for b in person["blocks"] if b.get("source") == "typed")
+            assert (block["start"], block["end"]) == ("10:00", "11:30")
+            assert block["title"] == "Meeting with another trade: MEP coordination"
+        assert unit.meetings()["meetings"][0]["people"] == ["Dina", "Amal"]
+        unit.remove_meeting(made["id"])
+        assert unit.meetings()["meetings"] == []
+
+    def test_renaming_a_person_follows_into_their_meetings(self, unit):
+        unit.add_meeting(self.body(day=TODAY.isoformat()))
+        unit.store.rename_person_everywhere("Dina", "Dina A")
+        assert unit.store.meetings()[0]["people"] == ["Dina A"]
+
+
+class TestMeetingRoutes:
+    BODY = {"title": "Client review", "kind": "client", "start": "10:00",
+            "end": "11:00"}
+
+    def day(self):
+        return (dt.date.today() + dt.timedelta(days=1)).isoformat()
+
+    def test_a_member_puts_in_only_their_own(self, site, osama):
+        status, made = call(osama, "/api/me/meetings", "POST",
+                            {**self.BODY, "day": self.day(), "people": ["Kirolos"]})
+        assert status == 200, made
+        assert made["people"] == ["Osama"]
+        _s, mine = call(osama, "/api/me/meetings")
+        assert [m["id"] for m in mine["meetings"]] == [made["id"]]
+
+    def test_a_member_cannot_take_off_the_managers(self, site, osama):
+        status, made = call(site, "/api/meetings", "POST",
+                            {**self.BODY, "day": self.day(), "people": ["Osama", "Kirolos"]})
+        assert status == 200, made
+        _s, mine = call(osama, "/api/me/meetings")
+        assert [m["id"] for m in mine["meetings"]] == [made["id"]]
+        status, _ = call(osama, f"/api/me/meetings/{made['id']}/remove", "POST")
+        assert status == 404
+        status, _ = call(osama, "/api/meetings", "POST",
+                         {**self.BODY, "day": self.day(), "people": ["Kirolos"]})
+        assert status == 403
+        status, _ = call(site, f"/api/meetings/{made['id']}/remove", "POST")
+        assert status == 200

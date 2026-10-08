@@ -16,7 +16,7 @@ const myDay = { unit: null, day: null, sheet: null, date: null, week: null, open
 const MD_KIND = {
   task: 'Task', submission: 'Submission', meeting: 'Meeting', request: 'Request',
   management: 'Team', development: 'Development', work: 'Project work', done: 'Done',
-  outlook: 'Outlook',
+  outlook: 'Outlook', typed: 'Meeting',
 };
 
 function mdQuery(extra = {}) {
@@ -54,6 +54,7 @@ async function loadMyDay(unit) {
   renderTimeOff();
   renderSheet();
   loadMyCalendar();
+  loadMyMeetings();
 }
 
 async function refreshDay() {
@@ -285,6 +286,55 @@ function renderTimeOff() {
       : el('p', { class: 'muted small' }, 'No days off coming up.'));
 }
 
+/* --------------------------------------------- meetings typed in */
+
+async function loadMyMeetings() {
+  try {
+    myDay.meetings = await api(`/api/me/meetings${mdQuery()}`, { quiet: true });
+  } catch (error) {
+    $('#mymeetings').hidden = true;
+    return;
+  }
+  $('#mymeetings').hidden = false;
+  renderMyMeetings();
+}
+
+function renderMyMeetings() {
+  const me = myDay.day ? myDay.day.engineer : '';
+  const add = async (body) => {
+    try {
+      await api(`/api/me/meetings${mdQuery()}`, { method: 'POST', body });
+    } catch (error) {
+      toast((error.errors || [error.message]).join(' '), 'bad');
+      return false;
+    }
+    toast('Added. Your day keeps that time.', 'ok');
+    await refreshDay();
+    await loadMyMeetings();
+    return true;
+  };
+  const remove = async (m) => {
+    try {
+      await api(`/api/me/meetings/${m.id}/remove${mdQuery()}`, { method: 'POST' });
+    } catch (error) { toast(error.message, 'bad'); return; }
+    await refreshDay();
+    await loadMyMeetings();
+  };
+  setChildren($('#mymeetings'),
+    el('h3', {}, 'My meetings'),
+    el('p', { class: 'muted' }, 'Put in a client or other-trade meeting once, with its time; your day keeps it free. Ones your manager put in show here too.'),
+    myDay.meetingsOpen
+      ? meetingForm({ day: myDay.day ? myDay.day.date : '', add: async (body) => {
+        const ok = await add(body);
+        if (ok) { myDay.meetingsOpen = false; renderMyMeetings(); }
+        return ok;
+      } })
+      : el('button', { class: 'btn btn-sm', type: 'button',
+        onclick: () => { myDay.meetingsOpen = true; renderMyMeetings(); } }, 'Add a meeting'),
+    meetingList(myDay.meetings.meetings, { remove, showPeople: false,
+      canRemove: (m) => m.added_by === me }));
+}
+
 /* ------------------------------------------------- Outlook meetings */
 
 /** Their own calendar link: read again now and then as the page opens, and
@@ -296,7 +346,8 @@ async function loadMyCalendar() {
     $('#mycalendar').hidden = true;
     return;
   }
-  $('#mycalendar').hidden = false;
+  // Where Outlook cannot publish, this stays out of the way until a link is in.
+  $('#mycalendar').hidden = !(myDay.calendar.people[0] || {}).linked;
   renderMyCalendar();
   const me = myDay.calendar.people[0];
   if (me && me.linked) {

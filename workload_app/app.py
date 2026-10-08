@@ -1086,6 +1086,19 @@ class WorkloadApp:
                                       force=bool((body or {}).get("force")))
         return {**ctx.service.calendars(), "result": result}
 
+    # -- meetings typed in: a member's own
+    def my_meetings(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.meetings(person=row["engineer"])
+
+    def add_my_meeting(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.add_meeting(body or {}, person=row["engineer"])
+
+    def remove_my_meeting(self, ctx: Context, query, body, meeting_id) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.remove_meeting(meeting_id, person=row["engineer"])
+
     # -- a member: their own, and nobody else's
     def my_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
         row, service = self._mine(ctx, query, body)
@@ -1495,6 +1508,9 @@ class WorkloadApp:
             ("POST", "/api/me/marks/{}/undo", self.undo_my_mark, "user"),
             ("POST", "/api/me/off", self.add_my_time_off, "user"),
             ("POST", "/api/me/off/{}/remove", self.remove_my_time_off, "user"),
+            ("GET", "/api/me/meetings", self.my_meetings, "user"),
+            ("POST", "/api/me/meetings", self.add_my_meeting, "user"),
+            ("POST", "/api/me/meetings/{}/remove", self.remove_my_meeting, "user"),
             ("GET", "/api/me/calendar", self.my_calendar, "user"),
             ("PUT", "/api/me/calendar", self.set_my_calendar, "user"),
             ("POST", "/api/me/calendar/remove", self.remove_my_calendar, "user"),
@@ -1619,6 +1635,12 @@ class WorkloadApp:
              lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
              "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
+            ("GET", "/api/meetings", lambda ctx, q, b: ctx.service.meetings(), "manager"),
+            ("POST", "/api/meetings",
+             lambda ctx, q, b: ctx.service.add_meeting(b or {}), "manager"),
+            ("POST", "/api/meetings/{}/remove",
+             lambda ctx, q, b, meeting_id: ctx.service.remove_meeting(meeting_id),
+             "manager"),
             ("GET", "/api/calendars", self.calendars, "manager"),
             ("PUT", "/api/calendars", self.set_calendar, "manager"),
             ("POST", "/api/calendars/remove", self.remove_calendar, "manager"),
