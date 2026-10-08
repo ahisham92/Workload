@@ -661,7 +661,6 @@ function renderDay() {
     : (data.date === data.today ? `Today, ${dayName(data.date)}` : dayName(data.date));
 
   setChildren($('#planner-body'),
-    inboxPanel(),
     quickAdd(data),
     el('div', { class: 'plan-toolbar' },
       el('div', { class: 'plan-nav' },
