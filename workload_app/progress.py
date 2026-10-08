@@ -112,7 +112,7 @@ def clean_revisions(value: Any) -> int:
         return 0
     try:
         number = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ProgressError(f"{value!r} is not a number of revisions.")
     if number < 0:
         raise ProgressError("A number of revisions cannot be negative.")

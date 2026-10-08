@@ -233,6 +233,14 @@ async function markTask(taskId, kind, note = '', fromForm = false) {
   }
   toast(kind === 'done' ? 'Ticked off.' : 'Sent to your lead.', 'ok');
   if (!fromForm) await refreshDay();
+  refreshAround();
+}
+
+/** A mark changes the task's status: the page's task list and My week show
+    it too, so they are read again rather than left as they were. */
+function refreshAround() {
+  if (window.memberPage) window.memberPage.refresh();
+  if (window.planReview && !$('#myweek').hidden) window.planReview.mine($('#myweek'), myDay.unit);
 }
 
 async function undo(markId) {
@@ -243,6 +251,7 @@ async function undo(markId) {
     return;
   }
   await refreshDay();
+  refreshAround();
 }
 
 /* ------------------------------------------------------------ time off */

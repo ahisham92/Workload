@@ -61,10 +61,11 @@ def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
         except ValueError:
             length = 0
         if length > MAX_UPLOAD_BYTES * 2:
-            return None
-        if length > 0:
-            body = parse_body(environ["wsgi.input"].read(length),
-                              environ.get("CONTENT_TYPE") or "")
+            raise ApiError(413, "Request too large.")
+        # Parsed even when empty: a write with no body must still say it is
+        # JSON, which a form on another site cannot.
+        body = parse_body(environ["wsgi.input"].read(length) if length > 0 else b"",
+                          environ.get("CONTENT_TYPE") or "")
 
     # Behind the host's proxy the connection to the browser is the one that
     # matters: it decides whether the session cookie may be marked Secure.

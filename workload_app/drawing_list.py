@@ -53,6 +53,9 @@ COLUMNS: Sequence[Tuple[str, str, Sequence[str]]] = (
 #: A status that means the drawing has gone to the client.
 SENT = re.compile(r"\bIF[ACT]\b|for approval|for construction|for tender|issued|"
                   r"transmitted|submitted|\bsent\b", re.IGNORECASE)
+#: A status that says the drawing has not gone yet, though it names issuing.
+NOT_SENT = re.compile(r"\b(not|to be|un)[\s-]*(yet[\s-]+)?(issued|transmitted|submitted|sent)\b",
+                      re.IGNORECASE)
 #: Client codes, as letters; offices that number them use 1 to 4.
 CODES = {"A": "A", "1": "A", "B": "B", "2": "B", "C": "C", "3": "C", "4": "C", "D": "C"}
 #: Rules of Credit steps that mean "sent" and "accepted", by their names.
@@ -218,7 +221,8 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
             "number": number, "title": title,
             "status": status,
             "issued": issued,
-            "sent": bool(issued or SENT.search(status)) and "supersed" not in status.lower(),
+            "sent": bool(issued or (SENT.search(status) and not NOT_SENT.search(status)))
+                    and "supersed" not in status.lower(),
             "code": code if code_raw else None,
             "returned": _as_date(get(cells, "returned")),
             "superseded": "supersed" in status.lower(),

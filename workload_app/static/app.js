@@ -3717,7 +3717,7 @@ function renderTaskTable(data) {
       : status === 'Blocked' ? 'pill-bad'
         : status === 'In progress' ? 'pill-warn' : 'pill-info');
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const count = (test) => data.tasks.filter(test).length;
   const strip = [
     ['Not started', count((t) => t.status === 'Not started'), 'info', 'Not started'],
@@ -3815,9 +3815,16 @@ function taskOrder(a, b) {
   return a.due < b.due ? -1 : a.due > b.due ? 1 : a.id - b.id;
 }
 
+/** A day as YYYY-MM-DD where the user is. toISOString() gives the UTC day,
+    which east of Greenwich is still yesterday for the first hours of the day. */
+function todayLocal(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function dueCell(task) {
   if (!task.due) return el('span', { class: 'muted' }, 'no date');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const late = !task.done && task.due < today;
   return el('span', { class: late ? 'v-bad' : '' }, fmt.date(task.due),
     late ? el('span', { class: 'muted small' }, ' overdue') : null);
@@ -3906,6 +3913,13 @@ function openTaskModal(task) {
   openModal(task ? `Task ${task.id}` : 'New task', taskFields(data),
     async () => {
       const body = modalValues();
+      // Typed as a percentage, sent as the fraction it is held as: the server
+      // reads 1 as a whole (100%), so 1% typed as "1" would come back finished.
+      // Outside 0 to 100 it goes as typed, for the server to turn down.
+      const typed = body.pro_rata === null ? NaN : Number(body.pro_rata);
+      if (typed >= 0 && typed <= 100) {
+        body.pro_rata = typed / 100;
+      }
       const chosen = data.deliverables.find(
         (d) => String(d.row) === String(body.deliverable_row));
       body.deliverable_name = chosen ? chosen.name : '';
@@ -4046,6 +4060,6 @@ function openMeetingModal() {
     weekday: String(settings.meeting_weekday),
     hours: settings.meeting_hours,
     weeks: settings.meeting_weeks,
-    start: monday.toISOString().slice(0, 10),
+    start: todayLocal(monday),
   });
 }

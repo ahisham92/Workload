@@ -252,10 +252,13 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
     if isinstance(value, _dt.date):
         return value
     if isinstance(value, (int, float)):
-        return from_serial(float(value)) if value > 0 else None
+        return _from_serial(value)
     text = str(value).strip()
     if not text:
         return None
+    if re.fullmatch(r"\d{5}(\.\d+)?", text):
+        # A date cell saved as text keeps its serial: "45903" is a day too.
+        return _from_serial(float(text))
     try:
         # ISO dates with a time, "T" or space separated, fractions included.
         return _dt.datetime.fromisoformat(text).date()
@@ -270,6 +273,18 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
         except ValueError:
             continue
     return None
+
+
+#: The serials Excel itself shows as dates: 1900-01-01 to 9999-12-31.
+_LAST_SERIAL = 2958465
+
+
+def _from_serial(value: float) -> Optional[_dt.date]:
+    """A serial as a date, or None for one no date has (a number like
+    20260903 in a date column would otherwise stop the whole import)."""
+    if not math.isfinite(value) or not 0 < value <= _LAST_SERIAL:
+        return None
+    return from_serial(float(value))
 
 
 def _coerce_number(value: Any) -> Optional[float]:

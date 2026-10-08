@@ -543,7 +543,7 @@ class WorkloadService:
                     if not m.startswith("Job numbers charged but not"))
                 parsed.append(result)
 
-            records = [r for p in parsed if p.ok for r in p.records()]
+            records = _without_repeats([p.records() for p in parsed if p.ok])
             if not records and not errors:
                 errors.append("None of the files held any timesheet rows.")
             people = self._people_in(records)
@@ -813,9 +813,18 @@ class WorkloadService:
             if not any(t["id"] == team_id for t in self.store.teams()):
                 raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
             name = body.get("name")
+            if name is not None:
+                # The same rules as a new team: a name, and not another's.
+                name = " ".join(str(name).split())
+                if not name:
+                    raise people_module.PeopleError("A team needs a name.")
+                if any(t["name"].lower() == name.lower() and t["id"] != team_id
+                       for t in self.store.teams()):
+                    raise people_module.PeopleError(
+                        f"There is already a team called {name}.")
             self.store.update_team(
                 team_id,
-                name=" ".join(str(name).split()) if name is not None else None,
+                name=name,
                 lead=str(body["lead"]).strip() if "lead" in body else None)
             return {"team_id": team_id}
 
@@ -838,8 +847,14 @@ class WorkloadService:
                 fields["team_id"] = team_id
             if "capacity_hours" in body:
                 value = body["capacity_hours"]
-                fields["capacity_hours"] = float(value) if value not in (None, "") \
-                    else None
+                try:
+                    hours = float(value) if value not in (None, "") else None
+                except (TypeError, ValueError):
+                    hours = -1.0
+                if hours is not None and not 0 <= hours < float("inf"):
+                    raise people_module.PeopleError(
+                        f"{value!r} is not a number of hours.")
+                fields["capacity_hours"] = hours
             if "active" in body:
                 fields["active"] = 1 if body["active"] else 0
             self.store.save_person(person, **fields)
@@ -1298,7 +1313,8 @@ class WorkloadService:
                 "projects": [{"number": n, "name": name}
                              for n, name in inputs["project_names"].items()],
                 "engineers": wb.engineer_names(),
-                "unit": (self.unit or {}).get("name") if isinstance(self.unit, dict) else "",
+                "unit": ((self.unit.get("name") if isinstance(self.unit, dict) else "")
+                         or ""),
                 "away": self._away(inputs, today),
                 "holidays": {k: v for k, v in self._holidays_view(inputs, today).items()
                              if k in ("unit", "unit_name", "chosen", "week_differs",
@@ -2263,6 +2279,10 @@ class WorkloadService:
             for item in _objects(items, "items"):
                 try:
                     row = int(item.get("row"))
+                except (TypeError, ValueError):
+                    errors.append(f"{item.get('row')!r} is not a row number.")
+                    continue
+                try:
                     date = _dt.date.fromisoformat(str(item.get("date")))
                 except (TypeError, ValueError):
                     errors.append(f"{item.get('date')!r} is not a date.")
@@ -2506,6 +2526,26 @@ def _object(value: Any, what: str) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{what} should be an object.")
     return value
+
+
+def _without_repeats(batches: Sequence[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Every file's rows, with a row that two files both hold kept once.
+
+    The same export chosen twice (``export.xlsx`` and ``export (1).xlsx``)
+    would otherwise count everybody's hours twice. A row a file holds more
+    than once is still kept as many times as the file holds it.
+    """
+    kept: Dict[str, int] = {}
+    out: List[Dict[str, Any]] = []
+    for batch in batches:
+        here: Dict[str, int] = {}
+        for record in batch:
+            key = repr(sorted((k, v) for k, v in record.items() if k != "source"))
+            here[key] = here.get(key, 0) + 1
+            if here[key] > kept.get(key, 0):
+                kept[key] = here[key]
+                out.append(record)
+    return out
 
 
 def _objects(value: Any, what: str) -> List[Dict[str, Any]]:

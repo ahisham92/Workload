@@ -177,6 +177,8 @@ def parse(filename: str, data: bytes) -> Dict[str, Any]:
     if "job_number" in columns and "spent_mm" in columns:
         return {"kind": "projects", "filename": filename,
                 "has_budget": "budget_mm" in columns,
+                # What this export cannot say, so what is held is kept.
+                "missing": [f for f in PROJECT_COLUMNS if f not in columns],
                 "jobs": _project_jobs(body, columns)}
     raise BudgetError(f"{filename!r} is neither BISpark's Projects list nor a "
                       "project's staff expenditure.")
@@ -380,9 +382,16 @@ def bring_in(service, parsed: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     projects = [p for p in parsed if p["kind"] == "projects"]
     if projects:
         jobs: Dict[str, Dict[str, Any]] = {}
+        held_jobs = {j["job_number"]: j for j in store.job_budgets()}
         for item in projects:
             for job in item["jobs"]:
-                jobs[job["job_number"]] = {**job, "source": item["filename"]}
+                number = job["job_number"]
+                before = jobs.get(number) or held_jobs.get(number) or {}
+                # The underlying-data export has no budget, EAC or EV column:
+                # it must not wipe the budget the summarized one brought in.
+                jobs[number] = {**job, "source": item["filename"],
+                                **{f: before.get(f) for f in item.get("missing", ())
+                                   if f in before}}
         result["jobs_listed"] = store.save_job_budgets(list(jobs.values()))
         result["has_budget"] = all(p["has_budget"] for p in projects)
         if not result["has_budget"]:
@@ -393,8 +402,12 @@ def bring_in(service, parsed: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for item in parsed:
         if item["kind"] == "spend":
+            # A job's staff expenditure is the whole of it: a second export
+            # of the same job in one go replaces the first, never adds to it.
+            in_file: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             for row in item["rows"]:
-                by_job[row["job_number"]].append(row)
+                in_file[row["job_number"]].append(row)
+            by_job.update(in_file)
     if by_job:
         unit = own_unit(service) or _unit_of_team(service, by_job)
         held = defaultdict(float)

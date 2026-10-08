@@ -68,7 +68,7 @@ function renderBudgets() {
   setChildren(body,
     budgetsTodo(data),
     budgetsStats(data, live),
-    budgetBars(live),
+    buBudgetBars(live),
     jobsPanel(live),
     bud.open ? jobDetail(data.jobs.find((j) => j.job_number === bud.open)) : null,
     peoplePanel(data),
@@ -154,7 +154,7 @@ function elapsed(job) {
   return Math.max(0, Math.min(1, (Date.now() - start) / span));
 }
 
-function budgetBars(live) {
+function buBudgetBars(live) {
   const jobs = live.filter((j) => j.team_budget_mm);
   if (!jobs.length) return null;
   const rows = jobs.slice(0, 12).map((j) => {

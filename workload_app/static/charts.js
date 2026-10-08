@@ -150,7 +150,7 @@ function donut(data, { title, note, unit = 'MM', size = 190, digits = 2 } = {}) 
         fill: colorOf(row, i),
         class: 'slice',
       });
-      hoverable(path, `<b>${escape(row.label)}</b><br>${row.value.toFixed(digits)} ${unit}`
+      hoverable(path, `<b>${chartEscape(row.label)}</b><br>${row.value.toFixed(digits)} ${unit}`
         + ` · ${((row.value / total) * 100).toFixed(1)}%`);
       svg.append(path);
     }
@@ -235,7 +235,7 @@ function groupedBars(categories, series, { title, note, unit = 'MM',
         x, y, width: barW, height: Math.max(1, plotH - y),
         rx: 4, fill: s.color || SERIES[si % SERIES.length], class: 'bar',
       });
-      hoverable(bar, `<b>${escape(category)}</b><br>${escape(s.label)}: `
+      hoverable(bar, `<b>${chartEscape(category)}</b><br>${chartEscape(s.label)}: `
         + `${value.toFixed(2)} ${unit}`);
       plot.append(bar);
     });
@@ -307,7 +307,7 @@ function stackedColumns(labels, series, { title, note, unit = 'MM',
         height: Math.max(1, barH - 2),      // 2px gap between segments
         rx: 2, fill: s.color || SERIES[si % SERIES.length], class: 'bar',
       });
-      hoverable(rect, `<b>${escape(label)}</b><br>${escape(s.label)}: `
+      hoverable(rect, `<b>${chartEscape(label)}</b><br>${chartEscape(s.label)}: `
         + `${value.toFixed(2)} ${unit}`);
       plot.append(rect);
       bottom -= barH;
@@ -375,7 +375,7 @@ function sparkline(values, { labels = [], target = null, unit = 'h',
       cx: i * step, cy: y(v), r: i === points.length - 1 ? 3 : 6,
       class: i === points.length - 1 ? 'spark-dot' : 'spark-hit', fill: color,
     });
-    hoverable(dot, `<b>${escape(labels[i] || '')}</b><br>${v.toLocaleString()} ${unit}`
+    hoverable(dot, `<b>${chartEscape(labels[i] || '')}</b><br>${v.toLocaleString()} ${unit}`
       + (target ? ` · ${Math.round((v / target) * 100)}% of capacity` : ''));
     svg.append(dot);
   });
@@ -572,7 +572,7 @@ function budgetBars(rows, { title, note, unit = 'MM' } = {}) {
     earned.className = 'budget-earned';
     earned.style.left = `${((row.earned || 0) / peak) * 100}%`;
     track.append(budget, actual, earned);
-    hoverable(track, `<b>${escape(row.title || row.label)}</b><br>`
+    hoverable(track, `<b>${chartEscape(row.title || row.label)}</b><br>`
       + `Budget ${(row.budget || 0).toFixed(2)} ${unit}<br>`
       + `Booked ${(row.actual || 0).toFixed(2)} ${unit}<br>`
       + `Earned ${(row.earned || 0).toFixed(2)} ${unit}`);
@@ -625,11 +625,11 @@ function scoreBars(rows, { title, note, max = 100, suffix = '' } = {}) {
   return figure(title, note, box);
 }
 
-function escape(text) {
+function chartEscape(text) {
   return String(text).replace(/[&<>"]/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 window.charts = {
-  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation, escape,
+  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation, escape: chartEscape,
 };

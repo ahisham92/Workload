@@ -107,7 +107,8 @@ function toast(message, kind = '') {
 
 /* ------------------------------------------------------------- rendering */
 
-async function load() {
+/** The /api/me query for the unit, person and year chosen. */
+function meQuery() {
   const query = new URLSearchParams();
   if (state.unit) query.set('unit', state.unit);
   if (state.person) query.set('person', state.person);
@@ -121,7 +122,11 @@ async function load() {
   } else {
     query.set('period', 'all');
   }
-  state.data = await api(`/api/me?${query.toString()}`);
+  return query.toString();
+}
+
+async function load() {
+  state.data = await api(`/api/me?${meQuery()}`);
   if (!state.chosen) {
     state.year = state.data.period.year;
     state.chosen = true;
@@ -130,7 +135,7 @@ async function load() {
   // My day is for your own day: looking at somebody you lead shows their
   // figures only, and nothing on their page can be changed from yours.
   const own = !state.data.viewer || state.data.engineer === state.data.viewer;
-  for (const id of ['myday', 'mytimesheet', 'myoff', 'mymeetings', 'mycalendar']) {
+  for (const id of ['myday', 'myweek', 'mytimesheet', 'myoff', 'mymeetings', 'mycalendar']) {
     if (!own && $(`#${id}`)) $(`#${id}`).hidden = true;
   }
   if (own && window.myDay && dataKnown(state.data)) window.myDay.load(state.data.unit && state.data.unit.id);
@@ -139,6 +144,19 @@ async function load() {
     window.selecaoPush.show($('#member-push'));
   }
 }
+
+/** The figures again, after My day changed a task's status (done, stuck):
+    the task list and its counts below are otherwise those of the page load. */
+async function refreshFigures() {
+  try {
+    state.data = await api(`/api/me?${meQuery()}`, { quiet: true });
+  } catch (error) {
+    return;
+  }
+  render();
+}
+
+window.memberPage = { refresh: refreshFigures };
 
 function dataKnown(data) { return Boolean(data && data.known); }
 

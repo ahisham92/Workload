@@ -158,7 +158,7 @@ class Plan:
         """What leading people takes from each leader's day, on average:
         the daily support, plus the meetings spread over the fortnight."""
         a_day = task_sheet.hours_per_day(self.config)
-        days = max(1, len(_working(_dt.date(2024, 1, 1), 7, self.config)))
+        days = _days_a_week(self.config)
         out = {}
         for name, led in self.led.items():
             weekly = (_team_meeting_minutes(led)
@@ -170,7 +170,7 @@ class Plan:
         """Everything that is not project work, on average a day: leading
         people, and everybody's own development time."""
         a_day = task_sheet.hours_per_day(self.config)
-        days = max(1, len(_working(_dt.date(2024, 1, 1), 7, self.config)))
+        days = _days_a_week(self.config)
         out = dict(self.hours_a_day())
         for name, hours in self.development.items():
             out[name] = round(min(a_day, out.get(name, 0.0) + hours / days), 2)
@@ -390,6 +390,12 @@ class Plan:
                 if name == meeting["leader"] or name in meeting["with"]:
                     out.append((meeting["start"], meeting["end"]))
         return out
+
+
+def _days_a_week(config: Dict[str, Any]) -> int:
+    """Working days in a usual week: the working week's own days, never a
+    sample week that a public holiday in it would shorten."""
+    return max(1, len(config.get("work_days") or ()))
 
 
 def _team_meeting_minutes(led: Sequence[Any]) -> int:
