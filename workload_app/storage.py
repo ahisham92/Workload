@@ -271,10 +271,7 @@ def backup_if_due(data_dir: Path, user_id: int, unit_file: Path) -> Optional[Pat
 
 def backups_of(data_dir: Path, user_id: int, unit_id: str) -> List[Path]:
     """A unit's own database copies, oldest first."""
-    folder = backups_dir(data_dir, user_id)
-    if not folder.is_dir():
-        return []
-    return _copies(folder, unit_id)
+    return _copies(backups_dir(data_dir, user_id), unit_id)
 
 
 def _copies(folder: Path, unit_id: str) -> List[Path]:

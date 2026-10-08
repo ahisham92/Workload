@@ -1,22 +1,12 @@
-"""Timesheet rows, in a database instead of the workbook.
+"""Timesheet rows, and everything else the planner keeps about a unit.
 
-The workbook consolidates the monthly sheets with ``VSTACK`` and reads the
-result up to a fixed row, and every ``SUMIFS`` in the file stops at that row
-too.  That design has two ceilings: the stack (raising it rewrites ~138,000
-formulas and takes the better part of a minute) and the twelve engineer slots
-the calendar and the share columns have room for.  A head of department with
-eighty people below him fits in neither.
+The rows live in the unit's own SQLite file, beside the registers ``Unit``
+keeps there (see ``unit``).  There is no cap: adding a person costs nothing,
+and a year of eighty people is a few hundred thousand rows -- which SQLite
+considers small.  ``metrics.TimesheetIndex`` reads its figures from here.
 
-So the rows live here instead: one SQLite file per unit, beside its workbook.
-There is no cap, adding a person costs nothing, and a year of eighty people is
-a few hundred thousand rows -- which SQLite considers small.
-
-The workbook keeps everything else, and keeps being the model: projects,
-deliverables, project types, rules of credit, the scorecard, the calendar.
-This holds only what those formulas used to sum over, and
-``metrics.TimesheetIndex`` reads from here instead of from the sheets.  On
-export the rows are written back into the TS sheets, as far as they fit, so
-the file you download is still a workbook that opens and calculates.
+The same file holds the teams, time away, drawing counts, budgets, meetings
+and the rest of what the screens keep, each in its own table below.
 """
 
 from __future__ import annotations
@@ -710,10 +700,7 @@ class TimesheetStore:
             rows = db.execute(
                 "SELECT person, unit FROM rows WHERE unit <> '' "
                 "ORDER BY day IS NULL DESC, day, id").fetchall()
-        out: Dict[str, str] = {}
-        for row in rows:
-            out[row["person"]] = row["unit"]
-        return out
+        return {row["person"]: row["unit"] for row in rows}
 
     # -- drawings ----------------------------------------------------------
     def drawings(self) -> Dict[int, Dict[str, Any]]:

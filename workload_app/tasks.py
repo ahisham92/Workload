@@ -112,18 +112,15 @@ def _parse_date(value: Any) -> Optional[_dt.date]:
         return value.date()
     if isinstance(value, _dt.date):
         return value
-    if isinstance(value, (int, float)):
-        # The same reading as ``model.as_date``: a serial of nought or less is
-        # no date at all, and one past any calendar is a mistake to say so.
-        try:
+    try:
+        if isinstance(value, (int, float)):
+            # The same reading as ``model.as_date``: a serial of nought or less
+            # is no date at all, and one past any calendar is a mistake to say so.
             if not math.isfinite(value):
                 raise ValueError(value)
             return from_serial(float(value)) if value > 0 else None
-        except (OverflowError, ValueError):
-            raise TaskError([f"{value!r} is not a date the app understands (YYYY-MM-DD)."])
-    try:
         return _dt.date.fromisoformat(str(value)[:10])
-    except ValueError:
+    except (OverflowError, ValueError):
         raise TaskError([f"{value!r} is not a date the app understands (YYYY-MM-DD)."])
 
 
@@ -132,9 +129,9 @@ def _parse_hours(value: Any, label: str) -> Optional[float]:
         return None
     try:
         hours = float(value)
+        if not math.isfinite(hours):
+            raise ValueError(hours)
     except (TypeError, ValueError):
-        raise TaskError([f"{label} has to be a number of hours."])
-    if not math.isfinite(hours):
         raise TaskError([f"{label} has to be a number of hours."])
     if hours < 0:
         raise TaskError([f"{label} cannot be negative."])
@@ -158,10 +155,6 @@ def settings(source: Any) -> Dict[str, Any]:
         out.update({k: v for k, v in stored.items() if k in out})
     out["work_days"] = sorted({int(d) for d in out["work_days"] if 0 <= int(d) <= 6})
     return out
-
-
-def _write_settings(source: Any, values: Dict[str, Any]) -> None:
-    source.write_task_settings(dict(values))
 
 
 def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,7 +221,7 @@ def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
 
     if errors:
         raise TaskError(errors)
-    _write_settings(source, updated)
+    source.write_task_settings(dict(updated))
     return updated
 
 
@@ -287,25 +280,19 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
     if kind not in cfg.TASK_KINDS:
         errors.append(f"Kind has to be one of {', '.join(cfg.TASK_KINDS)}.")
 
-    required = actual = None
-    start = due = None
-    for reader in (
-        lambda: _parse_hours(data.get("required_hours"), "Required hours"),
-        lambda: _parse_hours(data.get("actual_hours"), "Actual hours"),
-        lambda: _parse_date(data.get("start")),
-        lambda: _parse_date(data.get("due")),
-    ):
+    def attempt(parse, *args):
         try:
-            reader()
+            return parse(*args)
         except TaskError as error:
             errors.extend(error.errors)
-    if not errors:
-        required = _parse_hours(data.get("required_hours"), "Required hours")
-        actual = _parse_hours(data.get("actual_hours"), "Actual hours")
-        start = _parse_date(data.get("start"))
-        due = _parse_date(data.get("due"))
-        if start and due and due < start:
-            errors.append("A task cannot be due before it starts.")
+            return None
+
+    required = attempt(_parse_hours, data.get("required_hours"), "Required hours")
+    actual = attempt(_parse_hours, data.get("actual_hours"), "Actual hours")
+    start = attempt(_parse_date, data.get("start"))
+    due = attempt(_parse_date, data.get("due"))
+    if not errors and start and due and due < start:
+        errors.append("A task cannot be due before it starts.")
 
     deliverable_row = data.get("deliverable_row")
     if deliverable_row in ("", None):
@@ -372,9 +359,9 @@ def _parse_fraction(value: Any) -> Optional[float]:
         return None
     try:
         number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(number)
     except (TypeError, ValueError):
-        raise TaskError(["Progress has to be a number."])
-    if not math.isfinite(number):
         raise TaskError(["Progress has to be a number."])
     if number < 0:
         raise TaskError(["Progress cannot be negative."])
@@ -437,6 +424,16 @@ def is_working_day(day: _dt.date, config: Dict[str, Any]) -> bool:
         return False
     holidays = config.get("holidays")
     return not (holidays and day.isoformat() in holidays)
+
+
+def week_start(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
+    """The first day of ``day``'s week -- a Sunday where the week starts then."""
+    start = day - _dt.timedelta(days=day.weekday())
+    if 6 in config["work_days"] and 4 not in config["work_days"]:
+        start -= _dt.timedelta(days=1)
+        if start + _dt.timedelta(days=7) <= day:
+            start += _dt.timedelta(days=7)
+    return start
 
 
 def working_days(start: _dt.date, end: _dt.date, config: Dict[str, Any]
@@ -506,10 +503,10 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             continue
         shares = deliverable.get("shares") or {}
         assignees = [name for name in engineers if (shares.get(name) or 0) > 0]
+        name = deliverable.get("name") or f"Deliverable on row {row}"
         for position, day in enumerate(days, start=1):
             if (series, day) in have:
                 continue
-            name = deliverable.get("name") or f"Deliverable on row {row}"
             task = Task(
                 id=identifier,
                 name=f"{name} — submission day {position} of {len(days)}",

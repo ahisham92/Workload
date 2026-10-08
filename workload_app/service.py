@@ -33,7 +33,7 @@ from . import (calendar_, checkins as checkins_module, config as cfg, daily, der
                tasks as task_sheet, timesheets)
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
-from .model import ValidationError, iso, today as _model_today
+from .model import ValidationError, iso, pattern_to_regex, today as _model_today
 from . import unit as unit_module
 from . import urgent as urgent_module
 from . import weekly as weekly_module
@@ -77,8 +77,9 @@ def _remembered(method):
     Every tab asks for its figures again each time it is shown, and most of
     them start from the same rows; worked out once per revision of the unit,
     they cost one lookup after that.  The answer depends on the unit's data
-    (the revision), the arguments, which unit this is, and today's date --
-    all of which are part of the key.  Each caller gets its own copy.
+    (the revision), the arguments, which unit this is, whether it is open
+    read-only or with the reference tables unlocked, and today's date -- all
+    of which are part of the key.  Each caller gets its own copy.
     """
     @functools.wraps(method)
     def remembered(self, *args):
@@ -155,8 +156,6 @@ class WorkloadService:
 
     def _index(self, wb: Unit) -> "metrics.TimesheetIndex":
         """The timesheet rows, indexed; built once per revision of the unit."""
-        if self._store is not getattr(wb, "store", None):
-            return metrics.TimesheetIndex(wb, self._store)
         return wb._cached("index", lambda: metrics.TimesheetIndex(wb, self._store))
 
     @property
@@ -200,6 +199,14 @@ class WorkloadService:
             raise ApiError(HTTPStatus.FORBIDDEN,
                            "This unit is open for reading only.")
         return {"saved": True}
+
+    def _saved(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """``result``, with the word that it is written."""
+        result["save"] = self._commit()
+        return result
+
+    def _unit_name(self) -> str:
+        return (self.unit.get("name") if isinstance(self.unit, dict) else "") or ""
 
     def _known_job_numbers(self) -> set:
         wb = self.workbook
@@ -291,23 +298,17 @@ class WorkloadService:
 
     def add_engineer(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            result = self.workbook.add_engineer(body)
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.add_engineer(body))
 
     def update_engineer(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            result = self.workbook.update_engineer(engineer, body)
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.update_engineer(engineer, body))
 
     def remove_engineer(self, engineer: str) -> Dict[str, Any]:
         with self._lock:
             self.workbook._require_engineer(engineer)    # noqa: SLF001
             self._copy_first()
-            result = self.workbook.remove_engineer(engineer)
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.remove_engineer(engineer))
 
     @_remembered
     def reports(self, kind: str, year: Optional[int],
@@ -354,9 +355,7 @@ class WorkloadService:
 
     def delete_project(self, number: str, cascade: bool) -> Dict[str, Any]:
         with self._lock:
-            result = self.workbook.delete_project(number, cascade=cascade)
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.delete_project(number, cascade=cascade))
 
     def add_deliverable(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -390,8 +389,7 @@ class WorkloadService:
                     self.store.set_drawings(written["row"],
                                             written["project_number"], count)
                     written["drawings"] = count
-            result["save"] = self._commit()
-            return result
+            return self._saved(result)
 
     def project_detail(self, number: str) -> Dict[str, Any]:
         with self._lock:
@@ -421,8 +419,7 @@ class WorkloadService:
             result = self.workbook.delete_deliverable(row)
             self.store.set_drawings(row, "", None)
             self.store.clear_drawing_list_row(row)
-            result["save"] = self._commit()
-            return result
+            return self._saved(result)
 
     def save(self) -> Dict[str, Any]:
         """Nothing to do: kept so an old screen's Save button still answers."""
@@ -478,11 +475,7 @@ class WorkloadService:
                     "The export still has errors that must be fixed first.",
                     parsed.errors,
                 )
-            if mode not in {"append", "replace"}:
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    "Mode must be 'replace' (the monthly routine) or 'append'.",
-                )
+            _check_mode(mode)
             wb = self.workbook
             records = parsed.records()
             store = self.store
@@ -576,8 +569,9 @@ class WorkloadService:
                     for full, info in people.items()),
                     key=lambda p: -p["hours"]),
                 "people_outside_workbook": outside,
-                "new_projects": derive.describe(plan["fits"]),
-                "projects_left_out": derive.describe(plan["left_out"]),
+                "new_projects": derive.describe(plan),
+                # Every project fits: the register has no last row any more.
+                "projects_left_out": [],
             }
 
     def apply_exports(self, token: str, mode: str = "replace") -> Dict[str, Any]:
@@ -587,10 +581,7 @@ class WorkloadService:
             if not isinstance(staged, dict):
                 raise ApiError(HTTPStatus.NOT_FOUND,
                                "That import has expired. Choose the files again.")
-            if mode not in {"append", "replace"}:
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    "Mode must be 'replace' (the monthly routine) or 'append'.")
+            _check_mode(mode)
             wb = self.workbook
             store = self.store
             if mode == "replace":
@@ -648,9 +639,7 @@ class WorkloadService:
     def sync_projects(self) -> Dict[str, Any]:
         """Add any project the timesheets already held imply, on request."""
         with self._lock:
-            result = self._add_derived_projects()
-            result["save"] = self._commit()
-            return result
+            return self._saved(self._add_derived_projects())
 
     def _people_in(self, records: Sequence[Dict[str, Any]]
                    ) -> Dict[str, Dict[str, Any]]:
@@ -662,7 +651,7 @@ class WorkloadService:
         """
         wb = self.workbook
         engineers = wb.engineers()
-        matchers = [(e.short_name, timesheets._wildcard(e.pattern))
+        matchers = [(e.short_name, pattern_to_regex(e.pattern))
                     for e in engineers if e.pattern]
         established = set(self.store.people_with_rows()) | {
             p["name"] for p in self.store.people()}
@@ -706,8 +695,8 @@ class WorkloadService:
         return [info["name"] for info in people.values()
                 if not info["new"] and info["name"] not in placed]
 
-    def _plan(self, records: Sequence[Dict[str, Any]]) -> Dict[str, List]:
-        """The projects these rows add, and which would not fit."""
+    def _plan(self, records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """The projects these rows add."""
         wb = self.workbook
         rows = list(records)
         staged_people = {r["engineer"] for r in rows}
@@ -717,22 +706,19 @@ class WorkloadService:
                  if r["engineer"] not in staged_people]
         engineers = list(dict.fromkeys(
             wb.engineer_names() + sorted({r["engineer"] for r in rows})))
-        plans = derive.plan_projects(
+        return list(derive.plan_projects(
             rows,
             existing=[p.number for p in wb.projects()],
             engineers=engineers,
             credit_steps=wb.reference()["credit_steps"],
             hours_per_mm=wb.hours_per_man_month() or 0.0,
-        )
-        # Every project fits: the register has no last row any more.
-        return {"fits": list(plans), "left_out": []}
+        ))
 
     def _add_derived_projects(self) -> Dict[str, Any]:
         wb = self.workbook
-        plan = self._plan([])
         names = set(wb.engineer_names())
         added, failed = [], []
-        for item in plan["fits"]:
+        for item in self._plan([]):
             deliverables = [
                 {**d, "shares": {k: v for k, v in d["shares"].items()
                                  if k in names}}
@@ -750,7 +736,7 @@ class WorkloadService:
         return {
             "projects_added": added,
             "projects_failed": failed,
-            "projects_left_out": [p["project"]["number"] for p in plan["left_out"]],
+            "projects_left_out": [],
         }
 
     # -- teams and people ------------------------------------------------
@@ -798,32 +784,37 @@ class WorkloadService:
             data["available_years"] = metrics.available_years(wb, index)
             return data
 
+    def _require_team(self, team_id: Optional[str]) -> None:
+        """Refuse a team id that is given but is not one of the unit's."""
+        if team_id is not None and not any(t["id"] == team_id
+                                           for t in self.store.teams()):
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+
+    def _team_name(self, raw: Any, team_id: Optional[str] = None) -> str:
+        """A team's name: there is one, and no other team has it."""
+        name = " ".join(str(raw or "").split())
+        if not name:
+            raise people_module.PeopleError("A team needs a name.")
+        if any(t["name"].lower() == name.lower() and t["id"] != team_id
+               for t in self.store.teams()):
+            raise people_module.PeopleError(
+                f"There is already a team called {name}.")
+        return name
+
     def add_team(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            name = " ".join(str(body.get("name") or "").split())
-            if not name:
-                raise people_module.PeopleError("A team needs a name.")
-            if any(t["name"].lower() == name.lower() for t in self.store.teams()):
-                raise people_module.PeopleError(
-                    f"There is already a team called {name}.")
+            name = self._team_name(body.get("name"))
             team = self.store.add_team(uuid.uuid4().hex[:12], name,
                                        str(body.get("lead") or "").strip())
             return {"team": team}
 
     def update_team(self, team_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            if not any(t["id"] == team_id for t in self.store.teams()):
-                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+            self._require_team(team_id)
             name = body.get("name")
             if name is not None:
                 # The same rules as a new team: a name, and not another's.
-                name = " ".join(str(name).split())
-                if not name:
-                    raise people_module.PeopleError("A team needs a name.")
-                if any(t["name"].lower() == name.lower() and t["id"] != team_id
-                       for t in self.store.teams()):
-                    raise people_module.PeopleError(
-                        f"There is already a team called {name}.")
+                name = self._team_name(str(name), team_id)
             self.store.update_team(
                 team_id,
                 name=name,
@@ -843,9 +834,7 @@ class WorkloadService:
                 fields["grade"] = people_module.clean_grade(body["grade"])
             if "team_id" in body:
                 team_id = body["team_id"] or None
-                if team_id and not any(t["id"] == team_id
-                                       for t in self.store.teams()):
-                    raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+                self._require_team(team_id)
                 fields["team_id"] = team_id
             if "capacity_hours" in body:
                 value = body["capacity_hours"]
@@ -869,8 +858,7 @@ class WorkloadService:
             if not names:
                 raise people_module.PeopleError("Choose somebody to move first.")
             team_id = body.get("team_id") or None
-            if team_id and not any(t["id"] == team_id for t in self.store.teams()):
-                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such team.")
+            self._require_team(team_id)
             moved = self.store.move_people(names, team_id)
             team = next((t for t in self.store.teams() if t["id"] == team_id), None)
             return {"moved": moved, "names": names,
@@ -928,8 +916,7 @@ class WorkloadService:
         choice = {"unit": choice.get("unit"), "teams": dict(choice.get("teams") or {}),
                   "off": list(choice.get("off") or []), "chosen": "unit" in choice}
         if not choice["chosen"]:
-            unit = self.unit if isinstance(self.unit, dict) else {}
-            names = [unit.get("name") or ""] + [t.get("name") or "" for t in teams]
+            names = [self._unit_name()] + [t.get("name") or "" for t in teams]
             choice["unit"] = next((c for c in map(holidays_module.guess, names) if c), None)
         return choice
 
@@ -949,8 +936,8 @@ class WorkloadService:
             starters = [{"project_number": d.project_number, "name": d.name}
                         for d in wb.deliverables() if d.project_number in live]
             data = drawing_list_module.template(starters)
-            unit = self.unit if isinstance(self.unit, dict) else {}
-            return {"filename": f"Drawing list{' - ' + unit['name'] if unit.get('name') else ''}.xlsx",
+            name = self._unit_name()
+            return {"filename": f"Drawing list{' - ' + name if name else ''}.xlsx",
                     "content_base64": base64.b64encode(data).decode("ascii")}
 
     def import_drawing_list(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -1019,12 +1006,9 @@ class WorkloadService:
     def _leave(self, wb, rows) -> Dict[str, Any]:
         """Days off booked on the timesheets, read once per revision."""
         codes = calendar_.leave_codes(wb)
-        build = lambda: calendar_.leave_from_timesheets(          # noqa: E731
-            rows, codes=codes)
-        if self._store is not getattr(wb, "store", None):
-            return build()
         # Kept with the rows, for as long as the codes that mean leave hold.
-        return wb._cached(("leave", tuple(sorted(codes))), build)
+        return wb._cached(("leave", tuple(sorted(codes))),
+                          lambda: calendar_.leave_from_timesheets(rows, codes=codes))
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
@@ -1059,19 +1043,39 @@ class WorkloadService:
             "drawings": drawn,
         }
 
+    def _moves(self, inputs: Dict[str, Any], body: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return planner_module.clean_moves(
+            body.get("moves"), people=[p["name"] for p in inputs["roster"]],
+            tasks=inputs["tasks"])
+
+    def _outlook_inputs(self, inputs: Dict[str, Any], days: int,
+                        today: _dt.date) -> Dict[str, Any]:
+        """What the planner's outlook is worked out from, but the moves."""
+        return dict(
+            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
+            config=inputs["config"], project_names=inputs["project_names"],
+            drawings_left=drawings_module.left_by_project(inputs["drawings"]),
+            saved=self.store.plan_moves(), days=days, today=today,
+            management=inputs["management"].taken_a_day())
+
+    def _plan_day(self, inputs: Dict[str, Any], day: _dt.date,
+                  roster: Sequence[Dict[str, Any]], rates: Any,
+                  slots: Dict[int, Dict[str, Any]], *, tasks: Any = None,
+                  today: Optional[_dt.date] = None, agendas: Any = None
+                  ) -> Dict[str, Any]:
+        """The day plan for ``day``, for the people in ``roster``."""
+        return daily.plan_day(
+            day=day, today=today or _today(), roster=roster, rates=rates,
+            tasks=inputs["tasks"] if tasks is None else tasks, slots=slots,
+            config=inputs["config"], project_names=inputs["project_names"],
+            **inputs["management"].for_day(day, agendas))
+
     def _outlook(self, wb, body: Dict[str, Any], *, suggest: bool = False
                  ) -> Dict[str, Any]:
         inputs = self._planning(wb)
         days = planner_module.clean_days(body.get("days"))
-        moves = planner_module.clean_moves(
-            body.get("moves"), people=[p["name"] for p in inputs["roster"]],
-            tasks=inputs["tasks"])
-        common = dict(
-            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
-            config=inputs["config"], project_names=inputs["project_names"],
-            drawings_left=drawings_module.left_by_project(inputs["drawings"]),
-            saved=self.store.plan_moves(), days=days, today=_today(),
-            management=inputs["management"].taken_a_day())
+        moves = self._moves(inputs, body)
+        common = self._outlook_inputs(inputs, days, _today())
         suggested: List[Dict[str, Any]] = []
         if suggest:
             suggested = planner_module.suggest(moves=moves, **common)
@@ -1104,9 +1108,7 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             inputs = self._planning(wb)
-            moves = planner_module.clean_moves(
-                body.get("moves"), people=[p["name"] for p in inputs["roster"]],
-                tasks=inputs["tasks"])
+            moves = self._moves(inputs, body)
             if any(m["kind"] == planner_module.EXTRA for m in moves):
                 raise planner_module.PlanError([
                     "New work in a what-if is only tried, not committed. Add real "
@@ -1159,7 +1161,6 @@ class WorkloadService:
             wb = self.workbook
             inputs = self._planning(wb)
             drawn = inputs["drawings"]
-            unit = self.unit or {}
             data = needs_module.forecast(
                 rows=inputs["rows"], project_rows=inputs["project_rows"],
                 projects=wb.projects(), roster=inputs["roster"],
@@ -1167,7 +1168,7 @@ class WorkloadService:
                 drawings_left=drawings_module.left_by_project(drawn),
                 drafting_hours_per_drawing=drawn["drafting_hours_per_drawing"],
                 today=_today(),
-                unit_name=(unit.get("name") if isinstance(unit, dict) else "") or "",
+                unit_name=self._unit_name(),
                 requests=[(name, t.due, t.hours_each())
                           for t in inputs["tasks"]
                           if intake.is_request(t) and not t.done and t.due
@@ -1219,9 +1220,8 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             inputs = self._planning(wb)
-            unit = self.unit if isinstance(self.unit, dict) else {}
             return weekly_module.build(
-                unit_name=unit.get("name") or "", today=_today(),
+                unit_name=self._unit_name(), today=_today(),
                 config=inputs["config"], checkins=self.checkins(),
                 needs=self.needs(), submissions=self.submissions(),
                 rows=inputs["rows"], project_names=inputs["project_names"])
@@ -1274,12 +1274,10 @@ class WorkloadService:
                 agendas = self._agendas(inputs, today, saved, slots)
             out = []
             for each in days:
-                out.append(daily.plan_day(
-                    day=each, today=today, roster=inputs["roster"],
-                    rates=daily.rates_on(each, inputs["rows"], config, saved),
-                    tasks=inputs["tasks"], slots=slots, config=config,
-                    project_names=inputs["project_names"],
-                    **plan.for_day(each, agendas)))
+                out.append(self._plan_day(
+                    inputs, each, inputs["roster"],
+                    daily.rates_on(each, inputs["rows"], config, saved), slots,
+                    today=today, agendas=agendas))
             requests = []
             for task in inputs["tasks"]:
                 if not intake.is_request(task):
@@ -1315,8 +1313,7 @@ class WorkloadService:
                 "projects": [{"number": n, "name": name}
                              for n, name in inputs["project_names"].items()],
                 "engineers": wb.engineer_names(),
-                "unit": ((self.unit.get("name") if isinstance(self.unit, dict) else "")
-                         or ""),
+                "unit": self._unit_name(),
                 "away": self._away(inputs, today),
                 "holidays": {k: v for k, v in self._holidays_view(inputs, today).items()
                              if k in ("unit", "unit_name", "chosen", "week_differs",
@@ -1433,15 +1430,9 @@ class WorkloadService:
                 f"{person} has no place on the task list yet, so a request "
                 f"cannot be given to them."])
         if not person:
-            view = planner_module.outlook(
-                rows=inputs["rows"], tasks=inputs["tasks"],
-                roster=inputs["roster"], config=inputs["config"],
-                project_names=inputs["project_names"],
-                drawings_left=drawings_module.left_by_project(inputs["drawings"]),
-                saved=self.store.plan_moves(), today=today,
-                management=inputs["management"].taken_a_day(),
-                days=max(1, len(task_sheet.working_days(
-                    today, max(request["due"], today), inputs["config"]))))
+            view = planner_module.outlook(**self._outlook_inputs(
+                inputs, max(1, len(task_sheet.working_days(
+                    today, max(request["due"], today), inputs["config"]))), today))
             history: Dict[str, set] = {}
             for row in inputs["rows"]:
                 history.setdefault(row["job_number"], set()).add(row["engineer"])
@@ -1515,11 +1506,7 @@ class WorkloadService:
             slots[extra[0].id] = extra[1]
         out = {}
         for day in days:
-            page = daily.plan_day(
-                day=day, today=_today(), roster=me, rates=rates[day], tasks=tasks,
-                slots=slots, config=inputs["config"],
-                project_names=inputs["project_names"],
-                **inputs["management"].for_day(day, None))
+            page = self._plan_day(inputs, day, me, rates[day], slots, tasks=tasks)
             out[day] = page["people"][0] if page["people"] else None
         return out
 
@@ -1566,11 +1553,7 @@ class WorkloadService:
     def _rates_by_day(self, inputs: Dict[str, Any], days: Sequence[_dt.date]):
         measured = planner_module.pace(inputs["rows"], inputs["config"])["rates"]
         saved = self.store.plan_moves()
-        out = {}
-        for day in days:
-            active = planner_module._active_saved(saved, day, day)
-            out[day], _ = planner_module._apply_project_moves(measured, active)
-        return out
+        return {day: planner_module.rates_in_force(measured, saved, day) for day in days}
 
     def request_preview(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """What a new request would push, and what it would cost, before it
@@ -1675,11 +1658,8 @@ class WorkloadService:
             roster = [p for p in roster if p["name"] in set(people)]
         rates = self._rates_by_day(inputs, days)
         slots = self.store.slots()
-        pages = [daily.plan_day(
-            day=day, today=_today(), roster=roster, rates=rates[day],
-            tasks=inputs["tasks"], slots=slots, config=inputs["config"],
-            project_names=inputs["project_names"],
-            **inputs["management"].for_day(day, None)) for day in days]
+        pages = [self._plan_day(inputs, day, roster, rates[day], slots)
+                 for day in days]
         return weekplan.snapshot(pages, inputs["tasks"], inputs["project_names"])
 
     def _keep_week(self, inputs: Dict[str, Any], days: Sequence[_dt.date]) -> int:
@@ -1744,11 +1724,9 @@ class WorkloadService:
             data["trend"] = self._trend(inputs, days[0])
             data["can_lock"] = weekplan.lockable(days[0], _today(), inputs["config"],
                                                  daily.week_of)
-            data["previous"] = (days[0] - _dt.timedelta(days=7)).isoformat()
-            data["next"] = (days[0] + _dt.timedelta(days=7)).isoformat()
+            data.update(_week_around(days[0]))
             data["today"] = _today().isoformat()
-            data["reason_choices"] = [{"key": k, "label": v}
-                                      for k, v in weekplan.REASONS.items()]
+            data["reason_choices"] = _reason_choices()
             return data
 
     def set_slip_reason(self, body: Dict[str, Any], *,
@@ -1782,10 +1760,8 @@ class WorkloadService:
                 "state": data["state"], "locked": data["locked"],
                 "me": mine,
                 "trend": self._trend(inputs, days[0], [engineer]),
-                "previous": (days[0] - _dt.timedelta(days=7)).isoformat(),
-                "next": (days[0] + _dt.timedelta(days=7)).isoformat(),
-                "reason_choices": [{"key": k, "label": v}
-                                   for k, v in weekplan.REASONS.items()],
+                **_week_around(days[0]),
+                "reason_choices": _reason_choices(),
             }
 
     # -- what-ifs kept to compare -------------------------------------------
@@ -1818,9 +1794,7 @@ class WorkloadService:
             name = " ".join(str(body.get("name") or "").split())[:80]
             if not name:
                 raise planner_module.PlanError(["Give the what-if a name."])
-            moves = planner_module.clean_moves(
-                body.get("moves"), people=[p["name"] for p in inputs["roster"]],
-                tasks=inputs["tasks"])
+            moves = self._moves(inputs, body)
             if not moves:
                 raise planner_module.PlanError(["Try something first, then keep it."])
             if len(self.store.what_ifs()) >= WHAT_IF_LIMIT:
@@ -1848,13 +1822,10 @@ class WorkloadService:
         """One person's page of the day plan, without the meeting agendas
         (those carry what the leader is told about other people)."""
         me = [p for p in inputs["roster"] if p["name"] == engineer]
-        config = inputs["config"]
-        return daily.plan_day(
-            day=day, today=_today(), roster=me,
-            rates=daily.rates_on(day, inputs["rows"], config, self.store.plan_moves()),
-            tasks=inputs["tasks"], slots=self.store.slots(), config=config,
-            project_names=inputs["project_names"],
-            **inputs["management"].for_day(day, None))
+        return self._plan_day(
+            inputs, day, me,
+            daily.rates_on(day, inputs["rows"], inputs["config"], self.store.plan_moves()),
+            self.store.slots())
 
     @_remembered
     def my_day(self, engineer: str, query: Dict[str, List[str]]) -> Dict[str, Any]:
@@ -1904,10 +1875,9 @@ class WorkloadService:
             anchor = days[0] if days else _date_in(query, "week", today)
             out.update({
                 "engineer": engineer,
-                "week_start": days[0].isoformat() if days else anchor.isoformat(),
+                "week_start": anchor.isoformat(),
                 "week_end": days[-1].isoformat() if days else anchor.isoformat(),
-                "previous": (anchor - _dt.timedelta(days=7)).isoformat(),
-                "next": (anchor + _dt.timedelta(days=7)).isoformat(),
+                **_week_around(anchor),
                 "this_week": bool(days and days[0] <= today <= days[-1] + _dt.timedelta(days=2)),
             })
             return out
@@ -2054,18 +2024,17 @@ class WorkloadService:
             out = []
             for name in names:
                 link = links.get(name)
+                coming = [(a, b) for a, b in busy.get(name, ())
+                          if today.isoformat() <= a[:10] < week_end.isoformat()]
                 hours = sum(
                     (_dt.datetime.fromisoformat(b) - _dt.datetime.fromisoformat(a)
-                     ).total_seconds() / 3600
-                    for a, b in busy.get(name, ())
-                    if today.isoformat() <= a[:10] < week_end.isoformat())
+                     ).total_seconds() / 3600 for a, b in coming)
                 out.append({
                     "person": name, "linked": link is not None,
                     "added_by": link["added_by"] if link else "",
                     "read_at": link["read_at"] if link else None,
                     "problem": link["problem"] if link else "",
-                    "meetings": len([1 for a, _ in busy.get(name, ())
-                                     if today.isoformat() <= a[:10] < week_end.isoformat()]),
+                    "meetings": len(coming),
                     "hours_next_7_days": round(hours, 1)})
             return {"people": out,
                     "linked": sum(1 for p in out if p["linked"]),
@@ -2295,18 +2264,17 @@ class WorkloadService:
                 chosen.append((row, date))
             if errors:
                 raise ValidationError(errors)
-            prepared = 0
             for row, date in chosen:
                 data = by_row[row].to_dict()
                 data["status_date"] = date.isoformat()
                 wb.update_deliverable(row, data)
+            prepared = 0
             if body.get("prepare", True):
                 for row, _date in chosen:
                     prepared += wb.generate_submission_tasks(
                         only_row=row, today=_today())["added"]
-            result = {"confirmed": len(chosen), "tasks_added": prepared,
-                      "save": self._commit()}
-            return result
+            return {"confirmed": len(chosen), "tasks_added": prepared,
+                    "save": self._commit()}
 
     # -- reference tables ------------------------------------------------
     def unlock(self, password: str) -> Dict[str, Any]:
@@ -2339,8 +2307,7 @@ class WorkloadService:
                 body.get("project_types"), body.get("credit_steps"))
             if body.get("scorecard_factors") is not None:
                 result.update(wb.save_scorecard_factors(body["scorecard_factors"]))
-            result["save"] = self._commit()
-            return result
+            return self._saved(result)
 
     # -- tasks -----------------------------------------------------------
     def tasks(self) -> Dict[str, Any]:
@@ -2393,35 +2360,26 @@ class WorkloadService:
         with self._lock:
             result = self.workbook.delete_task(task_id)
             self.store.remove_slot(task_id)
-            result["save"] = self._commit()
-            return result
+            return self._saved(result)
 
     def delete_task_series(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            result = self.workbook.delete_task_series(str(body.get("series") or ""))
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.delete_task_series(str(body.get("series") or "")))
 
     def save_task_settings(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            result = {"settings": self.workbook.save_task_settings(body)}
-            result["save"] = self._commit()
-            return result
+            return self._saved({"settings": self.workbook.save_task_settings(body)})
 
     def generate_submission_tasks(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             row = body.get("deliverable_row")
-            result = self.workbook.generate_submission_tasks(
+            return self._saved(self.workbook.generate_submission_tasks(
                 only_row=int(row) if row not in (None, "") else None,
-                include_past=bool(body.get("include_past")))
-            result["save"] = self._commit()
-            return result
+                include_past=bool(body.get("include_past"))))
 
     def generate_weekly_meetings(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            result = self.workbook.generate_weekly_meetings(body)
-            result["save"] = self._commit()
-            return result
+            return self._saved(self.workbook.generate_weekly_meetings(body))
 
     def discard_timesheet(self, token: str) -> Dict[str, Any]:
         with self._lock:
@@ -2508,6 +2466,16 @@ def _date_in(query: Dict[str, List[str]], key: str, default: _dt.date) -> _dt.da
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{raw!r} is not a date.")
 
 
+def _week_around(day: _dt.date) -> Dict[str, str]:
+    """The weeks either side of ``day``'s, for the arrows."""
+    return {"previous": (day - _dt.timedelta(days=7)).isoformat(),
+            "next": (day + _dt.timedelta(days=7)).isoformat()}
+
+
+def _reason_choices() -> List[Dict[str, str]]:
+    return [{"key": k, "label": v} for k, v in weekplan.REASONS.items()]
+
+
 def _year(query: Dict[str, List[str]]) -> Optional[int]:
     values = query.get("year")
     if not values or not values[0] or values[0] == "all":
@@ -2555,6 +2523,13 @@ def _objects(value: Any, what: str) -> List[Dict[str, Any]]:
     if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{what} should be a list of objects.")
     return value
+
+
+def _check_mode(mode: str) -> None:
+    if mode not in {"append", "replace"}:
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST,
+            "Mode must be 'replace' (the monthly routine) or 'append'.")
 
 
 def _int(value: str) -> int:

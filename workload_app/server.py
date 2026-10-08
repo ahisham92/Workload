@@ -18,9 +18,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .app import Request, WorkloadApp, parse_body, parse_cookies
 from .service import ApiError, MAX_UPLOAD_BYTES
 
-# Re-exported so existing imports keep working.
-__all__ = ["Handler", "make_server", "WorkloadApp", "ApiError"]
-
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Workload/2.0"

@@ -53,10 +53,7 @@ def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
     each = task.hours_each()
     if task.due < today:                       # overdue: it is today's
         return each if day == today else 0.0
-    first = task.start or today
-    first = max(first, today)
-    if first > task.due:
-        first = task.due
+    first = min(max(task.start or today, today), task.due)
     days = task_sheet.working_days(first, task.due, config) or [task.due]
     return each / len(days) if day in days else 0.0
 
@@ -254,16 +251,9 @@ def _lay_out(fixed: List[Dict[str, Any]], flexible: List[Dict[str, Any]],
 def rates_on(day: _dt.date, rows: Sequence[Dict[str, Any]], config: Dict[str, Any],
              saved: Sequence[Dict[str, Any]]) -> Dict[Tuple[str, str], float]:
     """Each person's pace on a project, with the handovers in force that day."""
-    measured = planner.pace(rows, config)["rates"]
-    active = planner._active_saved(saved, day, day)
-    rates, _ = planner._apply_project_moves(measured, active)
-    return rates
+    return planner.rates_in_force(planner.pace(rows, config)["rates"], saved, day)
 
 
 def week_of(day: _dt.date, config: Dict[str, Any]) -> List[_dt.date]:
-    start = day - _dt.timedelta(days=day.weekday())
-    # A Sunday-to-Thursday week starts on the Sunday on or before the day.
-    if 6 in config["work_days"] and 4 not in config["work_days"]:
-        start = day - _dt.timedelta(days=(day.weekday() + 1) % 7)
-    return [d for d in (start + _dt.timedelta(days=i) for i in range(7))
-            if task_sheet.is_working_day(d, config)]
+    start = task_sheet.week_start(day, config)
+    return task_sheet.working_days(start, start + _dt.timedelta(days=6), config)

@@ -283,16 +283,10 @@ class Workbook:
         sh = self.sheet(sheet)
         for number, cells in sh.iter_cells(first_row, last_row, columns):
             record: Dict[str, CellValue] = {"__row__": number}
-            has_value = False
             for col in columns:
                 cell = cells.get(col)
-                record[col] = None
-                if cell is None:
-                    continue
-                value = value_from_cell(cell, self.shared_strings)
-                record[col] = value
-                if value is not None and value != "":
-                    has_value = True
-            if has_value:
+                record[col] = (None if cell is None
+                               else value_from_cell(cell, self.shared_strings))
+            if any(record[col] not in (None, "") for col in columns):
                 out.append(record)
         return out

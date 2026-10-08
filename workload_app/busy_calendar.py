@@ -318,16 +318,24 @@ class _Zone:
         return _dt.datetime.combine(day, start.time())
 
 
-def _nth_weekday(year: int, month: int, byday: str) -> Optional[_dt.date]:
-    match = re.fullmatch(r"([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)", byday.split(",")[0])
-    if not match:
-        return None
-    nth = int(match.group(1) or 1)
-    days = _weekdays_in_month(year, month, _DAYS[match.group(2)])
+#: A BYDAY entry: an optional count ("2", "-1") and the day ("SU").
+_BYDAY = re.compile(r"([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)")
+
+
+def _pick(items: Sequence[_dt.date], nth: int) -> Optional[_dt.date]:
+    """The ``nth`` of ``items`` counting from 1, or from the end when negative."""
     try:
-        return days[nth - 1] if nth > 0 else days[nth]
+        return items[nth - 1] if nth > 0 else items[nth]
     except IndexError:
         return None
+
+
+def _nth_weekday(year: int, month: int, byday: str) -> Optional[_dt.date]:
+    match = _BYDAY.fullmatch(byday.split(",")[0])
+    if not match:
+        return None
+    return _pick(_weekdays_in_month(year, month, _DAYS[match.group(2)]),
+                 int(match.group(1) or 1))
 
 
 def _weekdays_in_month(year: int, month: int, weekday: int) -> List[_dt.date]:
@@ -518,16 +526,12 @@ def _in_month(year: int, month: int, bydays: Sequence[str],
     last = (_add_months(_dt.date(year, month, 1), 1) - _dt.timedelta(days=1)).day
     days: List[_dt.date] = []
     for spec in bydays:
-        match = re.fullmatch(r"([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)", spec)
+        match = _BYDAY.fullmatch(spec)
         if not match:
             continue
         all_of = _weekdays_in_month(year, month, _DAYS[match.group(2)])
         if match.group(1):
-            nth = int(match.group(1))
-            try:
-                days.append(all_of[nth - 1] if nth > 0 else all_of[nth])
-            except IndexError:
-                pass
+            days += [d for d in [_pick(all_of, int(match.group(1)))] if d]
         else:
             days.extend(all_of)
     for number in monthdays:
@@ -539,13 +543,7 @@ def _in_month(year: int, month: int, bydays: Sequence[str],
             days.append(_dt.date(year, month, default_day))
     days = sorted(set(days))
     if setpos:
-        picked = []
-        for pos in setpos:
-            try:
-                picked.append(days[pos - 1] if pos > 0 else days[pos])
-            except IndexError:
-                pass
-        days = sorted(set(picked))
+        days = sorted({d for d in (_pick(days, pos) for pos in setpos) if d})
     return days
 
 
@@ -641,6 +639,19 @@ def busy_times(text: str, *, start: _dt.date, end: _dt.date,
             return _duration(duration[2])
         return _dt.timedelta(days=1) if begin.all_day else _dt.timedelta(0)
 
+    def begin_and_length(lines_) -> Optional[Tuple[_When, _dt.timedelta]]:
+        """When a counted entry starts and how long it runs; None to skip it."""
+        if not _counts(lines_):
+            return None
+        begin_line = _first(lines_, "DTSTART")
+        if not begin_line:
+            return None
+        try:
+            begin = _When(begin_line[2], begin_line[1])
+            return begin, length_of(lines_, begin)
+        except ValueError:
+            return None
+
     def all_day(first_day: _dt.date, days: int) -> None:
         for i in range(max(1, days)):
             day = first_day + _dt.timedelta(days=i)
@@ -654,16 +665,10 @@ def busy_times(text: str, *, start: _dt.date, end: _dt.date,
                     (summary and summary[2].strip().lower() in ("away", "out of office")))
 
     for lines_ in singles:
-        if not _counts(lines_):
+        timing = begin_and_length(lines_)
+        if timing is None:
             continue
-        begin_line = _first(lines_, "DTSTART")
-        if not begin_line:
-            continue
-        try:
-            begin = _When(begin_line[2], begin_line[1])
-            length = length_of(lines_, begin)
-        except ValueError:
-            continue
+        begin, length = timing
         if begin.all_day:
             if is_oof(lines_):
                 all_day(begin.local.date(), length.days)
@@ -673,16 +678,10 @@ def busy_times(text: str, *, start: _dt.date, end: _dt.date,
 
     horizon = window_end + _dt.timedelta(days=2)
     for uid, lines_ in series:
-        if not _counts(lines_):
+        timing = begin_and_length(lines_)
+        if timing is None:
             continue
-        begin_line = _first(lines_, "DTSTART")
-        if not begin_line:
-            continue
-        try:
-            begin = _When(begin_line[2], begin_line[1])
-            length = length_of(lines_, begin)
-        except ValueError:
-            continue
+        begin, length = timing
         skipped = set(replaced.get(uid, ()))
         for each in lines_:
             if each[0] == "EXDATE":

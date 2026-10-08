@@ -32,8 +32,6 @@ STATUS_FOR = {DONE: cfg.TASK_DONE_STATUS, STUCK: "Blocked"}
 NOTE_LONGEST = 300
 #: Open asks one person can have at once, so a stuck button cannot fill a table.
 OPEN_LIMIT = 40
-#: How long the lead hears of somebody's new time off.
-OFF_NEWS_DAYS = 7
 #: Hours are given to the quarter, as the day plan lays them out.
 QUARTER = 0.25
 #: The line for time that is no project's: meetings, team support and

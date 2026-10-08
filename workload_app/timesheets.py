@@ -1,13 +1,12 @@
-"""Turn a monthly timesheet export into rows for a TS sheet.
+"""Turn a monthly timesheet export into timesheet rows.
 
-The workbook's own instruction is to delete the old rows and paste the export
-into cell A4 of ``TS Ahmed`` / ``TS Osama`` / ``TS Kirolos``, columns in exactly
-the order of row 3.  Doing that by hand is where the month goes wrong: a column
-shifts, a header row sneaks in, or one person's export lands on another's sheet.
+Done by hand, this is where the month goes wrong: a column shifts, a header
+row sneaks in, or one person's export lands on another's rows.
 
-This module reads the export, lines its columns up with row 3 by header name
-rather than by position, coerces each value to the type the workbook's formulas
-expect, and reports what it found before anything is written.
+This module reads the export, lines its columns up with the timesheet columns
+(``config.TS_HEADERS``) by header name rather than by position, coerces each
+value to the type the figures expect, and reports what it found before
+anything is written.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
-from .model import as_number
+from .model import as_number, pattern_to_regex
 from .xlsx_io import CellValue, from_serial
 
 #: How far into the file to look for the header row.
@@ -50,7 +49,7 @@ class ParsedTimesheet:
     engineer: str
     source_name: str
     headers: List[str]
-    rows: List[List[CellValue]]           # in TS sheet column order
+    rows: List[List[CellValue]]           # in ts_headers' column order
     mapped: Dict[str, str] = field(default_factory=dict)   # export -> TS header
     dropped: List[Dict[str, Any]] = field(default_factory=list)
     dropped_rows: int = 0
@@ -84,9 +83,9 @@ class ParsedTimesheet:
     def records(self) -> List[Dict[str, Any]]:
         """The parsed rows as the timesheet store keeps them.
 
-        The rows themselves are in the TS sheet's column order, because that
-        is what the workbook wanted; the store wants them named, and this is
-        the one place that knows which column is which.
+        The rows themselves are in the timesheet columns' order; the store
+        wants them named, and this is the one place that knows which column
+        is which.
         """
         index = {_normalise(h): i for i, h in enumerate(self.headers) if h}
 
@@ -239,8 +238,6 @@ def _coerce(value: Any, header: str, month_first: bool = False) -> CellValue:
         return _coerce_date(value, month_first)
     if header in cfg.TS_NUMERIC_HEADERS:
         return _coerce_number(value)
-    if isinstance(value, (_dt.datetime, _dt.date)):
-        return value
     if isinstance(value, bool):
         return 1 if value else 0
     return value
@@ -332,12 +329,11 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
           known_job_numbers: Optional[Iterable[str]] = None,
           registered_only: bool = False,
           keep_job_types: Optional[Iterable[str]] = None) -> ParsedTimesheet:
-    """Parse an export and line it up with the TS sheet's own column order.
+    """Parse an export and line it up with ``ts_headers``' column order.
 
-    With ``registered_only`` the rows are narrowed to work the workbook can
+    With ``registered_only`` the rows are narrowed to work the unit can
     actually account for -- the projects in the register, the non-project
-    charge codes, and proposal effort -- which is what keeps the consolidated
-    sheet inside the row limit the workbook imposes.
+    charge codes, and proposal effort.
     """
     grid = read_grid(filename, data)
     if not grid:
@@ -424,7 +420,7 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
 
 def _narrow_to_registered(result: ParsedTimesheet, known: Iterable[str],
                           keep_job_types: Optional[Iterable[str]]) -> None:
-    """Drop rows the workbook has no project for, and say what went."""
+    """Drop rows the register has no project for, and say what went."""
     index = {h: i for i, h in enumerate(result.headers)}
     col_job = index[cfg.TS_KEY_FIELDS["job_number"]]
     col_type = index.get(cfg.TS_KEY_FIELDS["job_type"])
@@ -456,13 +452,17 @@ def _narrow_to_registered(result: ParsedTimesheet, known: Iterable[str],
     )
     result.rows = kept
     if result.dropped_rows:
-        top = ", ".join(f"{d['code']} ({d['rows']})" for d in result.dropped[:6])
-        more = "" if len(result.dropped) <= 6 else f", and {len(result.dropped) - 6} more"
         result.warnings.append(
             f"{result.dropped_rows:,} row(s) left out because their job number is "
-            f"not in the project register: {top}{more}. They would not have rolled "
-            f"up to any project anyway."
+            f"not in the project register: {_first_six(result.dropped)}. They would "
+            f"not have rolled up to any project anyway."
         )
+
+
+def _first_six(items: Sequence[Dict[str, Any]]) -> str:
+    """``CODE (rows)`` for the first six, and how many more there are."""
+    top = ", ".join(f"{item['code']} ({item['rows']})" for item in items[:6])
+    return top + ("" if len(items) <= 6 else f", and {len(items) - 6} more")
 
 
 def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],
@@ -483,7 +483,7 @@ def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],
     people: Dict[str, int] = {}
     missing_phase = 0
 
-    pattern = _wildcard(name_pattern) if name_pattern else None
+    pattern = pattern_to_regex(name_pattern) if name_pattern else None
     for row in result.rows:
         value = row[col_date]
         if isinstance(value, _dt.date):
@@ -550,11 +550,9 @@ def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],
             f"to a deliverable on Deliverable Actuals."
         )
     if unknown:
-        top = ", ".join(f"{item['code']} ({item['rows']})" for item in unknown[:6])
-        more = "" if len(unknown) <= 6 else f", and {len(unknown) - 6} more"
         result.warnings.append(
-            f"Job numbers charged but not in the project register: {top}{more}. "
-            f"Their hours will not roll up to any project."
+            f"Job numbers charged but not in the project register: "
+            f"{_first_six(unknown)}. Their hours will not roll up to any project."
         )
     if result.unmapped_export_headers:
         result.warnings.append(
@@ -562,11 +560,6 @@ def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],
             f"matching column on the TS sheet and were skipped: "
             + ", ".join(result.unmapped_export_headers[:8])
         )
-
-
-def _wildcard(pattern: str) -> "re.Pattern":
-    parts = [re.escape(part) for part in pattern.split("*")]
-    return re.compile("^" + ".*".join(parts) + "$", re.IGNORECASE)
 
 
 def find_duplicates(existing: Sequence[Sequence[CellValue]],

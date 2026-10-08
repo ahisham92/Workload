@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence
 from . import metrics
 from .model import stored_date
 from .unit import Unit
+from .xlsx_io import index_to_col
 
 
 def unit_workbook(unit: Unit, name: str = "") -> bytes:
@@ -32,7 +33,7 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
               widths: Optional[Dict[int, float]] = None) -> None:
         ws = book.create_sheet(title)
         for column, width in (widths or {}).items():
-            ws.column_dimensions[_letter(column)].width = width
+            ws.column_dimensions[index_to_col(column)].width = width
         ws.freeze_panes = "A2"
         header_cells = []
         for header in headers:
@@ -68,14 +69,9 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
            "% complete", "Actual (MM)", "Earned (MM)", "Profit (MM)", "CPI",
            "Remaining (MM)", "First charge", "Last charge", "Notes"],
           ([p.number, p.name, p.status, p.budget_mm, p.start, p.end,
-            (figures.get(p.number) or {}).get("progress"),
-            (figures.get(p.number) or {}).get("actual_mm"),
-            (figures.get(p.number) or {}).get("earned_mm"),
-            (figures.get(p.number) or {}).get("profit_mm"),
-            (figures.get(p.number) or {}).get("cpi"),
-            (figures.get(p.number) or {}).get("remaining_mm"),
-            (figures.get(p.number) or {}).get("first_charge"),
-            (figures.get(p.number) or {}).get("last_charge"),
+            *[(figures.get(p.number) or {}).get(key) for key in (
+                "progress", "actual_mm", "earned_mm", "profit_mm", "cpi",
+                "remaining_mm", "first_charge", "last_charge")],
             p.notes] for p in unit.projects()),
           {1: 16, 2: 48, 15: 40})
 
@@ -127,7 +123,7 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
           {2: 40, 5: 24})
 
     drawn = unit.store.drawings()
-    listed = unit.store.drawing_list() if hasattr(unit.store, "drawing_list") else {}
+    listed = unit.store.drawing_list()
     by_row = {d.row: d for d in unit.deliverables()}
     sheet("Drawings",
           ["Project", "Deliverable", "Drawings", "Issued", "Code A", "Code B",
@@ -135,10 +131,8 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
           ([(by_row[row].project_number if row in by_row else entry["project_number"]),
             by_row[row].name if row in by_row else "",
             entry["count"],
-            (listed.get(row) or {}).get("issued"),
-            (listed.get(row) or {}).get("code_a"),
-            (listed.get(row) or {}).get("code_b"),
-            (listed.get(row) or {}).get("code_c")]
+            *[(listed.get(row) or {}).get(key)
+              for key in ("issued", "code_a", "code_b", "code_c")]]
            for row, entry in sorted(drawn.items())),
           {2: 40})
 
@@ -202,11 +196,3 @@ def _cell(ws: Any, value: Any) -> Any:
         cell.data_type = "s"
         return cell
     return value
-
-
-def _letter(index: int) -> str:
-    letters = ""
-    while index:
-        index, rest = divmod(index - 1, 26)
-        letters = chr(65 + rest) + letters
-    return letters

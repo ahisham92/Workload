@@ -205,20 +205,12 @@ def _project_rows(wb: Unit, index: TimesheetIndex) -> List[Dict[str, Any]]:
         progress, total_weight, _earned = project_progress(
             attached, credit_lookup, project.manual_percent
         )
-        if is_proposal_code(project.number):
-            actual_hours = index.hours_for_proposal(project.number)
-            per_engineer = {
-                name: index.hours_for_proposal(project.number, engineer=name)
-                for name in wb.ts_sheets()
-            }
-            first = last = None
-        else:
-            actual_hours = index.hours_for_job(project.number)
-            per_engineer = {
-                name: index.hours_for_job(project.number, engineer=name)
-                for name in wb.ts_sheets()
-            }
-            first, last = index.dates_for_job(project.number)
+        proposal = is_proposal_code(project.number)
+        hours_for = index.hours_for_proposal if proposal else index.hours_for_job
+        actual_hours = hours_for(project.number)
+        per_engineer = {name: hours_for(project.number, engineer=name)
+                        for name in wb.ts_sheets()}
+        first, last = (None, None) if proposal else index.dates_for_job(project.number)
 
         actual_mm = actual_hours / hours_per_mm if hours_per_mm else 0.0
         budget = project.budget_mm or 0.0
@@ -355,12 +347,10 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
             bucket = "projects"
         else:
             bucket = "other"
-        months[person][month][bucket] += row["hours"]
-        months[person][month]["total"] += row["hours"]
-        months[person][month]["overtime"] += row["overtime_hours"]
-        totals[person][bucket] += row["hours"]
-        totals[person]["total"] += row["hours"]
-        totals[person]["overtime"] += row["overtime_hours"]
+        for sums in (months[person][month], totals[person]):
+            sums[bucket] += row["hours"]
+            sums["total"] += row["hours"]
+            sums["overtime"] += row["overtime_hours"]
 
     out: Dict[str, Any] = {}
     for name, engineer in engineers.items():

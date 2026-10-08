@@ -255,7 +255,7 @@ class WorkloadApp:
         """
         user_id = ctx.user["id"]
         wanted = self.accounts.open_unit_of(user_id)
-        current = (ctx.service.unit or {}).get("id") if ctx.service.unit else None
+        current = (ctx.service.unit or {}).get("id")
         if wanted == current:
             if wanted is not None:
                 # Renamed in another worker: keep the name in step here too.
@@ -301,15 +301,11 @@ class WorkloadApp:
         except AccountError as exc:
             response = Response.json(HTTPStatus.UNPROCESSABLE_ENTITY,
                                      {"error": str(exc), "errors": exc.errors})
-        except NotAWorkbook as exc:
-            response = Response.json(HTTPStatus.UNPROCESSABLE_ENTITY,
-                                     {"error": str(exc), "errors": [str(exc)]})
-        except ImportError_ as exc:
-            response = Response.json(HTTPStatus.BAD_REQUEST,
-                                     {"error": str(exc), "errors": [str(exc)]})
-        except XlsxError as exc:
-            response = Response.json(HTTPStatus.CONFLICT,
-                                     {"error": str(exc), "errors": [str(exc)]})
+        except (NotAWorkbook, ImportError_, XlsxError) as exc:
+            status = (HTTPStatus.UNPROCESSABLE_ENTITY if isinstance(exc, NotAWorkbook)
+                      else HTTPStatus.BAD_REQUEST if isinstance(exc, ImportError_)
+                      else HTTPStatus.CONFLICT)
+            response = Response.json(status, {"error": str(exc), "errors": [str(exc)]})
         except Exception as exc:                       # pragma: no cover - net
             traceback.print_exc()
             message = f"{type(exc).__name__}: {exc}"
@@ -697,11 +693,18 @@ class WorkloadApp:
 
     def create_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
         """A new, empty unit, with the built-in reference tables."""
+        return self._start_unit(ctx, query, body, body.get("name", ""),
+                                lambda user_id, unit_id: storage.new_unit(
+                                    self.data_dir, user_id, unit_id))
+
+    def _start_unit(self, ctx: Context, query, body, name: str,
+                    make: Callable[[int, str], Path]) -> Dict[str, Any]:
+        """A new unit whose file ``make(user_id, unit_id)`` writes, opened; if
+        the file cannot be made, the unit is not kept either."""
         user_id = ctx.user["id"]
-        name = body.get("name", "")
         unit = self.accounts.create_unit(user_id, name, "")
         try:
-            path = storage.new_unit(self.data_dir, user_id, unit["id"])
+            path = make(user_id, unit["id"])
             self.accounts_update_filename(user_id, unit["id"], path.name)
         except Exception:
             self.accounts.delete_unit(user_id, unit["id"])
@@ -770,18 +773,11 @@ class WorkloadApp:
         The workbook is read once, into the unit's own database, and is not
         kept: from then on the unit is the database.
         """
-        user_id = ctx.user["id"]
-        data = self._uploaded_bytes(body)
+        data = _decode(body.get("content_base64"))
         name = body.get("name") or Path(str(body.get("filename") or "workbook")).stem
-        unit = self.accounts.create_unit(user_id, name, "")
-        try:
-            path = storage.import_workbook(
-                self.data_dir, user_id, unit["id"], data)["path"]
-            self.accounts_update_filename(user_id, unit["id"], path.name)
-        except Exception:
-            self.accounts.delete_unit(user_id, unit["id"])
-            raise
-        return self.open_unit(ctx, query, body, unit["id"])
+        return self._start_unit(ctx, query, body, name,
+                                lambda user_id, unit_id: storage.import_workbook(
+                                    self.data_dir, user_id, unit_id, data)["path"])
 
     def replace_unit(self, ctx: Context, query, body, unit_id) -> Dict[str, Any]:
         """Put a copy of a unit back in place of what it holds now.
@@ -792,7 +788,7 @@ class WorkloadApp:
         """
         user_id = ctx.user["id"]
         unit = self._own_unit(user_id, unit_id)
-        data = self._uploaded_bytes(body)
+        data = _decode(body.get("content_base64"))
         # Let go of it before it is overwritten underneath us.
         was_open = _is_open(ctx, unit_id)
         if was_open:
@@ -816,9 +812,6 @@ class WorkloadApp:
             "previous_kept_as": result["backup"].name if result["backup"] else None,
         }
         return opened
-
-    def _uploaded_bytes(self, body: Dict[str, Any]) -> bytes:
-        return _decode(body.get("content_base64"))
 
     def accounts_update_filename(self, user_id: int, unit_id: str,
                                  filename: str) -> None:
@@ -1359,9 +1352,8 @@ class WorkloadApp:
         try:
             target = int(user_id)
         except ValueError:
-            raise ApiError(HTTPStatus.NOT_FOUND,
-                           "That account has no access to this unit.")
-        held = self.accounts.membership(target, unit["id"])
+            target = None
+        held = None if target is None else self.accounts.membership(target, unit["id"])
         if held is None:
             raise ApiError(HTTPStatus.NOT_FOUND,
                            "That account has no access to this unit.")
@@ -1376,11 +1368,8 @@ class WorkloadApp:
         return {"revoked": target}
 
     def add_engineer(self, ctx: Context, query, body) -> Dict[str, Any]:
-        email = accounts_module.clean_email(body.get("email")) \
-            if "email" in body else None
+        email = self._email_in(ctx, body, None)
         unit = ctx.service.unit
-        if unit and email:
-            self._email_free(unit, email, None)
         result = ctx.service.add_engineer(body)
         if unit and email:
             result["email"] = self.accounts.set_member_email(
@@ -1388,16 +1377,21 @@ class WorkloadApp:
                 set_by=ctx.user["id"])["email"]
         return result
 
-    def _email_free(self, unit: Dict[str, Any], email: str,
-                    engineer: Optional[str]) -> None:
-        """Refuse, before anything is saved, an email somebody else has."""
-        taken = next((who for who, row
-                      in self.accounts.member_emails(unit["id"]).items()
-                      if row["email"] == email and who != engineer), None)
-        if taken:
-            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
-                           f"{taken} already has that email in this unit. "
-                           f"Each person needs their own.")
+    def _email_in(self, ctx: Context, body, engineer: Optional[str]) -> Optional[str]:
+        """The email sent for ``engineer``, if any; refused, before anything
+        is saved, when somebody else in the open unit has it."""
+        email = accounts_module.clean_email(body.get("email")) \
+            if "email" in body else None
+        unit = ctx.service.unit
+        if unit and email:
+            taken = next((who for who, row
+                          in self.accounts.member_emails(unit["id"]).items()
+                          if row["email"] == email and who != engineer), None)
+            if taken:
+                raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               f"{taken} already has that email in this unit. "
+                               f"Each person needs their own.")
+        return email
 
     def _save_email(self, ctx: Context, unit: Dict[str, Any], engineer: str,
                     email: str) -> str:
@@ -1414,11 +1408,8 @@ class WorkloadApp:
 
     def update_engineer(self, ctx: Context, query, body, name) -> Dict[str, Any]:
         """Rename or re-rate an engineer, and keep any access in step."""
-        email = accounts_module.clean_email(body.get("email")) \
-            if "email" in body else None
+        email = self._email_in(ctx, body, name)
         unit = ctx.service.unit
-        if unit and email:
-            self._email_free(unit, email, name)
         result = ctx.service.update_engineer(name, body)
         renamed = result.get("engineer") or name
         if unit and renamed != name:
@@ -1449,8 +1440,7 @@ class WorkloadApp:
         if not unit:
             raise ApiError(HTTPStatus.CONFLICT,
                            "Open the unit first; access is given per unit.")
-        owned = self._own_unit(ctx.user["id"], unit["id"])
-        return owned
+        return self._own_unit(ctx.user["id"], unit["id"])
 
     # -- the nightly import ----------------------------------------------
     #
@@ -1630,10 +1620,12 @@ class WorkloadApp:
     # ------------------------------------------------------------------
 
     def _build_routes(self) -> List[Route]:
-        def s(method_name: str):
-            """A route that is simply a call on the account's own service."""
-            def call(ctx: Context, query, body, *captured):
-                return getattr(ctx.service, method_name)(*captured)
+        def s(method_name: str, *, body: bool = False):
+            """A route that is simply a call on the account's own service, with
+            what the path captured and then, when ``body`` is set, the body."""
+            def call(ctx: Context, query, request_body, *captured):
+                args = (*captured, request_body) if body else captured
+                return getattr(ctx.service, method_name)(*args)
             return call
 
         return [
@@ -1684,80 +1676,64 @@ class WorkloadApp:
             ("PUT", "/api/units/{}", self.rename_unit, "manager"),
             ("DELETE", "/api/units/{}", self.delete_unit, "manager"),
             ("GET", "/api/units/{}/download", self.download_unit, "manager"),
-            ("POST", "/api/units/close",
-             self.close_unit, "manager"),
+            ("POST", "/api/units/close", self.close_unit, "manager"),
 
             # -- the workbook that account has open
-            ("GET", "/api/status", lambda ctx, q, b: ctx.service.status(), "manager"),
-            ("GET", "/api/reference", lambda ctx, q, b: ctx.service.reference(), "manager"),
+            ("GET", "/api/status", s("status"), "manager"),
+            ("GET", "/api/reference", s("reference"), "manager"),
             ("POST", "/api/reference/unlock",
              lambda ctx, q, b: ctx.service.unlock(b.get("password", "")), "manager"),
-            ("POST", "/api/reference/lock",
-             lambda ctx, q, b: ctx.service.lock(), "manager"),
-            ("PUT", "/api/reference",
-             lambda ctx, q, b: ctx.service.save_reference(b), "manager"),
+            ("POST", "/api/reference/lock", s("lock"), "manager"),
+            ("PUT", "/api/reference", s("save_reference", body=True), "manager"),
             ("GET", "/api/overview",
              lambda ctx, q, b: ctx.service.overview(_year(q)), "manager"),
-            ("GET", "/api/projects", lambda ctx, q, b: ctx.service.projects(), "manager"),
-            ("POST", "/api/projects",
-             lambda ctx, q, b: ctx.service.add_project(b), "manager"),
-            ("PUT", "/api/projects/{}",
-             lambda ctx, q, b, number: ctx.service.update_project(number, b), "manager"),
+            ("GET", "/api/projects", s("projects"), "manager"),
+            ("POST", "/api/projects", s("add_project", body=True), "manager"),
+            ("PUT", "/api/projects/{}", s("update_project", body=True), "manager"),
             ("DELETE", "/api/projects/{}",
              lambda ctx, q, b, number: ctx.service.delete_project(
                  number, _flag(q, "cascade")), "manager"),
-            ("GET", "/api/deliverables",
-             lambda ctx, q, b: ctx.service.deliverables(), "manager"),
-            ("GET", "/api/projects/{}",
-             lambda ctx, q, b, number: ctx.service.project_detail(number), "manager"),
+            ("GET", "/api/deliverables", s("deliverables"), "manager"),
+            ("GET", "/api/projects/{}", s("project_detail"), "manager"),
             ("POST", "/api/projects/full",
              lambda ctx, q, b: ctx.service.save_project_with_deliverables(None, b),
              "manager"),
             ("PUT", "/api/projects/{}/full",
-             lambda ctx, q, b, number: ctx.service.save_project_with_deliverables(
-                 number, b), "manager"),
-            ("POST", "/api/deliverables",
-             lambda ctx, q, b: ctx.service.add_deliverable(b), "manager"),
+             s("save_project_with_deliverables", body=True), "manager"),
+            ("POST", "/api/deliverables", s("add_deliverable", body=True), "manager"),
             ("PUT", "/api/deliverables/{}",
              lambda ctx, q, b, row: ctx.service.update_deliverable(_int(row), b),
              "manager"),
             ("DELETE", "/api/deliverables/{}",
              lambda ctx, q, b, row: ctx.service.delete_deliverable(_int(row)), "manager"),
             # -- the establishment: teams, grades, and where to move people
-            ("GET", "/api/people", lambda ctx, q, b: ctx.service.roster(), "manager"),
-            ("PUT", "/api/people/{}",
-             lambda ctx, q, b, name: ctx.service.save_person(name, b), "manager"),
-            ("DELETE", "/api/people/{}",
-             lambda ctx, q, b, name: ctx.service.remove_person(name), "manager"),
-            ("POST", "/api/people/move",
-             lambda ctx, q, b: ctx.service.move_people(b), "manager"),
+            ("GET", "/api/people", s("roster"), "manager"),
+            ("PUT", "/api/people/{}", s("save_person", body=True), "manager"),
+            ("DELETE", "/api/people/{}", s("remove_person"), "manager"),
+            ("POST", "/api/people/move", s("move_people", body=True), "manager"),
             ("GET", "/api/resourcing",
              lambda ctx, q, b: ctx.service.resourcing(_year(q)), "manager"),
             ("GET", "/api/portfolio-map",
              lambda ctx, q, b: ctx.service.portfolio_map(_year(q)), "manager"),
-            ("GET", "/api/drawings", lambda ctx, q, b: ctx.service.drawings(), "manager"),
-            ("PUT", "/api/drawings",
-             lambda ctx, q, b: ctx.service.save_drawings(b), "manager"),
+            ("GET", "/api/drawings", s("drawings"), "manager"),
+            ("PUT", "/api/drawings", s("save_drawings", body=True), "manager"),
             ("GET", "/api/drawing-list/template",
-             lambda ctx, q, b: ctx.service.drawing_list_template(), "manager"),
+             s("drawing_list_template"), "manager"),
             ("POST", "/api/drawing-list",
-             lambda ctx, q, b: ctx.service.import_drawing_list(b), "manager"),
+             s("import_drawing_list", body=True), "manager"),
             ("POST", "/api/drawing-list/apply",
-             lambda ctx, q, b: ctx.service.apply_drawing_list(b), "manager"),
-            ("POST", "/api/planner",
-             lambda ctx, q, b: ctx.service.planner(b), "manager"),
+             s("apply_drawing_list", body=True), "manager"),
+            ("POST", "/api/planner", s("planner", body=True), "manager"),
             ("POST", "/api/planner/suggest",
-             lambda ctx, q, b: ctx.service.planner_suggest(b), "manager"),
-            ("POST", "/api/planner/commit",
-             lambda ctx, q, b: ctx.service.planner_commit(b), "manager"),
+             s("planner_suggest", body=True), "manager"),
+            ("POST", "/api/planner/commit", s("planner_commit", body=True), "manager"),
             ("POST", "/api/planner/moves/{}/remove",
              lambda ctx, q, b, move_id: ctx.service.remove_plan_move(_int(move_id), b),
              "manager"),
-            ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
-            ("GET", "/api/checkins", lambda ctx, q, b: ctx.service.checkins(), "manager"),
+            ("GET", "/api/needs", s("needs"), "manager"),
+            ("GET", "/api/checkins", s("checkins"), "manager"),
             ("GET", "/api/growth", lambda ctx, q, b: ctx.service.growth(q), "manager"),
-            ("POST", "/api/growth/goals",
-             lambda ctx, q, b: ctx.service.add_goal(b), "manager"),
+            ("POST", "/api/growth/goals", s("add_goal", body=True), "manager"),
             ("PUT", "/api/growth/goals/{}",
              lambda ctx, q, b, goal_id: ctx.service.edit_goal(_int(goal_id), b), "manager"),
             ("POST", "/api/growth/goals/{}/review",
@@ -1765,7 +1741,7 @@ class WorkloadApp:
              "manager"),
             ("DELETE", "/api/growth/goals/{}",
              lambda ctx, q, b, goal_id: ctx.service.remove_goal(_int(goal_id)), "manager"),
-            ("GET", "/api/budgets", lambda ctx, q, b: ctx.service.budgets(), "manager"),
+            ("GET", "/api/budgets", s("budgets"), "manager"),
             ("POST", "/api/budgets/import",
              lambda ctx, q, b: ctx.service.import_budgets(b.get("files") or []),
              "manager"),
@@ -1773,10 +1749,10 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.save_budget_requests(b, nightly.parse_capture),
              "manager"),
             ("PUT", "/api/budgets/people",
-             lambda ctx, q, b: ctx.service.set_budget_person(b), "manager"),
+             s("set_budget_person", body=True), "manager"),
             ("PUT", "/api/budgets/jobs/{}",
-             lambda ctx, q, b, job: ctx.service.set_budget_share(job, b), "manager"),
-            ("GET", "/api/weekly", lambda ctx, q, b: ctx.service.weekly(), "manager"),
+             s("set_budget_share", body=True), "manager"),
+            ("GET", "/api/weekly", s("weekly"), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),
             ("GET", "/api/push", self.push_status, "user"),
             ("POST", "/api/push/devices", self.push_subscribe, "user"),
@@ -1784,60 +1760,49 @@ class WorkloadApp:
             ("POST", "/api/push/test", self.push_test, "user"),
             ("POST", "/api/push/check", self.push_check, "user"),
             ("GET", "/api/units/together", self.units_together, "manager"),
-            ("POST", "/api/planned-work",
-             lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),
+            ("POST", "/api/planned-work", s("add_planned_work", body=True), "manager"),
             ("POST", "/api/planned-work/{}/remove",
              lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
              "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
-            ("GET", "/api/meetings", lambda ctx, q, b: ctx.service.meetings(), "manager"),
+            ("GET", "/api/meetings", s("meetings"), "manager"),
             ("POST", "/api/meetings",
              lambda ctx, q, b: ctx.service.add_meeting(b or {}), "manager"),
-            ("POST", "/api/meetings/{}/remove",
-             lambda ctx, q, b, meeting_id: ctx.service.remove_meeting(meeting_id),
-             "manager"),
+            ("POST", "/api/meetings/{}/remove", s("remove_meeting"), "manager"),
             ("GET", "/api/calendars", self.calendars, "manager"),
             ("PUT", "/api/calendars", self.set_calendar, "manager"),
             ("POST", "/api/calendars/remove", self.remove_calendar, "manager"),
             ("POST", "/api/calendars/refresh", self.refresh_calendars, "manager"),
-            ("POST", "/api/requests",
-             lambda ctx, q, b: ctx.service.add_request(b), "manager"),
+            ("POST", "/api/requests", s("add_request", body=True), "manager"),
             ("POST", "/api/requests/preview",
-             lambda ctx, q, b: ctx.service.request_preview(b), "manager"),
+             s("request_preview", body=True), "manager"),
             ("GET", "/api/plan-review",
              lambda ctx, q, b: ctx.service.plan_review(q), "manager"),
-            ("POST", "/api/plan-review/lock",
-             lambda ctx, q, b: ctx.service.lock_week(b), "manager"),
+            ("POST", "/api/plan-review/lock", s("lock_week", body=True), "manager"),
             ("POST", "/api/plan-review/reason",
-             lambda ctx, q, b: ctx.service.set_slip_reason(b), "manager"),
-            ("GET", "/api/what-ifs", lambda ctx, q, b: ctx.service.what_ifs(), "manager"),
-            ("POST", "/api/what-ifs",
-             lambda ctx, q, b: ctx.service.save_what_if(b), "manager"),
+             s("set_slip_reason", body=True), "manager"),
+            ("GET", "/api/what-ifs", s("what_ifs"), "manager"),
+            ("POST", "/api/what-ifs", s("save_what_if", body=True), "manager"),
             ("DELETE", "/api/what-ifs/{}",
              lambda ctx, q, b, what_if_id: ctx.service.remove_what_if(_int(what_if_id)),
              "manager"),
             ("POST", "/api/requests/{}/done",
              lambda ctx, q, b, task_id: ctx.service.finish_request(_int(task_id)),
              "manager"),
-            ("GET", "/api/holidays", lambda ctx, q, b: ctx.service.holidays(), "manager"),
-            ("PUT", "/api/holidays",
-             lambda ctx, q, b: ctx.service.save_holidays(b), "manager"),
-            ("POST", "/api/absences",
-             lambda ctx, q, b: ctx.service.add_absence(b), "manager"),
+            ("GET", "/api/holidays", s("holidays"), "manager"),
+            ("PUT", "/api/holidays", s("save_holidays", body=True), "manager"),
+            ("POST", "/api/absences", s("add_absence", body=True), "manager"),
             ("POST", "/api/absences/{}/remove",
              lambda ctx, q, b, absence_id: ctx.service.remove_absence(_int(absence_id)),
              "manager"),
-            ("GET", "/api/submissions",
-             lambda ctx, q, b: ctx.service.submissions(), "manager"),
+            ("GET", "/api/submissions", s("submissions"), "manager"),
             ("POST", "/api/submissions/confirm",
-             lambda ctx, q, b: ctx.service.confirm_submissions(b), "manager"),
-            ("POST", "/api/teams", lambda ctx, q, b: ctx.service.add_team(b), "manager"),
-            ("PUT", "/api/teams/{}",
-             lambda ctx, q, b, team_id: ctx.service.update_team(team_id, b), "manager"),
-            ("DELETE", "/api/teams/{}",
-             lambda ctx, q, b, team_id: ctx.service.remove_team(team_id), "manager"),
+             s("confirm_submissions", body=True), "manager"),
+            ("POST", "/api/teams", s("add_team", body=True), "manager"),
+            ("PUT", "/api/teams/{}", s("update_team", body=True), "manager"),
+            ("DELETE", "/api/teams/{}", s("remove_team"), "manager"),
 
-            ("GET", "/api/team", lambda ctx, q, b: ctx.service.team(), "manager"),
+            ("GET", "/api/team", s("team"), "manager"),
             ("GET", "/api/team/access", self.team_access, "manager"),
             ("POST", "/api/team/access", self.grant_access, "manager"),
             ("DELETE", "/api/team/access/{}", self.revoke_access, "manager"),
@@ -1852,24 +1817,23 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.reports(
                  q.get("period", ["year"])[0], _year(q),
                  q.get("quarter", [None])[0]), "manager"),
-            ("GET", "/api/tasks", lambda ctx, q, b: ctx.service.tasks(), "manager"),
-            ("POST", "/api/tasks", lambda ctx, q, b: ctx.service.add_task(b), "manager"),
+            ("GET", "/api/tasks", s("tasks"), "manager"),
+            ("POST", "/api/tasks", s("add_task", body=True), "manager"),
             ("PUT", "/api/tasks/settings",
-             lambda ctx, q, b: ctx.service.save_task_settings(b), "manager"),
+             s("save_task_settings", body=True), "manager"),
             ("POST", "/api/tasks/series/delete",
-             lambda ctx, q, b: ctx.service.delete_task_series(b), "manager"),
+             s("delete_task_series", body=True), "manager"),
             ("POST", "/api/tasks/generate/submissions",
-             lambda ctx, q, b: ctx.service.generate_submission_tasks(b), "manager"),
+             s("generate_submission_tasks", body=True), "manager"),
             ("POST", "/api/tasks/generate/meetings",
-             lambda ctx, q, b: ctx.service.generate_weekly_meetings(b), "manager"),
+             s("generate_weekly_meetings", body=True), "manager"),
             ("PUT", "/api/tasks/{}",
              lambda ctx, q, b, task_id: ctx.service.update_task(_int(task_id), b),
              "manager"),
             ("DELETE", "/api/tasks/{}",
              lambda ctx, q, b, task_id: ctx.service.delete_task(_int(task_id)),
              "manager"),
-            ("GET", "/api/timesheets",
-             lambda ctx, q, b: ctx.service.timesheet_status(), "manager"),
+            ("GET", "/api/timesheets", s("timesheet_status"), "manager"),
             ("POST", "/api/timesheets/stage",
              lambda ctx, q, b: _stage(ctx.service, b), "manager"),
             ("POST", "/api/timesheets/apply",
@@ -1887,13 +1851,12 @@ class WorkloadApp:
             ("POST", "/api/timesheets/exports/apply",
              lambda ctx, q, b: ctx.service.apply_exports(
                  b.get("token", ""), b.get("mode", "replace")), "manager"),
-            ("POST", "/api/projects/from-timesheets",
-             lambda ctx, q, b: ctx.service.sync_projects(), "manager"),
+            ("POST", "/api/projects/from-timesheets", s("sync_projects"), "manager"),
             ("POST", "/api/timesheets/discard",
              lambda ctx, q, b: ctx.service.discard_timesheet(b.get("token", "")),
              "manager"),
-            ("POST", "/api/save", lambda ctx, q, b: ctx.service.save(), "manager"),
-            ("POST", "/api/reload", lambda ctx, q, b: ctx.service.reload(), "manager"),
+            ("POST", "/api/save", s("save"), "manager"),
+            ("POST", "/api/reload", s("reload"), "manager"),
         ]
 
 

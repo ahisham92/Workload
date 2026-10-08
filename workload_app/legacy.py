@@ -433,7 +433,7 @@ def _timesheet_rows(wb: Workbook, names: List[str]) -> Dict[str, List[Dict[str, 
                 continue
             rows.append({
                 "job_type": as_text(raw.get("A")),
-                "job_number": as_text(raw.get("B")).strip(),
+                "job_number": as_text(raw.get("B")),
                 "full_name": as_text(raw.get("C")),
                 "regular_hours": float(raw.get("J") or 0.0)
                 if isinstance(raw.get("J"), (int, float)) else 0.0,
@@ -532,8 +532,7 @@ def load_registers(unit: Unit, data: Dict[str, Any]) -> None:
             db.execute(
                 f"INSERT INTO deliverables ({', '.join(columns)}) "
                 f"VALUES ({', '.join('?' for _ in columns)})",
-                [_iso(item[c]) if isinstance(item[c], _dt.date) else item[c]
-                 for c in columns])
+                [_iso(item[c]) for c in columns])
             for name, share in item["shares"].items():
                 db.execute("INSERT INTO deliverable_shares (deliverable_row, "
                            "engineer, share) VALUES (?, ?, ?)",
@@ -587,7 +586,4 @@ def _iso(value: Any) -> Optional[str]:
 def _remove(path: Path) -> None:
     for each in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"),
                  Path(str(path) + "-journal")):
-        try:
-            each.unlink()
-        except FileNotFoundError:
-            pass
+        each.unlink(missing_ok=True)

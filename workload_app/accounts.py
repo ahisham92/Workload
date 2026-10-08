@@ -202,24 +202,17 @@ class Accounts:
     def _migrate(db: sqlite3.Connection) -> None:
         """Bring a database made before roles existed up to date."""
         columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
-        if "role" not in columns:
-            # Everyone who already had an account was a manager by definition:
-            # they were the only kind there was.
-            db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL "
-                       "DEFAULT 'manager'")
-        # Accounts made before the Admin tab have no readable copy of their
-        # password, and nothing can conjure one out of a PBKDF2 hash.  They
-        # show as "not stored" until somebody resets them.
-        if "password_seal" not in columns:
-            db.execute("ALTER TABLE users ADD COLUMN password_seal TEXT")
-        if "password_at" not in columns:
-            db.execute("ALTER TABLE users ADD COLUMN password_at TEXT")
-        if "site_key" not in columns:
-            db.execute("ALTER TABLE users ADD COLUMN site_key TEXT")
-        if "site_login" not in columns:
-            db.execute("ALTER TABLE users ADD COLUMN site_login TEXT")
-        if "open_unit_id" not in columns:
-            db.execute("ALTER TABLE users ADD COLUMN open_unit_id TEXT")
+        # Everyone who already had an account was a manager by definition:
+        # they were the only kind there was.  Accounts made before the Admin
+        # tab have no readable copy of their password, and nothing can conjure
+        # one out of a PBKDF2 hash.  They show as "not stored" until somebody
+        # resets them.
+        for column, kind in (("role", "TEXT NOT NULL DEFAULT 'manager'"),
+                             ("password_seal", "TEXT"), ("password_at", "TEXT"),
+                             ("site_key", "TEXT"), ("site_login", "TEXT"),
+                             ("open_unit_id", "TEXT")):
+            if column not in columns:
+                db.execute(f"ALTER TABLE users ADD COLUMN {column} {kind}")
         # One person on the site is one account here, never two.
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_site_key "
                    "ON users(site_key) WHERE site_key IS NOT NULL")
@@ -256,8 +249,7 @@ class Accounts:
                     role: str = ROLE_MANAGER) -> Dict[str, Any]:
         username = clean_username(username)
         check_password(password, username)
-        if role not in ROLES:
-            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        _check_role(role)
         if is_admin and role != ROLE_MANAGER:
             raise AccountError("Only a manager account can be an administrator.")
         salt = secrets.token_bytes(SALT_BYTES)
@@ -381,8 +373,7 @@ class Accounts:
         """
         key = clean_site_key(key)
         login = str(login or "").strip()
-        if role not in ROLES:
-            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        _check_role(role)
         salt = secrets.token_bytes(SALT_BYTES)
         digest = _hash(secrets.token_urlsafe(TOKEN_BYTES), salt, ITERATIONS)
         try:
@@ -442,8 +433,7 @@ class Accounts:
                        (str(login or "").strip() or None, user_id))
 
     def set_role(self, user_id: int, role: str) -> None:
-        if role not in ROLES:
-            raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+        _check_role(role)
         with self._connect() as db:
             db.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
 
@@ -482,15 +472,13 @@ class Accounts:
         if row is None:
             # Hash anyway, so a missing account cannot be told from a wrong
             # password by how long the answer took.
-            _hash(password or "", b"decoy-salt-1234", ITERATIONS)
+            _hash(password, b"decoy-salt-1234", ITERATIONS)
             return None
         expected = bytes(row["password_hash"])
-        actual = _hash(password or "", bytes(row["salt"]), int(row["iterations"]))
+        actual = _hash(password, bytes(row["salt"]), int(row["iterations"]))
         if not hmac.compare_digest(expected, actual):
             return None
-        with self._connect() as db:
-            db.execute("UPDATE users SET last_seen = ? WHERE id = ?",
-                       (now(), row["id"]))
+        self.seen(row["id"])
         return _public_user(row)
 
     def start_session(self, user_id: int, *, days: int = SESSION_DAYS) -> str:
@@ -612,14 +600,9 @@ class Accounts:
                 "SELECT * FROM push_devices"
                 + (" WHERE user_id = ?" if user_id is not None else "")
                 + " ORDER BY id", (() if user_id is None else (user_id,))).fetchall()
-        out = []
-        for row in rows:
-            device = dict(row)
-            if not secrets_too:
-                for key in ("endpoint", "auth", "p256dh"):
-                    device.pop(key)
-            out.append(device)
-        return out
+        hidden = () if secrets_too else ("endpoint", "auth", "p256dh")
+        return [{k: v for k, v in dict(row).items() if k not in hidden}
+                for row in rows]
 
     def remove_push_device(self, user_id: int, device_id: int) -> bool:
         with self._connect() as db:
@@ -750,7 +733,6 @@ class Accounts:
             db.execute("DELETE FROM units WHERE id = ? AND user_id = ?",
                        (unit_id, user_id))
         return unit
-
 
     # -- memberships -----------------------------------------------------
     #
@@ -922,6 +904,11 @@ def _hash(password: str, salt: bytes, iterations: int) -> bytes:
         salt, iterations)
 
 
+def _check_role(role: str) -> None:
+    if role not in ROLES:
+        raise AccountError(f"An account is a {' or a '.join(ROLES)}.")
+
+
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -933,17 +920,16 @@ def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
         "username": row["username"],
         "display_name": row["display_name"] or row["username"],
         "is_admin": bool(row["is_admin"]),
-        "role": row["role"] if "role" in row.keys() else ROLE_MANAGER,
+        "role": row["role"],
         "created_at": row["created_at"],
         "last_seen": row["last_seen"],
         "units": row["units"] if "units" in row.keys() else None,
         # Whether the Admin tab has a password to show for this account.
-        "password_stored": bool("password_seal" in row.keys()
-                                and row["password_seal"]),
-        "password_at": row["password_at"] if "password_at" in row.keys() else None,
+        "password_stored": bool(row["password_seal"]),
+        "password_at": row["password_at"],
         # Who this is on the surrounding site, if Workload is a tab of one.
-        "site_key": row["site_key"] if "site_key" in row.keys() else None,
-        "site_login": row["site_login"] if "site_login" in row.keys() else None,
+        "site_key": row["site_key"],
+        "site_login": row["site_login"],
     }
 
 

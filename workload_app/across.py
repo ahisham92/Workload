@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Sequence, Tuple
 
-UNASSIGNED = "Not in a team"
+from .people import NO_TEAM as UNASSIGNED
 
 
 def unit_summary(name: str, unit_id: str, view: Dict[str, Any]) -> Dict[str, Any]:

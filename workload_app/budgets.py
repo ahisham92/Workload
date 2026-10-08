@@ -40,7 +40,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import derive, timesheets
-from .model import ValidationError, iso, stored_date, today
+from .model import ValidationError, iso, pattern_to_regex, stored_date, today
 
 #: What the rows a staff expenditure fills in are tagged with.
 SPEND_SOURCE = "staff-export"
@@ -150,8 +150,7 @@ def _flag(value: Any) -> bool:
     return bool(value)
 
 
-def _text(value: Any) -> str:
-    return " ".join(str(value).split()) if value not in (None, "") else ""
+_text = timesheets._text
 
 
 def parse(filename: str, data: bytes) -> Dict[str, Any]:
@@ -289,8 +288,7 @@ def own_unit(service) -> str:
         if person in team and unit:
             counted[unit.upper()] += 1
     if not counted:
-        names = {full for full, person in
-                 service.store.names_by_full_name().items() if person in team}
+        names = _team_full_names(service)
         units = set()
         for entry in service.store.job_spend():
             units.add(entry["unit"].upper())
@@ -304,15 +302,20 @@ def own_unit(service) -> str:
 
 def _unit_of_team(service, by_job) -> str:
     """The team's unit from the incoming staff lists, when nothing held says."""
-    team = set(service.workbook.engineer_names())
-    names = {full for full, person in
-             service.store.names_by_full_name().items() if person in team}
+    names = _team_full_names(service)
     counted: Dict[str, int] = defaultdict(int)
     for rows in by_job.values():
         for row in rows:
             if row["name"] in names and row["unit"]:
                 counted[row["unit"].upper()] += 1
     return max(counted, key=counted.get) if counted else ""
+
+
+def _team_full_names(service) -> Dict[str, str]:
+    """Full name on an export -> the team member whose own rows carry it."""
+    team = set(service.workbook.engineer_names())
+    return {full: person for full, person in
+            service.store.names_by_full_name().items() if person in team}
 
 
 def kind_of(name: str, unit: str, people: Dict, own: str) -> Dict[str, Any]:
@@ -341,20 +344,17 @@ def team_members(service, rows: Sequence[Dict[str, Any]], unit: str,
                  people: Dict) -> Dict[str, str]:
     """Full name on the export -> the team member on Team it is.
 
-    A name their own rows already carry is certain.  Otherwise the Work
-    Calendar pattern has to match, and the person has to be the team's (by
+    A name their own rows already carry is certain.  Otherwise their name
+    pattern on Team has to match, and the person has to be the team's (by
     unit, or by the manager's word): a pattern like ``*Ahmed*`` should not
     take in an Ahmed from another unit who booked to the same job.
     """
-    wb = service.workbook
-    team = set(wb.engineer_names())
-    seen = {full: person for full, person in
-            service.store.names_by_full_name().items() if person in team}
+    seen = _team_full_names(service)
     known_for = defaultdict(set)
     for full, person in seen.items():
         known_for[person].add(full)
-    matchers = [(e.short_name, timesheets._wildcard(e.pattern))
-                for e in wb.engineers() if e.pattern]
+    matchers = [(e.short_name, pattern_to_regex(e.pattern))
+                for e in service.workbook.engineers() if e.pattern]
     out: Dict[str, str] = {}
     units = {r["name"]: r.get("unit") or "" for r in rows}
     for name, their_unit in units.items():

@@ -44,9 +44,7 @@ def as_text(value: Any) -> str:
 def as_number(value: Any) -> Optional[float]:
     if value is None or value == "":
         return None
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)):            # bool included
         return float(value)
     text = str(value).strip().replace(",", "")
     if text.endswith("%"):

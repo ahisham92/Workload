@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from . import reports, tasks as task_sheet
-from .metrics import TimesheetIndex
+from .metrics import TimesheetIndex, available_years
 from .model import today as model_today
 from .unit import Unit
 
@@ -51,7 +51,7 @@ def build(wb: Unit, engineer: str, *, kind: str = "year",
         "known": True,
         "period": report.period.to_dict(),
         "periods": {"years": sorted({q.year for q in report.period.quarters
-                                     if q.year} | _years(index))},
+                                     if q.year} | set(available_years(wb, index)))},
         "as_at": reports.iso(report.as_at),
         "hours_per_man_month": report.hours_per_mm,
         "me": mine,
@@ -61,10 +61,6 @@ def build(wb: Unit, engineer: str, *, kind: str = "year",
         "tasks": _my_tasks(wb, engineer),
         "definitions": wb.definitions(),
     }
-
-
-def _years(index: TimesheetIndex) -> set:
-    return {row["date"].year for row in index.rows if row["date"]}
 
 
 def _my_projects(report: reports.ReportSet, engineer: str) -> List[Dict[str, Any]]:

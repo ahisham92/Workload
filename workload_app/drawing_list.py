@@ -218,6 +218,7 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
         if not job or not (number or title):
             continue
         status = str(get(cells, "status") or "").strip()
+        superseded = "supersed" in status.lower()
         issued = _as_date(get(cells, "issued"), month_first)
         code_raw = str(get(cells, "code") or "").strip().upper()
         code = CODES.get(code_raw[-1:] if code_raw.startswith("CODE") else code_raw[:1])
@@ -228,10 +229,10 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
             "status": status,
             "issued": issued,
             "sent": bool(issued or (SENT.search(status) and not NOT_SENT.search(status)))
-                    and "supersed" not in status.lower(),
+                    and not superseded,
             "code": code if code_raw else None,
             "returned": _as_date(get(cells, "returned"), month_first),
-            "superseded": "supersed" in status.lower(),
+            "superseded": superseded,
         })
     return out
 
@@ -301,14 +302,10 @@ def match(drawings: Sequence[Dict[str, Any]], deliverables: Sequence[Any]
         entry["total"] += 1
         if drawing["sent"]:
             entry["issued"] += 1
-            if drawing["issued"] and (entry["last_issued"] is None
-                                      or drawing["issued"].isoformat() > entry["last_issued"]):
-                entry["last_issued"] = drawing["issued"].isoformat()
+            _latest(entry, "last_issued", drawing["issued"])
         if drawing["code"]:
             entry[f"code_{drawing['code'].lower()}"] += 1
-            if drawing["returned"] and (entry["last_returned"] is None
-                                        or drawing["returned"].isoformat() > entry["last_returned"]):
-                entry["last_returned"] = drawing["returned"].isoformat()
+            _latest(entry, "last_returned", drawing["returned"])
     return {
         "deliverables": sorted(per.values(), key=lambda e: (e["project_number"], e["row"])),
         "unmatched": [{"job_number": job, "deliverable": name, "drawings": count}
@@ -316,6 +313,12 @@ def match(drawings: Sequence[Dict[str, Any]], deliverables: Sequence[Any]
         "drawings": sum(e["total"] for e in per.values()),
         "projects": sorted({_job(e["project_number"]) for e in per.values()}),
     }
+
+
+def _latest(entry: Dict[str, Any], key: str, day: Optional[_dt.date]) -> None:
+    """Keep the later of ``entry[key]`` and ``day``, as ISO text."""
+    if day and (entry[key] is None or day.isoformat() > entry[key]):
+        entry[key] = day.isoformat()
 
 
 # --------------------------------------------------------------------------

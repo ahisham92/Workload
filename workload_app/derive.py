@@ -66,7 +66,7 @@ _GRADE_RULES: Sequence[Tuple[str, str]] = (
     (r"lead|principal|head|manager|director|senior|^p[3-9]\b", "senior"),
     (r"junior|graduate|trainee|assistant", "junior"),
     (r"^p[12]\b|engineer", "engineer"),
-    (r"professional|junior|graduate|trainee|assistant|^p0\b", "junior"),
+    (r"professional|^p0\b", "junior"),
 )
 
 #: A phase's type, read from what it is called. First match wins, so the
@@ -317,9 +317,9 @@ def _proposal_key(number: str) -> Optional[Tuple[bool, int]]:
 
 
 def _proposal_plans(rows, have, newest, credit_steps, hours_per_mm):
-    taken = {_proposal_key(n) for n in have} - {None}
-    if newest is None:
+    if newest is None or "PP" not in credit_steps:
         return []
+    taken = {_proposal_key(n) for n in have} - {None}
     buckets: Dict[Tuple[str, int], List[Dict[str, Any]]] = defaultdict(list)
     for row in rows:
         day = row.get("date")
@@ -335,7 +335,7 @@ def _proposal_plans(rows, have, newest, credit_steps, hours_per_mm):
         number_stem, name_stem = next((n, m) for p, n, m in PROPOSAL_KINDS
                                       if p == prefix)
         number = f"{number_stem} {year % 100:02d}"
-        if (prefix.startswith("2"), year) in taken or "PP" not in credit_steps:
+        if (prefix.startswith("2"), year) in taken:
             continue
         finished = year < newest.year
         hours = sum(r.get("hours") or 0.0 for r in booked)

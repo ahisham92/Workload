@@ -46,9 +46,7 @@ def _round(value: Optional[float], places: int = 3) -> Optional[float]:
 
 def _safe(numerator: Optional[float], denominator: Optional[float]
           ) -> Optional[float]:
-    if not denominator:
-        return None
-    if numerator is None:
+    if not denominator or numerator is None:
         return None
     return numerator / denominator
 
@@ -211,27 +209,28 @@ def build(wb: Unit, kind: str = "year", year: Optional[int] = None,
     overrides = _planned_overrides(wb, quarters)
 
     projects = [
-        _project_in_period(wb, index, row, period, quarters, overrides,
+        _project_in_period(index, row, period, as_at, overrides,
                            type_factors, hours_per_mm)
         for row in lifetime.values()
     ]
 
     capacity = _capacity(wb, period, as_at)
-    team = _team_totals(projects, capacity, period, as_at)
-    per_engineer = _per_engineer(projects, engineers, capacity, wb, index, period)
+    team = _team_totals(projects, capacity)
+    per_engineer = _per_engineer(projects, engineers, capacity, hours_per_mm,
+                                 index, period)
     _add_rework(per_engineer, wb, engineers)
     report = ReportSet(
         period=period, as_at=as_at, hours_per_mm=hours_per_mm,
         engineers=engineers, projects=projects, team=team,
         per_engineer=per_engineer,
-        by_status=_by_status(wb, projects),
+        by_status=_by_status(projects),
         scorecard=_scorecard(per_engineer, engineers, wb.scorecard_factors()),
-        quarterly=_quarterly(wb, index, quarters, engineers, hours_per_mm),
-        delivery_mix=_delivery_mix(wb, index, hours_per_mm, period),
+        quarterly=_quarterly(index, quarters, engineers, hours_per_mm),
+        delivery_mix=_delivery_mix(index, hours_per_mm, period),
     )
     report.monthly = _monthly_scores(wb, index, projects, engineers, period,
                                      as_at, hours_per_mm)
-    report.heroes = _heroes(report.monthly, report.scorecard, as_at, period)
+    report.heroes = _heroes(report.monthly, report.scorecard, period)
     report.champion = _champion(projects, period)
     return report
 
@@ -268,7 +267,7 @@ def _planned_overrides(wb: Unit, quarters: Sequence[Quarter]
     return out
 
 
-def _project_in_period(wb, index, lifetime, period, quarters, overrides,
+def _project_in_period(index, lifetime, period, as_at, overrides,
                        type_factors, hours_per_mm) -> Dict[str, Any]:
     number = lifetime["number"]
     start = _parse(lifetime["start"])
@@ -282,7 +281,7 @@ def _project_in_period(wb, index, lifetime, period, quarters, overrides,
         if value is None:
             value = _spread(budget, start, end, quarter)
         planned += value
-        planned_to_date += value * quarter.elapsed_fraction(_as_at(wb))
+        planned_to_date += value * quarter.elapsed_fraction(as_at)
 
     actual_hours = _hours_in(index, number, period)
     actual = actual_hours / hours_per_mm if hours_per_mm else 0.0
@@ -379,7 +378,7 @@ def _capacity(wb: Unit, period: Period, as_at: _dt.date
     return out
 
 
-def _team_totals(projects, capacity, period, as_at) -> Dict[str, Any]:
+def _team_totals(projects, capacity) -> Dict[str, Any]:
     # The headline block on the Dashboard is "all projects regardless of
     # status"; only the status table below it is narrowed to what is live in
     # the period, so the two are counted differently on purpose.
@@ -428,7 +427,7 @@ def _add_rework(per_engineer: Dict[str, Dict[str, Any]], wb, engineers) -> None:
             })
 
 
-def _per_engineer(projects, engineers, capacity, wb, index, period
+def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period
                   ) -> Dict[str, Dict[str, Any]]:
     """Each project's figures multiplied by that engineer's share of it."""
     out: Dict[str, Dict[str, Any]] = {}
@@ -449,7 +448,7 @@ def _per_engineer(projects, engineers, capacity, wb, index, period
             type_weighted += ((project["earned_mm"] or 0.0) * share
                               * (project["type_factor"] or 1.0))
             hours = _hours_in(index, project["number"], period, engineer)
-            booked = hours / wb.hours_per_man_month() if hours else 0.0
+            booked = hours / hours_per_mm if hours else 0.0
             actual += booked
             if booked:
                 worked.append({
@@ -481,7 +480,7 @@ def _per_engineer(projects, engineers, capacity, wb, index, period
     return out
 
 
-def _by_status(wb: Unit, projects) -> List[Dict[str, Any]]:
+def _by_status(projects) -> List[Dict[str, Any]]:
     """The portfolio split by project status -- the part-to-whole view."""
     out: List[Dict[str, Any]] = []
     for status in cfg.PROJECT_STATUSES:
@@ -502,7 +501,7 @@ def _by_status(wb: Unit, projects) -> List[Dict[str, Any]]:
     return out
 
 
-def _quarterly(wb, index, quarters, engineers, hours_per_mm
+def _quarterly(index, quarters, engineers, hours_per_mm
                ) -> List[Dict[str, Any]]:
     """Actual MM per engineer per quarter -- the shape of the workload over time."""
     out: List[Dict[str, Any]] = []
@@ -526,7 +525,7 @@ def _quarterly(wb, index, quarters, engineers, hours_per_mm
     return out
 
 
-def _delivery_mix(wb, index, hours_per_mm, period) -> List[Dict[str, Any]]:
+def _delivery_mix(index, hours_per_mm, period) -> List[Dict[str, Any]]:
     """Where the delivered hours came from in this period.
 
     Counted over the chosen period like everything else on the page, so the mix
@@ -537,12 +536,10 @@ def _delivery_mix(wb, index, hours_per_mm, period) -> List[Dict[str, Any]]:
         r["hours"] for r in index.rows
         if r["date"] and start and end and start <= r["date"] <= end
     )
-    rows = [{"source": "This team (from timesheet)", "hours": _round(team_hours, 1),
-             "man_months": _round(team_hours / hours_per_mm if hours_per_mm else 0)}]
-    total = sum(r["hours"] or 0.0 for r in rows)
-    for row in rows:
-        row["share"] = _round(_safe(row["hours"], total), 4)
-    return rows
+    hours = _round(team_hours, 1)
+    return [{"source": "This team (from timesheet)", "hours": hours,
+             "man_months": _round(team_hours / hours_per_mm if hours_per_mm else 0),
+             "share": _round(_safe(hours, hours), 4)}]
 
 
 # -- the scorecard ---------------------------------------------------------
@@ -680,9 +677,9 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
                     overlap = max(0, (min(end, last) - max(start, first)).days + 1)
                     planned += project["budget_mm"] * overlap / days * share
             engineer = availability.get(name)
-            factor = (engineer.availability.get(first.year, 1.0)
-                      if engineer else 1.0)
-            capacity = factor          # one month of availability
+            # one month of availability
+            capacity = (engineer.availability.get(first.year, 1.0)
+                        if engineer else 1.0)
             per[name] = {
                 "actual_mm": _round(actual),
                 "earned_mm": _round(earned),
@@ -740,7 +737,7 @@ def _champion(projects: Sequence[Dict[str, Any]], period: Period
 
 
 def _heroes(monthly: Sequence[Dict[str, Any]], scorecard: Dict[str, Any],
-            as_at: _dt.date, period: Period) -> Dict[str, Any]:
+            period: Period) -> Dict[str, Any]:
     """The most recent month's winner, and the year's."""
     scored = [m for m in monthly if m["booked"]]
     latest = scored[-1] if scored else None
@@ -758,10 +755,10 @@ def _heroes(monthly: Sequence[Dict[str, Any]], scorecard: Dict[str, Any],
         "months_scored": len(scored),
         "wins": dict(wins),
         "year": {
-            "engineer": champion["engineer"] if champion else None,
-            "score": champion["score"] if champion else None,
-            "strongest": champion["strongest"] if champion else "",
-            "months_won": wins.get(champion["engineer"], 0) if champion else 0,
+            "engineer": champion["engineer"],
+            "score": champion["score"],
+            "strongest": champion["strongest"],
+            "months_won": wins.get(champion["engineer"], 0),
         } if champion else None,
         "period_label": period.label,
     }

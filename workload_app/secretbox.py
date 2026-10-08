@@ -61,6 +61,11 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
     return bytes(out[:length])
 
 
+def _xor(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    """``data`` run through the keystream: sealing and unsealing alike."""
+    return bytes(a ^ b for a, b in zip(data, _keystream(key, nonce, len(data))))
+
+
 def _subkeys(key: bytes, nonce: bytes):
     enc = hmac.new(key, b"encrypt" + nonce, hashlib.sha256).digest()
     mac = hmac.new(key, b"authenticate" + nonce, hashlib.sha256).digest()
@@ -72,7 +77,7 @@ def seal(key: bytes, plaintext: str) -> str:
     raw = str(plaintext).encode("utf-8")
     nonce = secrets.token_bytes(NONCE_BYTES)
     enc, mac = _subkeys(key, nonce)
-    cipher = bytes(a ^ b for a, b in zip(raw, _keystream(enc, nonce, len(raw))))
+    cipher = _xor(enc, nonce, raw)
     tag = hmac.new(mac, nonce + cipher, hashlib.sha256).digest()
     return base64.b64encode(nonce + cipher + tag).decode("ascii")
 
@@ -95,8 +100,6 @@ def unseal(key: bytes, blob: Optional[str]) -> Optional[str]:
                                              hashlib.sha256).digest()):
         return None                     # a different key, or a changed blob
     try:
-        return bytes(a ^ b for a, b in
-                     zip(cipher, _keystream(enc, nonce, len(cipher)))
-                     ).decode("utf-8")
+        return _xor(enc, nonce, cipher).decode("utf-8")
     except UnicodeDecodeError:          # pragma: no cover - tag rules this out
         return None

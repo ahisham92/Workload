@@ -48,7 +48,7 @@ from . import derive
 from . import people as people_module
 from . import planner
 from . import tasks as task_sheet
-from .checkins import week_start
+from .tasks import week_start
 
 #: How far ahead the forecast looks, in weeks.
 HORIZON_WEEKS = 12
@@ -134,20 +134,20 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     # -- who does each project's work: recent hours by team and kind -------
     dated = [r for r in rows if r.get("date") and r.get("job_number")]
     last_day = max((r["date"] for r in dated), default=None)
+    since = last_day - _dt.timedelta(weeks=SPLIT_WEEKS) if last_day else None
     split: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))
-    if last_day:
-        since = last_day - _dt.timedelta(weeks=SPLIT_WEEKS)
-        for row in dated:
-            if row["date"] >= since:
-                split[row["job_number"]][bucket(row["engineer"])] += row["hours"] or 0.0
     whole: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))
-    for row in dated:
-        whole[row["job_number"]][bucket(row["engineer"])] += row["hours"] or 0.0
     last_booked: Dict[str, _dt.date] = {}
+    booked: Dict[str, float] = defaultdict(float)
     for row in dated:
-        number = row["job_number"]
+        number, hours = row["job_number"], row["hours"] or 0.0
+        key = bucket(row["engineer"])
+        if row["date"] >= since:
+            split[number][key] += hours
+        whole[number][key] += hours
         if number not in last_booked or row["date"] > last_booked[number]:
             last_booked[number] = row["date"]
+        booked[number] += hours
 
     rates = planner.pace(rows, config)["rates"]
     rate_by_project: Dict[str, float] = defaultdict(float)
@@ -158,9 +158,6 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     demand: Dict[Tuple[str, str], List[float]] = defaultdict(lambda: [0.0] * len(span))
 
     # -- work coming: projects just assigned, on their rough hours -------
-    booked: Dict[str, float] = defaultdict(float)
-    for row in dated:
-        booked[row["job_number"]] += row["hours"] or 0.0
     by_team: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(dict)
     for key, hours in (sum((Counter(v) for v in split.values()), Counter())).items():
         by_team[key[0]][key] = hours
@@ -229,14 +226,10 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         confirmed = not derive.needs_confirming(getattr(project, "notes", "") or "")
         remaining = max(0.0, float(figures.get("remaining_mm") or 0.0)) * hours_per_mm
         if confirmed and remaining > 0:
-            end = project.end
-            if end is None or end < today + _dt.timedelta(days=7):
-                spread_to = today + _dt.timedelta(weeks=LATE_SPREAD_WEEKS) - _dt.timedelta(days=1)
-                if end is not None and end < today:
-                    late.append(number)
-            else:
-                spread_to = end
-            weekly = _spread(remaining, today, spread_to, span, config)
+            if project.end is not None and project.end < today:
+                late.append(number)
+            weekly = _spread(remaining, today, _spread_end(project, today, confirmed),
+                             span, config)
         elif not confirmed:
             seen = last_booked.get(number)
             if seen and (today - seen).days <= LIVE_WITHIN_DAYS and rate_by_project.get(number):
@@ -301,7 +294,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         work = demand.get(key, [0.0] * len(span))
         if not heads and not any(work):
             continue
-        team_name = teams.get(team_id) or (unit_name if len(teams) == 0 else "Not in a team") \
+        team_name = teams.get(team_id) or (unit_name if len(teams) == 0 else people_module.NO_TEAM) \
             or "The unit"
         series = []
         for i, (first, last) in enumerate(span):
@@ -319,7 +312,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                  "role_label": people_module.role_label(role),
                  "people": heads, "weeks": series}
         groups.append(group)
-        alerts.extend(_alerts(group, today, horizon_end))
+        alerts.extend(_alerts(group, today))
 
     # One line per team and kind with nothing to ask for, so a lead reading
     # the list knows they were looked at, not forgotten.
@@ -389,27 +382,32 @@ def _spread(hours: float, start: _dt.date, end: _dt.date,
     if not days:
         return [0.0] * len(span)
     each = hours / len(days)
+    return [each * sum(1 for d in days if first <= d <= last) for first, last in span]
+
+
+def _runs(weeks: Sequence[Dict[str, Any]], hit) -> List[Tuple[int, int]]:
+    """Each run of consecutive weeks ``hit`` holds for, as (first, last) index."""
     out = []
-    for first, last in span:
-        out.append(each * sum(1 for d in days if first <= d <= last))
+    i = 0
+    while i < len(weeks):
+        if not hit(weeks[i]):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(weeks) and hit(weeks[j + 1]):
+            j += 1
+        out.append((i, j))
+        i = j + 1
     return out
 
 
-def _alerts(group: Dict[str, Any], today: _dt.date,
-            horizon_end: _dt.date) -> List[Dict[str, Any]]:
+def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
     weeks = group["weeks"]
     role = group["role"]
     out: List[Dict[str, Any]] = []
 
     # Runs of short weeks.
-    i = 0
-    while i < len(weeks):
-        if weeks[i]["gap_people"] < SHORT_AT:
-            i += 1
-            continue
-        j = i
-        while j + 1 < len(weeks) and weeks[j + 1]["gap_people"] >= SHORT_AT:
-            j += 1
+    for i, j in _runs(weeks, lambda w: w["gap_people"] >= SHORT_AT):
         run = weeks[i:j + 1]
         peak = max(w["gap_people"] for w in run)
         average = sum(w["gap_people"] for w in run) / len(run)
@@ -433,7 +431,6 @@ def _alerts(group: Dict[str, Any], today: _dt.date,
                 "people": 0, "weeks": len(run),
                 "from": start.isoformat(), "to": end.isoformat(), "ask_by": None,
             })
-            i = j + 1
             continue
         ask_by = start - _dt.timedelta(weeks=LEAD_WEEKS)
         severity = "now" if ask_by <= today else "soon"
@@ -459,17 +456,9 @@ def _alerts(group: Dict[str, Any], today: _dt.date,
             "ask_by": max(ask_by, today).isoformat(),
             "peak_people": round(peak, 2), "average_people": round(average, 2),
         })
-        i = j + 1
 
     # Room: a run of weeks at least a whole person spare.
-    i = 0
-    while i < len(weeks):
-        if -weeks[i]["gap_people"] < ROOM_AT:
-            i += 1
-            continue
-        j = i
-        while j + 1 < len(weeks) and -weeks[j + 1]["gap_people"] >= ROOM_AT:
-            j += 1
+    for i, j in _runs(weeks, lambda w: -w["gap_people"] >= ROOM_AT):
         run = weeks[i:j + 1]
         if len(run) >= ROOM_WEEKS:
             spare = math.floor(min(-w["gap_people"] for w in run))
@@ -487,5 +476,4 @@ def _alerts(group: Dict[str, Any], today: _dt.date,
                 "people": spare, "weeks": len(run),
                 "from": start.isoformat(), "to": end.isoformat(), "ask_by": None,
             })
-        i = j + 1
     return out

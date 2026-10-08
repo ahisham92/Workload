@@ -330,7 +330,7 @@ def calendar_for(choice: Dict[str, Any], *, people: Sequence[Dict[str, Any]],
     sets = [set(days) for days in by_person.values()] or [set(everyone)]
     if unit:
         sets.append(set(everyone))
-    common = set.intersection(*sets) if sets else set()
+    common = set.intersection(*sets)
     own = {name: set(days) - common for name, days in by_person.items()
            if set(days) - common}
     named: Dict[str, Dict[str, Any]] = {}

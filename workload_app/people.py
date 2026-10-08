@@ -49,6 +49,8 @@ UNDER = 0.75
 WINDOW = 3
 
 UNASSIGNED = "__none__"
+#: What a person or project share outside every team is shown as.
+NO_TEAM = "Not in a team"
 
 #: Two kinds of capacity, which do not stand in for each other: engineers
 #: design and check, the drawing office produces the drawings.  A team short
@@ -104,6 +106,11 @@ def clean_name(value: Any) -> str:
 def _month_label(month: str) -> str:
     """"2026-06" as people read it: "Jun 2026"."""
     return _dt.date(int(month[:4]), int(month[5:7]), 1).strftime("%b %Y")
+
+
+def _since(team: Mapping[str, Any]) -> str:
+    """" since Jun 2026" for a team over capacity since then, else nothing."""
+    return f" since {_month_label(team['over_since'])}" if team["over_since"] else ""
 
 
 def month_of(date: Optional[_dt.date]) -> Optional[str]:
@@ -213,8 +220,7 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
                 booked[month] += value
         team_rows.append({
             "id": team_id,
-            "name": (teams[team_id]["name"] if team_id in teams
-                     else "Not in a team"),
+            "name": teams[team_id]["name"] if team_id in teams else NO_TEAM,
             "lead": teams.get(team_id, {}).get("lead", ""),
             "headcount": len(members),
             "by_grade": {key: sum(1 for m in members if m["grade"] == key)
@@ -239,7 +245,7 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
         "teams": team_rows,
         "members": member_rows,
         "projects": _projects(project_teams, teams),
-        "findings": findings(team_rows, member_rows, monthly_capacity),
+        "findings": findings(team_rows, member_rows),
         "thresholds": {"over": OVER, "under": UNDER, "window": WINDOW},
     }
 
@@ -287,8 +293,7 @@ def _projects(project_teams: Dict[str, Dict[str, float]],
             "hours": round(total, 1),
             "teams": [
                 {"id": team_id,
-                 "name": teams[team_id]["name"] if team_id in teams
-                         else "Not in a team",
+                 "name": teams[team_id]["name"] if team_id in teams else NO_TEAM,
                  "hours": round(value, 1),
                  "share": round(value / total, 3),
                  "percent": percent}
@@ -311,8 +316,8 @@ def _whole_percents(shares: Sequence[float]) -> List[int]:
     return whole
 
 
-def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
-             monthly_capacity: float) -> List[Dict[str, Any]]:
+def findings(teams: Sequence[Dict[str, Any]],
+             members: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """What to do about it, in the order it is worth doing.
 
     Two kinds of answer, and they are different questions. A team over its
@@ -329,7 +334,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
     stretched.sort(key=lambda t: -t["recent_utilisation"])
     roomy.sort(key=lambda t: t["recent_utilisation"])
 
-    spare = {t["id"]: _people_spare(t, monthly_capacity) for t in roomy}
+    spare = {t["id"]: _people_spare(t) for t in roomy}
 
     for team in stretched:
         short = (team["recent_utilisation"] - 1.0) * team["headcount"]
@@ -353,7 +358,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
                 "detail": (
                     f"{team['name']} has been at "
                     f"{team['recent_utilisation'] * 100:.0f}% of its capacity"
-                    + (f" since {_month_label(team['over_since'])}" if team["over_since"] else "")
+                    + _since(team)
                     + f", about {short:.1f} people short, while "
                       f"{lender['name']} has been at "
                       f"{lender['recent_utilisation'] * 100:.0f}%."),
@@ -394,7 +399,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
                              f"{'person' if math.ceil(short) <= 1 else 'people'}"),
                 "detail": (
                     f"At {team['recent_utilisation'] * 100:.0f}% of capacity"
-                    + (f" since {_month_label(team['over_since'])}" if team["over_since"] else "")
+                    + _since(team)
                     + f", about {short:.1f} people short. " + why),
                 "people": round(short, 1),
             })
@@ -420,14 +425,14 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
     # the person who is genuinely worse off than the people beside them.
     team_load = {t["name"]: (t["recent_utilisation"] or 0.0) for t in teams}
     for person in members:
-        beside = team_load.get(person["team_name"] or "Not in a team", 0.0)
+        beside = team_load.get(person["team_name"] or NO_TEAM, 0.0)
         if person["recent_utilisation"] is not None and person["active"] \
                 and person["recent_utilisation"] > 1.25 \
                 and person["recent_utilisation"] - beside > 0.15:
             out.append({
                 "kind": "person",
                 "level": "warn",
-                "team": person["team_name"] or "Not in a team",
+                "team": person["team_name"] or NO_TEAM,
                 "person": person["name"],
                 "headline": f"{person['name']} is carrying too much",
                 "detail": (f"{person['recent_utilisation'] * 100:.0f}% of a full "
@@ -438,7 +443,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
     return out
 
 
-def _people_spare(team: Dict[str, Any], monthly_capacity: float) -> float:
+def _people_spare(team: Dict[str, Any]) -> float:
     if team["recent_utilisation"] is None:
         return 0.0
     return max(0.0, (1.0 - team["recent_utilisation"]) * team["headcount"])
@@ -457,9 +462,7 @@ def _who_to_move(team: Dict[str, Any],
     candidates = [m for m in members
                   if m["team_id"] == team["id"] and m["active"]
                   and m["name"] != team.get("lead") and m["grade"] != "manager"]
-    if not candidates:
-        return None
-    return min(candidates, key=lambda m: (
+    return min(candidates, default=None, key=lambda m: (
         round(m["recent_utilisation"] or 0.0, 2),
         -GRADE_KEYS.index(m["grade"]) if m["grade"] in GRADE_KEYS else 0,
         m["name"]))
@@ -575,7 +578,7 @@ def portfolio_map(store, projects: Sequence[Dict[str, Any]], *,
                    "members": [f["name"] for f in folk
                                if f["team_id"] == team["id"]]}
                   for team in teams.values()]
-        + ([{"id": UNASSIGNED, "name": "Not in a team", "lead": "",
+        + ([{"id": UNASSIGNED, "name": NO_TEAM, "lead": "",
              "members": [f["name"] for f in folk if not f["team_id"]]}]
            if any(not f["team_id"] for f in folk) else []),
         "projects": circles,

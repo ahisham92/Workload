@@ -17,7 +17,8 @@ import html
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .checkins import _hours, week_start
+from .checkins import _hours
+from .tasks import week_start
 
 #: How many things to do the report leads with, most pressing first.
 TODO_AT_MOST = 7
