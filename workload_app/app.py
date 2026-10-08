@@ -37,12 +37,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import (accounts as accounts_module, budgets, busy_calendar,
-               export as export_module,
+               export as export_module, management,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
+from .people import DEFAULT_GRADE, GRADE_KEYS
 from .service import (ApiError, WorkloadService, _decode, _flag,
                       _int, _stage, _today as service_today, _year)
 from .timesheets import ImportError_
@@ -527,6 +528,7 @@ class WorkloadApp:
                 "label": ctx.site.get("label") or "Home",
                 "logout": ctx.site.get("logout") or "",
                 "login": (ctx.user or {}).get("site_login"),
+                "admin": _site_admin(ctx.site),
             }
         return answer
 
@@ -838,25 +840,43 @@ class WorkloadApp:
         current = (ctx.service.unit or {}).get("id") if ctx.service else None
         pairs, missing = [], []
         hours = 8.5
-        for unit in self.accounts.units(user_id):
+        everyone = ctx.site is not None and _site_admin(ctx.site)
+        units = self.accounts.all_units() if everyone else self.accounts.units(user_id)
+        for unit in units:
+            theirs = unit["user_id"] != user_id
+            name = f"{unit['name']} · {unit['owner_name']}" if theirs else unit["name"]
             if unit["id"] == current and ctx.service._wb is not None:
                 view = ctx.service.checkins()
             else:
                 service = WorkloadService(autosave=self.autosave)
                 try:
-                    self._open(service, user_id, unit["id"])
+                    if theirs:
+                        # Another manager's unit, looked at and never changed.
+                        self._open_to_read(service, unit)
+                    else:
+                        self._open(service, user_id, unit["id"])
                     view = service.checkins()
                 except ApiError:
-                    missing.append(unit["name"])
+                    missing.append(name)
                     continue
                 finally:
                     service.close()
             hours = view.get("hours_per_day") or hours
-            pairs.append((across.unit_summary(unit["name"], unit["id"], view), view))
+            pairs.append((across.unit_summary(name, unit["id"], view), view))
         result = across.combine(pairs, hours_per_day=hours)
         result["missing"] = missing
         result["current"] = current
+        result["everyone"] = everyone
         return result
+
+    def _open_to_read(self, service: WorkloadService, unit: Dict[str, Any]) -> None:
+        path = storage.unit_path(self.data_dir, unit["user_id"], unit["filename"])
+        if not path.is_file():
+            raise ApiError(HTTPStatus.NOT_FOUND,
+                           f"The data for {unit['name']} is missing.")
+        path = self._unit_file(unit["user_id"], unit["id"], unit["filename"])
+        service.open(path, unit={"id": unit["id"], "name": unit["name"]},
+                     read_only=True)
 
     def close_unit(self, ctx: Context, query, body) -> Dict[str, Any]:
         self.accounts.set_open_unit(ctx.user["id"], None)
@@ -949,17 +969,52 @@ class WorkloadApp:
         """
         granted, row, service = self._member_unit(
             ctx, (query.get("unit") or [None])[0])
+        person = self._person_shown(row, service, query)
 
         kind = (query.get("period") or ["year"])[0]
         data = member_view.build(
-            service.workbook, row["engineer"], kind=kind, year=_year(query),
+            service.workbook, person, kind=kind, year=_year(query),
             quarter=(query.get("quarter") or [None])[0],
             store=service._store)                      # noqa: SLF001 - same app
         data["unit"] = {"id": row["unit_id"], "name": row["unit_name"],
                         "manager": row.get("owner_name") or ""}
         data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
                           "engineer": g["engineer"]} for g in granted]
+        data["viewer"] = row["engineer"]
+        data["people"] = [row["engineer"]] + self._led_by(service, row["engineer"])
         return data
+
+    def _led_by(self, service: WorkloadService, engineer: str) -> List[str]:
+        """Who a member may look at besides themselves: the people they lead
+        (a team they lead, or the whole unit when their grade is Manager),
+        and of those only the ones graded below them. An engineer leads
+        nobody, so sees nobody else."""
+        store = service._store                          # noqa: SLF001 - same app
+        people = store.people()
+        grades = {p["name"]: p.get("grade") or DEFAULT_GRADE for p in people}
+
+        def rank(name: str) -> int:
+            grade = grades.get(name, DEFAULT_GRADE)
+            return GRADE_KEYS.index(grade) if grade in GRADE_KEYS else len(GRADE_KEYS)
+
+        known = set(service.workbook.engineer_names())
+        led = management.leaders(people, store.teams()).get(engineer, [])
+        return sorted(p["name"] for p in led
+                      if p["name"] in known and rank(p["name"]) > rank(engineer))
+
+    def _person_shown(self, row: Dict[str, Any], service: WorkloadService,
+                      query) -> str:
+        """Whose figures to show: the member's own, or, when they asked for
+        somebody, one of the people below them. Anybody else is Not Found,
+        the same answer as a name that is not there at all."""
+        wanted = " ".join(str((query.get("person") or [""])[0] or "").split())
+        if not wanted or wanted == row["engineer"]:
+            return row["engineer"]
+        if wanted in self._led_by(service, row["engineer"]):
+            return wanted
+        raise ApiError(HTTPStatus.NOT_FOUND,
+                       "You can see your own figures and those of the people "
+                       "you lead, and nobody else's.")
 
     def _member_unit(self, ctx: Context, wanted: Optional[str]):
         """The unit a member was given access to, open for reading, and the
@@ -997,11 +1052,11 @@ class WorkloadApp:
 
     def my_day(self, ctx: Context, query, body) -> Dict[str, Any]:
         row, service = self._mine(ctx, query, body)
-        return service.my_day(row["engineer"], query)
+        return service.my_day(self._person_shown(row, service, query), query)
 
     def my_timesheet(self, ctx: Context, query, body) -> Dict[str, Any]:
         row, service = self._mine(ctx, query, body)
-        return service.my_timesheet(row["engineer"], query)
+        return service.my_timesheet(self._person_shown(row, service, query), query)
 
     def mark_my_task(self, ctx: Context, query, body, task_id) -> Dict[str, Any]:
         row, service = self._mine(ctx, query, body)
@@ -1836,6 +1891,12 @@ class WorkloadApp:
             ("POST", "/api/save", lambda ctx, q, b: ctx.service.save(), "manager"),
             ("POST", "/api/reload", lambda ctx, q, b: ctx.service.reload(), "manager"),
         ]
+
+
+def _site_admin(site: Dict[str, Any]) -> bool:
+    """Whether the mounting site says this is its administrator, who sees
+    every manager's units side by side. Only the site can say so."""
+    return site.get("admin") is True
 
 
 def _site_email(site: Dict[str, Any]) -> str:

@@ -108,6 +108,7 @@ function toast(message, kind = '') {
 async function load() {
   const query = new URLSearchParams();
   if (state.unit) query.set('unit', state.unit);
+  if (state.person) query.set('person', state.person);
   if (!state.chosen) {
     // First look: the workbook's own plan year, which is what the manager is
     // looking at. All time is a decade of months and nobody wants it by default.
@@ -124,7 +125,13 @@ async function load() {
     state.chosen = true;
   }
   render();
-  if (window.myDay && dataKnown(state.data)) window.myDay.load(state.data.unit && state.data.unit.id);
+  // My day is for your own day: looking at somebody you lead shows their
+  // figures only, and nothing on their page can be changed from yours.
+  const own = !state.data.viewer || state.data.engineer === state.data.viewer;
+  for (const id of ['myday', 'mytimesheet', 'myoff', 'mymeetings', 'mycalendar']) {
+    if (!own && $(`#${id}`)) $(`#${id}`).hidden = true;
+  }
+  if (own && window.myDay && dataKnown(state.data)) window.myDay.load(state.data.unit && state.data.unit.id);
   if (window.selecaoPush && !state.pushShown) {
     state.pushShown = true;
     window.selecaoPush.show($('#member-push'));
@@ -139,9 +146,13 @@ function render() {
   $('#member-unit').textContent = data.unit
     ? `${data.unit.name}${data.unit.manager ? ` · ${data.unit.manager}'s team` : ''}`
     : '';
-  $('#member-title').textContent = `My workload — ${data.period.label}`;
+  const own = !data.viewer || data.engineer === data.viewer;
+  $('#member-title').textContent = own
+    ? `My workload — ${data.period.label}`
+    : `${data.engineer}'s workload — ${data.period.label}`;
 
   fillUnits(data);
+  fillPeople(data);
   fillYears(data);
 
   if (!data.known) {
@@ -168,6 +179,16 @@ function fillUnits(data) {
     setChildren(select, ...units.map((u) => el('option', { value: u.id }, u.name)));
   }
   select.value = data.unit ? data.unit.id : '';
+}
+
+/** You, and the people you lead: shown only to somebody who leads people. */
+function fillPeople(data) {
+  const select = $('#member-person');
+  const people = data.people || [];
+  select.parentElement.hidden = people.length < 2;
+  setChildren(select, ...people.map((name) => el('option', { value: name },
+    name === data.viewer ? `${name} (me)` : name)));
+  select.value = data.engineer;
 }
 
 function fillYears(data) {
@@ -380,6 +401,11 @@ async function submitPassword() {
   });
   $('#member-unit-select').addEventListener('change', (event) => {
     state.unit = event.target.value;
+    state.person = null;
+    load();
+  });
+  $('#member-person').addEventListener('change', (event) => {
+    state.person = event.target.value === (state.data || {}).viewer ? null : event.target.value;
     load();
   });
 

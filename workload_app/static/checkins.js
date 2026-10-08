@@ -51,7 +51,8 @@ async function loadCheckins(force = false) {
 async function loadTogether() {
   try {
     const listed = await api('/api/units');
-    if (!listed.units || listed.units.length < 2) { checkin.together = null; return; }
+    const admin = Boolean(state.site && state.site.admin);
+    if (!admin && (!listed.units || listed.units.length < 2)) { checkin.together = null; return; }
     // Opens every unit in turn: fills in below, without holding up the page.
     checkin.together = await api('/api/units/together', { quiet: true });
   } catch (error) {
@@ -68,7 +69,7 @@ function togetherPanel() {
   return el('section', { class: 'panel ci-together' },
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, 'All your units'),
+        el('h3', {}, t.everyone ? 'Every unit on the site' : 'All your units'),
         el('p', { class: 'muted' },
           `${t.totals.units} units, ${t.totals.teams} teams, ${t.totals.people} people: `
           + `${ciHours(t.totals.free_week)} free this week, ${t.totals.rest} need to ease off, `
