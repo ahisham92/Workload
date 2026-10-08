@@ -465,3 +465,137 @@ class TestBringingUnitsFromTheOldSitesFolder:
         assert ask("POST", f"/api/units/{units[0]['id']}/open", site=AHMED)[0] == 200
         names = json.dumps(ask("GET", "/api/team", site=AHMED)[2])
         assert all(n in names for n in ("Ahmed", "Osama", "Kirolos"))
+
+
+NOUR = {"id": 3, "login": "nour", "email": "Nour.Ali@Example.com", "name": "Nour",
+        "home": "/", "label": "AHM", "logout": "/logout"}
+STRANGER = {"id": 4, "login": "stranger", "email": "someone.else@example.com",
+            "name": "Stranger", "home": "/", "label": "AHM", "logout": "/logout"}
+
+
+def with_email(site, name, email):
+    status, _, answer = ask("POST", "/api/team", {
+        "short_name": name, "pattern": f"*{name}*", "available_hours": 160,
+        "email": email}, site=site)
+    assert status == 200, answer
+    return answer
+
+
+class TestLinkedByEmail:
+    """The manager writes an email; whoever the site signs in with it is them."""
+
+    def test_signing_in_with_the_email_lands_on_your_own_page(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        _, _, access = ask("GET", "/api/team/access", site=AHMED)
+        assert access["emails"] == {"Nour": "nour.ali@example.com"}
+        assert access["members"] == []
+
+        _, _, who = ask("GET", "/api/auth/me", site=NOUR)
+        assert who["user"]["role"] == "member"
+        status, _, mine = ask("GET", "/api/me", site=NOUR)
+        assert status == 200, mine
+        assert mine["unit"]["name"] == "Marine Structures"
+        _, _, access = ask("GET", "/api/team/access", site=AHMED)
+        assert [m["engineer"] for m in access["members"]] == ["Nour"]
+
+    def test_somebody_else_gets_nothing(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        assert ask("GET", "/api/auth/me", site=STRANGER)[2]["user"]["role"] == "manager"
+        assert ask("GET", "/api/me", site=STRANGER)[0] != 200
+
+    def test_somebody_who_looked_in_first_is_linked_next_time(self, app):
+        assert ask("GET", "/api/auth/me", site=NOUR)[2]["user"]["role"] == "manager"
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        assert ask("GET", "/api/me", site=NOUR)[0] == 200
+        assert app.accounts.user_count() == 2
+
+    def test_an_older_site_that_signs_in_by_email_works_too(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        old_style = {"id": 3, "login": "nour.ali@example.com", "name": "Nour"}
+        assert ask("GET", "/api/me", site=old_style)[0] == 200
+
+    def test_two_people_cannot_share_an_email(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        status, _, refused = ask("POST", "/api/team", {
+            "short_name": "Sara", "pattern": "*Sara*", "available_hours": 160,
+            "email": "NOUR.ALI@example.com"}, site=AHMED)
+        assert status == 422
+        assert "Nour already has that email" in refused["error"]
+        assert "Sara" not in ask("GET", "/api/team/access", site=AHMED)[2]["engineers"]
+
+    def test_a_row_given_to_somebody_else_is_never_taken(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        status, _, given = ask("POST", "/api/team/access",
+                               {"engineer": "Nour", "person": "2"}, site=AHMED)
+        assert status == 200, given
+        assert ask("GET", "/api/auth/me", site=NOUR)[2]["user"]["role"] == "manager"
+        assert ask("GET", "/api/me", site=OSAMA)[0] == 200
+
+    def test_a_manager_with_units_is_not_made_a_member(self, app):
+        unit_for(NOUR, "Buildings")
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        _, _, who = ask("GET", "/api/auth/me", site=NOUR)
+        assert who["user"]["role"] == "manager"
+        assert [u["name"] for u in ask("GET", "/api/units", site=NOUR)[2]["units"]] \
+            == ["Buildings"]
+
+    def test_your_own_email_on_your_own_row_changes_nothing(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Ahmed", "ahmed@example.com")
+        assert ask("GET", "/api/auth/me", site=AHMED)[2]["user"]["role"] == "manager"
+
+    def test_correcting_the_email_takes_the_wrong_person_out(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "someone.else@example.com")
+        assert ask("GET", "/api/me", site=STRANGER)[0] == 200
+        status, _, saved = ask("PUT", "/api/team/Nour", {
+            "short_name": "Nour", "pattern": "*Nour*", "available_hours": 160,
+            "email": "nour.ali@example.com"}, site=AHMED)
+        assert status == 200, saved
+        assert ask("GET", "/api/me", site=STRANGER)[0] != 200
+        assert ask("GET", "/api/me", site=NOUR)[0] == 200
+
+    def test_a_rename_keeps_the_email(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        status, _, saved = ask("PUT", "/api/team/Nour", {
+            "short_name": "Nour A", "pattern": "*Nour*", "available_hours": 160},
+            site=AHMED)
+        assert status == 200, saved
+        _, _, access = ask("GET", "/api/team/access", site=AHMED)
+        assert access["emails"] == {"Nour A": "nour.ali@example.com"}
+        _, _, mine = ask("GET", "/api/me", site=NOUR)
+        assert mine["engineer"] == "Nour A"
+
+    def test_taking_access_away_takes_the_email_off(self, app):
+        unit_for(AHMED)
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        ask("GET", "/api/auth/me", site=NOUR)
+        _, _, access = ask("GET", "/api/team/access", site=AHMED)
+        user_id = access["members"][0]["user_id"]
+        assert ask("DELETE", f"/api/team/access/{user_id}", site=AHMED)[0] == 200
+        assert ask("GET", "/api/me", site=NOUR)[0] != 200
+        assert ask("GET", "/api/team/access", site=AHMED)[2]["emails"] == {}
+
+    def test_removing_someone_forgets_their_email(self, app):
+        unit_for(AHMED)
+        an_engineer(AHMED, "Osama")
+        with_email(AHMED, "Nour", "nour.ali@example.com")
+        assert ask("DELETE", "/api/team/Nour", site=AHMED)[0] == 200
+        assert ask("GET", "/api/team/access", site=AHMED)[2]["emails"] == {}
+        assert ask("GET", "/api/auth/me", site=NOUR)[2]["user"]["role"] == "manager"
+
+    def test_a_bad_email_is_refused(self, app):
+        unit_for(AHMED)
+        status, _, refused = ask("POST", "/api/team", {
+            "short_name": "Nour", "pattern": "*Nour*", "available_hours": 160,
+            "email": "not an email"}, site=AHMED)
+        assert status == 422
+        assert "not an email address" in refused["error"]

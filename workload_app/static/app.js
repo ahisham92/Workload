@@ -3371,6 +3371,12 @@ function engineerSpark(name) {
 function accessCell(person) {
   const granted = ((state.access || {}).members || []).find(
     (m) => m.engineer === person.short_name);
+  const email = ((state.access || {}).emails || {})[person.short_name];
+  if (!granted && email && state.site) {
+    return el('div', { class: 'who' },
+      el('span', { class: 'muted', title: `linked when ${email} signs in` },
+        'Waiting for first sign-in'));
+  }
   if (!granted) {
     return el('button', {
       class: 'btn btn-sm', type: 'button',
@@ -3454,7 +3460,8 @@ function openAccessModal(person) {
 async function revokeAccess(person, granted) {
   if (!window.confirm(
     `Take away ${granted.display_name || granted.username}'s access as ${person.short_name}?\n\n`
-    + 'The account stays, but it can no longer see this unit.')) return;
+    + 'The account stays, but it can no longer see this unit. If they were '
+    + 'linked by their email, the email comes off too.')) return;
   try {
     await api(`/api/team/access/${granted.user_id}`, { method: 'DELETE' });
     toast('Access taken away.', 'ok');
@@ -3478,6 +3485,11 @@ function openEngineerModal(person) {
       hint: 'matched against FullName in the export, e.g. *Nadia*' },
     { name: 'available_hours', label: 'Available hours per month',
       type: 'number', step: '1', min: '1' },
+    ...(state.site ? [{
+      name: 'email', label: 'Email', type: 'email', full: true,
+      hint: 'the one they sign in with. They are linked to this row by '
+        + 'themselves the first time they open Selecao+',
+    }] : []),
     ...years.map((year) => ({
       name: `availability_${year}`, label: `Availability ${year} %`,
       type: 'number', step: '5', min: '0', max: '200',
@@ -3496,6 +3508,7 @@ function openEngineerModal(person) {
   const values = editing ? {
     short_name: person.short_name, pattern: person.pattern,
     available_hours: person.available_hours,
+    email: ((state.access || {}).emails || {})[person.short_name] || '',
     ...Object.fromEntries(years.map((y) => [
       `availability_${y}`, toPercent((person.availability || {})[y])])),
     grade: known ? known.grade : '',
@@ -3514,6 +3527,7 @@ function openEngineerModal(person) {
         availability: Object.fromEntries(years.map((y) => [
           y, fromPercent(raw[`availability_${y}`])])),
       };
+      if (state.site) body.email = (raw.email || '').trim();
       const result = editing
         ? await api(`/api/team/${encodeURIComponent(person.short_name)}`,
             { method: 'PUT', body })
