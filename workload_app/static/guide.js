@@ -45,11 +45,14 @@
       ] },
       { lane: 'Every week', note: 'Sunday to Thursday', steps: [
         { title: 'Sunday: set the week', do: 'Look at what is due in the next two weeks', where: 'Planner › Submissions', go: ['planner', 'submissions'] },
+        { title: 'Sunday: copy of the plan', do: 'The app keeps a copy of the week\'s plan by itself; copy again after big changes', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
+        { title: 'Thursday: kept and slipped', do: 'Plan against tasks done and timesheets; one tap on why each slip happened', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
         { title: 'Thursday: look back', do: 'What was late, who had room, what to change', where: 'Weekly', go: ['weekly'] },
         { title: 'Ask for people early', do: 'Staffing ahead says how many, from when, for how long', where: 'Planner › More people', go: ['planner', 'people'] },
       ] },
       { lane: 'When something comes up', note: 'as it happens, in any order', chain: false, steps: [
-        { title: 'A request lands', do: 'Quick add it; it goes into someone\'s free time', where: 'Planner › Today', go: ['planner', 'today'] },
+        { title: 'A request lands', do: 'Quick add it; "What does it push?" shows what slips and the cost first', where: 'Planner › Today', go: ['planner', 'today'] },
+        { title: 'Try a what-if', do: 'New work or a handover, kept to compare before you decide', where: 'Planner › Planning board', go: ['planner', 'handovers'] },
         { title: 'A new meeting', do: 'Add it once with who goes; it comes off their time', where: 'Planner › Today', go: ['planner', 'today'] },
         { title: 'Month or quarter end', do: 'Budget against spend, KPIs by grade, reports', where: 'Budgets, Growth', go: ['budgets'] },
       ] },
@@ -63,6 +66,7 @@
       ['Do we need more people?', 'Planner › More people', ['planner', 'people']],
       ['Move work from one person to another', 'Planner › Planning board', ['planner', 'handovers']],
       ['How did last week go?', 'Weekly', ['weekly']],
+      ['Did we keep to the plan?', 'Planner › Plan vs actual', ['planner', 'review']],
       ['How is each person growing?', 'Growth', ['growth']],
       ['Have the timesheets come in?', 'Timesheets', ['timesheets']],
       ['A project\'s hours and progress', 'Projects', ['projects']],
@@ -85,6 +89,7 @@
         { title: 'Done, Stuck or Need help', do: 'One tap on each task; your lead sees it', where: 'My day', go: 'myday' },
       ] },
       { lane: 'End of the week', note: 'Thursday', steps: [
+        { title: 'My week', do: 'Planned, done and booked; one tap on why anything slipped', where: 'My week', go: 'myweek' },
         { title: 'Ready timesheet', do: 'Your hours by job and phase, ready to copy', where: 'My day', go: 'mytimesheet' },
         { title: 'Copy into BISpark', do: 'Copy all, paste line by line; nothing is sent for you', where: 'BISpark' },
       ] },

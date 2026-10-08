@@ -57,6 +57,15 @@ MAX_SUGGESTIONS = 8
 STALE_AFTER_DAYS = 21
 
 
+#: A what-if's new work: hours on somebody over the days on show.  Tried
+#: and kept as a what-if, never committed -- real new work goes under Work
+#: coming or the task list.
+EXTRA = "extra"
+EXTRA_LONGEST_HOURS = 400.0
+#: The key new work is kept under in a person's items.
+NEW_PREFIX = "new:"
+
+
 class PlanError(ValidationError):
     pass
 
@@ -157,6 +166,24 @@ def clean_moves(raw: Any, *, people: Iterable[str],
         kind = item.get("kind") or ("task" if item.get("task_id") else "project")
         source = str(item.get("from") or "").strip()
         target = str(item.get("to") or "").strip()
+        if kind == EXTRA:
+            label = " ".join(str(item.get("project") or "").split())[:60]
+            try:
+                hours = float(item.get("hours"))
+            except (TypeError, ValueError):
+                hours = -1.0
+            if target not in known:
+                errors.append(f"Move {position}: {target or 'nobody'} is not on this "
+                              f"unit's team.")
+            elif not label:
+                errors.append(f"Move {position}: say what the new work is.")
+            elif not 0 < hours <= EXTRA_LONGEST_HOURS:
+                errors.append(f"Move {position}: new work is more than 0 and at most "
+                              f"{EXTRA_LONGEST_HOURS:g} hours.")
+            else:
+                out.append({"kind": EXTRA, "project": label, "to": target,
+                            "hours": round(hours, 1)})
+            continue
         if not source or not target:
             errors.append(f"Move {position} needs somebody to move it from and to.")
             continue
@@ -339,6 +366,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
 
     project_moves = [m for m in moves if m["kind"] == "project"]
     task_moves = [m for m in moves if m["kind"] == "task"]
+    extra_moves = [m for m in moves if m["kind"] == EXTRA]
     after_rates, moved_amounts = _apply_project_moves(base_rates, project_moves)
     after_assignees = _apply_task_moves(base_assignees, task_moves)
 
@@ -347,6 +375,11 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
                  | {m["to"] for m in moves})
     present = {name: calendar_.present_days(config, name, window)
                for name in everybody}
+    # New work being tried: its hours spread over the days the person is in.
+    for move in extra_moves:
+        key = (move["to"], NEW_PREFIX + move["project"])
+        after_rates[key] = (after_rates.get(key, 0.0)
+                            + move["hours"] / max(1, present.get(move["to"], len(window))))
     before = _state(rates=base_rates, assignees=base_assignees,
                     tasks_by_id=tasks_by_id, window=window, today=today,
                     drawings_left=drawings_left, present=present)
@@ -373,6 +406,8 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         if key.startswith("task:"):
             task = tasks_by_id.get(int(key.split(":", 1)[1]))
             return task.name if task else key
+        if key.startswith(NEW_PREFIX):
+            return f"New: {key[len(NEW_PREFIX):]}"
         return project_names.get(key) or key
 
     out_people = []
@@ -387,7 +422,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             ai = (a.get("items") or {}).get(key) or {}
             items.append({
                 "key": key,
-                "project": "" if key.startswith("task:") else key,
+                "project": "" if key.startswith(("task:", NEW_PREFIX)) else key,
                 "name": label(key),
                 "hours_before": round(bi.get("hours", 0.0), 1),
                 "hours_after": round(ai.get("hours", 0.0), 1),
@@ -456,6 +491,8 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         if move["kind"] == "project":
             entry["hours"] = round(next(amounts) * present.get(move["from"], len(window)), 1)
             entry["name"] = project_names.get(move["project"]) or move["project"]
+        elif move["kind"] == EXTRA:
+            entry["name"] = move["project"]
         else:
             task = tasks_by_id.get(move["task_id"])
             entry["name"] = task.name if task else str(move["task_id"])

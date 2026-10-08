@@ -290,6 +290,11 @@ class _Views:
             service = WorkloadService(autosave=self.app.autosave)
             try:
                 self.app._open(service, owner_id, unit_id)
+                # The week's plan is kept the first time the week is seen.
+                try:
+                    service.lock_week_if_due()
+                except Exception:          # pragma: no cover - never stops a run
+                    traceback.print_exc()
                 self._seen[unit_id] = (service.weekly(), service.checkins())
             finally:
                 service.close()

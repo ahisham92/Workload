@@ -35,7 +35,9 @@ from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .model import ValidationError, iso, today as _model_today
 from . import unit as unit_module
+from . import urgent as urgent_module
 from . import weekly as weekly_module
+from . import weekplan
 from .unit import Unit, outside_message
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -47,6 +49,8 @@ HOLIDAYS_BEHIND_DAYS = 120
 HOLIDAYS_AHEAD_DAYS = 400
 #: Where the countries a unit's holidays come from are kept.
 HOLIDAY_SETTING = "holiday_calendar"
+#: What-ifs kept per unit, at most.
+WHAT_IF_LIMIT = 12
 
 
 #: Which person in the unit the signed-in manager is ("this is me"), one per
@@ -1082,6 +1086,10 @@ class WorkloadService:
             moves = planner_module.clean_moves(
                 body.get("moves"), people=[p["name"] for p in inputs["roster"]],
                 tasks=inputs["tasks"])
+            if any(m["kind"] == planner_module.EXTRA for m in moves):
+                raise planner_module.PlanError([
+                    "New work in a what-if is only tried, not committed. Add real "
+                    "new work under Work coming or on the task list."])
             if not moves:
                 raise planner_module.PlanError(["There is nothing to commit."])
             days = planner_module.clean_days(body.get("days"))
@@ -1398,6 +1406,105 @@ class WorkloadService:
             return {"removed": absence_id,
                     "away": self._away(self._planning(self.workbook), _today())}
 
+    def _choose_person(self, inputs: Dict[str, Any], request: Dict[str, Any],
+                       today: _dt.date, engineers: Sequence[str]) -> str:
+        """Who a request goes to: the one named, or whoever has most room."""
+        person = request["person"]
+        if person and person not in engineers:
+            raise intake.IntakeError([
+                f"{person} has no place on the task list yet, so a request "
+                f"cannot be given to them."])
+        if not person:
+            view = planner_module.outlook(
+                rows=inputs["rows"], tasks=inputs["tasks"],
+                roster=inputs["roster"], config=inputs["config"],
+                project_names=inputs["project_names"],
+                drawings_left=drawings_module.left_by_project(inputs["drawings"]),
+                saved=self.store.plan_moves(), today=today,
+                management=inputs["management"].taken_a_day(),
+                days=max(1, len(task_sheet.working_days(
+                    today, max(request["due"], today), inputs["config"]))))
+            history: Dict[str, set] = {}
+            for row in inputs["rows"]:
+                history.setdefault(row["job_number"], set()).add(row["engineer"])
+            person = intake.choose(view, role=request["role"],
+                                   project=request["project_number"],
+                                   eligible=engineers, history=history,
+                                   away=calendar_.away_on(inputs["config"], today))
+        if not person:
+            raise intake.IntakeError(["There is nobody on the team to give it to."])
+        return person
+
+    def _request_now(self, body: Dict[str, Any], today: _dt.date) -> _dt.datetime:
+        now = intake.parse_now(body.get("now"))
+        if now.date() < today:
+            now = _dt.datetime.combine(today, _dt.time(0, 0))
+        return now
+
+    def _slot_for(self, inputs: Dict[str, Any], person: str, hours: float,
+                  now: _dt.datetime, urgency: str,
+                  pages: Optional[Dict[_dt.date, Dict[str, Any]]] = None):
+        """When a request would be done: urgent ones from the first free
+        moment on top of planned work; the others only in time nobody has
+        planned yet (``pages`` is that person's day plan, day by day)."""
+        taken = [(_dt.datetime.fromisoformat(s["start"]),
+                  _dt.datetime.fromisoformat(s["end"]))
+                 for s in self.store.slots().values() if s["person"] == person]
+        taken += inputs["management"].busy(person, now.date(), 60)
+        if urgency == urgent_module.ROOM:
+            now = self._room_from(inputs, now, hours, pages or {})
+        return intake.slot(
+            hours=hours, now=now, taken=taken, config=inputs["config"],
+            away=(inputs["config"].get("away") or {}).get(person, ()))
+
+    def _room_from(self, inputs: Dict[str, Any], now: _dt.datetime, hours: float,
+                   pages: Dict[_dt.date, Dict[str, Any]]) -> _dt.datetime:
+        """The first day from ``now`` whose planned tasks, requests and
+        meetings leave room for ``hours`` (or the first day after those on
+        show), so a request that is not urgent never makes a task late."""
+        config = inputs["config"]
+        a_day = task_sheet.hours_per_day(config)
+        first_free = None
+        for day in sorted(pages):
+            page = pages[day]
+            if page is None or page.get("away"):
+                continue
+            taken = sum(float(b.get("hours") or 0.0) for b in page.get("blocks", [])
+                        if b.get("kind") != "work")
+            left = a_day - taken
+            if day == now.date():
+                left = min(left, max(0.0, (intake._at(day, config["day_end"]) - now)
+                                     .total_seconds() / 3600 - taken))
+            if left + 1e-6 >= min(hours, a_day):
+                start = intake._at(day, config["day_start"])
+                return max(now, start)
+            first_free = day
+        if first_free is None:
+            return now
+        following = first_free + _dt.timedelta(days=1)
+        return max(now, _dt.datetime.combine(following, _dt.time(0, 0)))
+
+    def _pages(self, inputs: Dict[str, Any], person: str,
+               days: Sequence[_dt.date], rates: Dict[_dt.date, Any],
+               extra: Optional[tuple] = None) -> Dict[_dt.date, Dict[str, Any]]:
+        """One person's page of the day plan for each of ``days``; ``extra``
+        is a (task, slot) being tried, not saved."""
+        me = [p for p in inputs["roster"] if p["name"] == person]
+        tasks = list(inputs["tasks"])
+        slots = dict(self.store.slots())
+        if extra is not None:
+            tasks.append(extra[0])
+            slots[extra[0].id] = extra[1]
+        out = {}
+        for day in days:
+            page = daily.plan_day(
+                day=day, today=_today(), roster=me, rates=rates[day], tasks=tasks,
+                slots=slots, config=inputs["config"],
+                project_names=inputs["project_names"],
+                **inputs["management"].for_day(day, None))
+            out[day] = page["people"][0] if page["people"] else None
+        return out
+
     def add_request(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """One line in; a person and a time slot out."""
         with self._lock:
@@ -1406,45 +1513,21 @@ class WorkloadService:
             today = _today()
             request = intake.clean(body, projects=inputs["project_names"],
                                    today=today)
-            engineers = wb.engineer_names()
-            person = request["person"]
-            if person and person not in engineers:
-                raise intake.IntakeError([
-                    f"{person} has no place on the task list yet, so a request "
-                    f"cannot be given to them."])
-            if not person:
-                view = planner_module.outlook(
-                    rows=inputs["rows"], tasks=inputs["tasks"],
-                    roster=inputs["roster"], config=inputs["config"],
-                    project_names=inputs["project_names"],
-                    drawings_left=drawings_module.left_by_project(inputs["drawings"]),
-                    saved=self.store.plan_moves(), today=today,
-                    management=inputs["management"].taken_a_day(),
-                    days=max(1, len(task_sheet.working_days(
-                        today, max(request["due"], today), inputs["config"]))))
-                history: Dict[str, set] = {}
-                for row in inputs["rows"]:
-                    history.setdefault(row["job_number"], set()).add(row["engineer"])
-                person = intake.choose(view, role=request["role"],
-                                       project=request["project_number"],
-                                       eligible=engineers, history=history,
-                                       away=calendar_.away_on(inputs["config"], today))
-            if not person:
-                raise intake.IntakeError(["There is nobody on the team to give it to."])
-            now = intake.parse_now(body.get("now"))
-            if now.date() < today:
-                now = _dt.datetime.combine(today, _dt.time(0, 0))
-            taken = [(_dt.datetime.fromisoformat(s["start"]),
-                      _dt.datetime.fromisoformat(s["end"]))
-                     for s in self.store.slots().values() if s["person"] == person]
-            taken += inputs["management"].busy(person, now.date(), 60)
-            start, end = intake.slot(
-                hours=request["hours"], now=now, taken=taken, config=inputs["config"],
-                away=(inputs["config"].get("away") or {}).get(person, ()))
+            urgency = urgent_module.clean_urgency(body.get("urgency"))
+            person = self._choose_person(inputs, request, today, wb.engineer_names())
+            now = self._request_now(body, today)
+            pages = None
+            if urgency == urgent_module.ROOM:
+                days = planner_module.days_ahead(now.date(), urgent_module.WINDOW_DAYS,
+                                                 inputs["config"])
+                pages = self._pages(inputs, person, days, self._rates_by_day(inputs, days))
+            start, end = self._slot_for(inputs, person, request["hours"], now,
+                                        urgency, pages)
             task = wb.save_task({
                 "name": request["title"],
                 "definition": " ".join(filter(None, [
-                    f"Came in {now:%a %d %b %H:%M}.",
+                    f"Came in {now:%a %d %b %H:%M}"
+                    + (", not urgent." if urgency == urgent_module.ROOM else "."),
                     " ".join(str(body.get("note") or "").split())[:300]])),
                 "project_number": request["project_number"],
                 "assignees": [person],
@@ -1456,11 +1539,94 @@ class WorkloadService:
             })
             self.store.set_slot(task["id"], person, start.isoformat(timespec="minutes"),
                                 end.isoformat(timespec="minutes"))
-            return {"task": task, "person": person,
+            return {"task": task, "person": person, "urgency": urgency,
                     "start": start.isoformat(timespec="minutes"),
                     "end": end.isoformat(timespec="minutes"),
                     "late": end.date() > request["due"],
                     "save": self._commit()}
+
+    def _rates_by_day(self, inputs: Dict[str, Any], days: Sequence[_dt.date]):
+        measured = planner_module.pace(inputs["rows"], inputs["config"])["rates"]
+        saved = self.store.plan_moves()
+        out = {}
+        for day in days:
+            active = planner_module._active_saved(saved, day, day)
+            out[day], _ = planner_module._apply_project_moves(measured, active)
+        return out
+
+    def request_preview(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """What a new request would push, and what it would cost, before it
+        is added: for whoever it would go to, and for a few others."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            today = _today()
+            config = inputs["config"]
+            request = intake.clean(body, projects=inputs["project_names"], today=today)
+            engineers = wb.engineer_names()
+            person = self._choose_person(inputs, request, today, engineers)
+            now = self._request_now(body, today)
+            days = planner_module.days_ahead(now.date(), urgent_module.WINDOW_DAYS, config)
+            rates = self._rates_by_day(inputs, days)
+            tasks_by_id = {t.id: t for t in inputs["tasks"] if not t.done}
+            a_day = task_sheet.hours_per_day(config)
+            per_mm = wb.hours_per_man_month() or 0.0
+
+            def option(name: str, urgency: str) -> Dict[str, Any]:
+                before = self._pages(inputs, name, days, rates)
+                start, end = self._slot_for(inputs, name, request["hours"], now,
+                                            urgency, before)
+                trial = urgent_module.trial_task(request, name, start, end)
+                slot = {"person": name, "start": start.isoformat(timespec="minutes"),
+                        "end": end.isoformat(timespec="minutes")}
+                after = self._pages(inputs, name, days, rates, (trial, slot))
+                view = urgent_module.effect(
+                    person=name, days=days,
+                    plan=lambda day, new: (after if new else before).get(day),
+                    tasks_by_id=tasks_by_id, project_names=inputs["project_names"],
+                    hours_per_day=a_day, hours_per_mm=per_mm, config=config)
+                view.update({"urgency": urgency, "start": slot["start"],
+                             "end": slot["end"], "late": end.date() > request["due"],
+                             "verdict": urgent_module.verdict(view)})
+                return view
+
+            role = request["role"]
+            if request["person"]:
+                person_row = next((p for p in inputs["roster"]
+                                   if p["name"] == person), {})
+                role = people_module.role_of(person_row.get("grade"))
+            away_today = set(calendar_.away_on(config, today))
+            others = []
+            for p in inputs["roster"]:
+                if (p["name"] == person or not p.get("active", True)
+                        or p["name"] not in engineers or p["name"] in away_today
+                        or people_module.role_of(p.get("grade")) != role):
+                    continue
+                pages = self._pages(inputs, p["name"], days[:5], rates)
+                free = sum((page or {}).get("free_hours", 0.0) for page in pages.values())
+                others.append((-free, p["name"]))
+            others.sort()
+            budget = None
+            if request["project_number"]:
+                job = next((j for j in self.store.job_budgets()
+                            if j["job_number"] == request["project_number"]), None)
+                if job and job.get("remaining_mm") is not None:
+                    budget = {"job": job["job_number"],
+                              "remaining_mm": round(job["remaining_mm"], 2),
+                              "uses_mm": round(request["hours"] / per_mm, 3)
+                              if per_mm else None}
+            return {
+                "request": {"title": request["title"], "hours": request["hours"],
+                            "due": request["due"].isoformat(),
+                            "project_number": request["project_number"]},
+                "person": person,
+                "urgent": option(person, urgent_module.URGENT),
+                "room": option(person, urgent_module.ROOM),
+                "others": [option(name, urgent_module.URGENT)
+                           for _free, name in others[:urgent_module.ALTERNATIVES]],
+                "budget": budget,
+                "hours_per_day": round(a_day, 2),
+            }
 
     def finish_request(self, task_id: int) -> Dict[str, Any]:
         with self._lock:
@@ -1472,6 +1638,185 @@ class WorkloadService:
             data["status"] = cfg.TASK_DONE_STATUS
             saved = wb.save_task(data, task_id=task_id)
             return {"task": saved, "save": self._commit()}
+
+    # -- working to a plan: each week locked, then checked --------------------
+    def _week(self, inputs: Dict[str, Any], query: Dict[str, List[str]]):
+        raw = (query.get("week") or [""])[0]
+        if not raw:
+            return weekplan.current_week(_today(), inputs["config"], daily.week_of)
+        days = daily.week_of(_date_in(query, "week", _today()), inputs["config"])
+        if not days:
+            raise weekplan.WeekPlanError(["That week has no working days."])
+        return days
+
+    def _snapshot(self, inputs: Dict[str, Any], days: Sequence[_dt.date],
+                  people: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+        """The week as the day plan has it now."""
+        roster = inputs["roster"]
+        if people is not None:
+            roster = [p for p in roster if p["name"] in set(people)]
+        rates = self._rates_by_day(inputs, days)
+        slots = self.store.slots()
+        pages = [daily.plan_day(
+            day=day, today=_today(), roster=roster, rates=rates[day],
+            tasks=inputs["tasks"], slots=slots, config=inputs["config"],
+            project_names=inputs["project_names"],
+            **inputs["management"].for_day(day, None)) for day in days]
+        return weekplan.snapshot(pages, inputs["tasks"], inputs["project_names"])
+
+    def _keep_week(self, inputs: Dict[str, Any], days: Sequence[_dt.date]) -> int:
+        return self.store.lock_week(days[0].isoformat(), self._snapshot(inputs, days))
+
+    def lock_week_if_due(self) -> bool:
+        """Lock this week's plan the first time it is seen, and only then: a
+        lock already made, by this or by the manager, is never redone here."""
+        with self._lock:
+            if self.read_only or self._wb is None:
+                return False
+            inputs = self._planning(self.workbook)
+            days = weekplan.current_week(_today(), inputs["config"], daily.week_of)
+            if not days or self.store.week_plan(days[0].isoformat()):
+                return False
+            return bool(self._keep_week(inputs, days))
+
+    def lock_week(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """The manager locks this week again after changing things, or next
+        week ahead. Reasons given already stay."""
+        with self._lock:
+            inputs = self._planning(self.workbook)
+            days = self._week(inputs, {"week": [str(body.get("week") or "")]})
+            if not weekplan.lockable(days[0], _today(), inputs["config"], daily.week_of):
+                raise weekplan.WeekPlanError([
+                    "Only this week's or next week's plan can be locked."])
+            count = self._keep_week(inputs, days)
+            return {"locked": count, "week": days[0].isoformat()}
+
+    def _review(self, inputs: Dict[str, Any], days: Sequence[_dt.date],
+                people: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        lines = self.store.week_plan(days[0].isoformat())
+        if people is not None:
+            lines = [l for l in lines if l["person"] in set(people)]
+        locked = bool(lines)
+        if not locked and days[-1] >= _today():
+            lines = [{**line, "id": None} for line in
+                     self._snapshot(inputs, days, people)]
+        return weekplan.review(
+            week_days=days, lines=lines, locked=locked, rows=inputs["rows"],
+            tasks=inputs["tasks"], slots=self.store.slots(), today=_today(),
+            project_names=inputs["project_names"], people=people,
+            roster=inputs["roster"])
+
+    def _trend(self, inputs: Dict[str, Any], upto: _dt.date,
+               people: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+        weeks = [w for w in self.store.week_plan_weeks() if w <= upto.isoformat()]
+        out = []
+        for week in weeks[-weekplan.TREND_WEEKS:]:
+            days = daily.week_of(_dt.date.fromisoformat(week), inputs["config"])
+            if days:
+                out.append(weekplan.trend_point(self._review(inputs, days, people)))
+        return out
+
+    def plan_review(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        """The week's plan beside what happened, person by person."""
+        self.lock_week_if_due()
+        with self._lock:
+            inputs = self._planning(self.workbook)
+            days = self._week(inputs, query)
+            data = self._review(inputs, days)
+            data["trend"] = self._trend(inputs, days[0])
+            data["can_lock"] = weekplan.lockable(days[0], _today(), inputs["config"],
+                                                 daily.week_of)
+            data["previous"] = (days[0] - _dt.timedelta(days=7)).isoformat()
+            data["next"] = (days[0] + _dt.timedelta(days=7)).isoformat()
+            data["today"] = _today().isoformat()
+            data["reason_choices"] = [{"key": k, "label": v}
+                                      for k, v in weekplan.REASONS.items()]
+            return data
+
+    def set_slip_reason(self, body: Dict[str, Any], *,
+                        engineer: Optional[str] = None) -> Dict[str, Any]:
+        """Why a line slipped. A member only ever for their own lines, and
+        never over what the manager said."""
+        with self._lock:
+            reason = weekplan.clean_reason(body)
+            line = self.store.week_plan_line(reason["id"])
+            if line is None or (engineer is not None and line["person"] != engineer):
+                raise ApiError(HTTPStatus.NOT_FOUND, "That is not on your plan.")
+            if engineer is not None and line["reason_by"] == "manager":
+                raise weekplan.WeekPlanError([
+                    "Your lead has already given the reason for that one."])
+            self.store.set_slip_reason(reason["id"], reason["reason"], reason["note"],
+                                       engineer or "manager")
+            return {"id": reason["id"], "reason": reason["reason"],
+                    "note": reason["note"]}
+
+    def my_week(self, engineer: str, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Their own week: what was planned, what they finished, what they
+        booked -- nobody else's."""
+        with self._lock:
+            inputs = self._planning(self.workbook)
+            days = self._week(inputs, query)
+            data = self._review(inputs, days, [engineer])
+            mine = next((p for p in data["people"] if p["name"] == engineer), None)
+            return {
+                "engineer": engineer,
+                "week": data["week"], "week_end": data["week_end"],
+                "state": data["state"], "locked": data["locked"],
+                "me": mine,
+                "trend": self._trend(inputs, days[0], [engineer]),
+                "previous": (days[0] - _dt.timedelta(days=7)).isoformat(),
+                "next": (days[0] + _dt.timedelta(days=7)).isoformat(),
+                "reason_choices": [{"key": k, "label": v}
+                                   for k, v in weekplan.REASONS.items()],
+            }
+
+    # -- what-ifs kept to compare -------------------------------------------
+    def what_ifs(self) -> Dict[str, Any]:
+        with self._lock:
+            out = []
+            for row in self.store.what_ifs():
+                try:
+                    moves = json.loads(row["moves"])
+                except ValueError:
+                    moves = []
+                item = {"id": row["id"], "name": row["name"], "days": row["days"],
+                        "moves": moves, "created_at": row["created_at"]}
+                try:
+                    view = self._outlook(self.workbook, {"days": row["days"],
+                                                         "moves": moves})
+                    item["summary"] = view["summary"]
+                    item["moves"] = view["moves"]
+                    item["drawings"] = round(sum(p["after"]["drawings"]
+                                                 for p in view["people"]), 1)
+                except ValidationError as error:
+                    item["stale"] = True
+                    item["errors"] = list(getattr(error, "errors", [str(error)]))
+                out.append(item)
+            return {"what_ifs": out, "limit": WHAT_IF_LIMIT}
+
+    def save_what_if(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            inputs = self._planning(self.workbook)
+            name = " ".join(str(body.get("name") or "").split())[:80]
+            if not name:
+                raise planner_module.PlanError(["Give the what-if a name."])
+            moves = planner_module.clean_moves(
+                body.get("moves"), people=[p["name"] for p in inputs["roster"]],
+                tasks=inputs["tasks"])
+            if not moves:
+                raise planner_module.PlanError(["Try something first, then keep it."])
+            if len(self.store.what_ifs()) >= WHAT_IF_LIMIT:
+                raise planner_module.PlanError([
+                    f"There are {WHAT_IF_LIMIT} what-ifs kept already. Delete one first."])
+            days = planner_module.clean_days(body.get("days"))
+            what_if_id = self.store.add_what_if(name, days, json.dumps(moves))
+            return {"id": what_if_id, "name": name}
+
+    def remove_what_if(self, what_if_id: int) -> Dict[str, Any]:
+        with self._lock:
+            if not self.store.remove_what_if(what_if_id):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such what-if.")
+            return {"removed": what_if_id}
 
     # -- a team member's own day: the only writes a member can make --------
     #
