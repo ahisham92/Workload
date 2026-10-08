@@ -618,7 +618,7 @@ async function overviewNeeds() {
 /* -- today ------------------------------------------------------------- */
 
 const KIND_LABEL = { request: 'Request', submission: 'Submission', meeting: 'Meeting',
-  management: 'Team', task: 'Task', work: '' };
+  management: 'Team', development: 'Development', task: 'Task', work: '' };
 
 /** A meeting's agenda, folded away under it until it is wanted. */
 function agendaList(b) {

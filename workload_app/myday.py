@@ -36,8 +36,9 @@ OPEN_LIMIT = 40
 OFF_NEWS_DAYS = 7
 #: Hours are given to the quarter, as the day plan lays them out.
 QUARTER = 0.25
-#: The line for time that is no project's: meetings, team support.
-OVERHEAD = "Meetings and team support"
+#: The line for time that is no project's: meetings, team support and
+#: development time.
+OVERHEAD = "Meetings, team support and development"
 #: The line for tasks given without a job number.
 NO_JOB = "Tasks with no job on them: ask your lead for the code"
 
@@ -247,7 +248,7 @@ def ready_timesheet(*, engineer: str, days: Sequence[_dt.date],
             source = "plan" if day >= today else "plan_past"
             for block in (me or {}).get("blocks", []):
                 project = block.get("project") or ""
-                if block["kind"] in ("meeting", "management"):
+                if block["kind"] in ("meeting", "management", "development"):
                     add(line("", None, "", OVERHEAD, "overhead"), date, block["hours"])
                     continue
                 if not project:

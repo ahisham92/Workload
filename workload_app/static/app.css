@@ -1083,6 +1083,8 @@ tr.row-done .task-name { text-decoration: line-through; }
 .block-meeting { background: var(--ok-soft); }
 .block-management { background: var(--ok-soft); }
 .block-management .block-kind { color: var(--ok); }
+.block-development { background: var(--accent-soft); }
+.block-development .block-kind { color: var(--accent); }
 .block-agenda { margin-top: 3px; font-size: 12px; }
 .block-agenda summary { cursor: pointer; color: var(--muted); }
 .block-agenda ul, .ci-agenda { margin: 4px 0 0; padding-left: 18px; }
@@ -1351,7 +1353,7 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 .md-actions .btn { min-height: 34px; }
 .md-done { border-color: var(--ok); color: var(--ok); }
 .md-is-done .md-title { text-decoration: line-through; color: var(--muted); }
-.md-meeting .md-time, .md-management .md-time { color: var(--accent); }
+.md-meeting .md-time, .md-management .md-time, .md-development .md-time { color: var(--accent); }
 .md-work .md-title { font-weight: 500; }
 .md-form { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .md-note { flex: 1 1 200px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border);
@@ -1378,3 +1380,5 @@ td.ci-ask { white-space: normal; min-width: 280px; }
   .md-off-form > * { flex: 1 1 100%; }
 }
 @media print { .md-actions, .md-form, .md-nav, .md-help, #myoff { display: none !important; } }
+
+.md-goal-list { margin: 4px 0 6px; padding-left: 18px; display: grid; gap: 4px; }

@@ -208,6 +208,10 @@ class TestWhatAMemberCannotDo:
         ("GET", "/api/timesheets"),
         ("GET", "/api/checkins"),
         ("GET", "/api/weekly"),
+        ("GET", "/api/growth"),
+        ("POST", "/api/growth/goals"),
+        ("POST", "/api/growth/goals/1/review"),
+        ("DELETE", "/api/growth/goals/1"),
         ("GET", "/api/weekly/download"),
     ])
     def test_the_managers_reads_are_refused(self, osama, method, path):

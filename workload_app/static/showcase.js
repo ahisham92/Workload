@@ -105,6 +105,13 @@
     const sc = report.scorecard || {};
     const ranking = sc.ranking || [];
     const ranked = ranking.find((r) => r.engineer === name) || {};
+    // Ranked only against the same grade: a junior is never set against a manager.
+    const totals = sc.totals || {};
+    const sameGrade = (state.people || [])
+      .filter((x) => (x.grade || '') === (roster.grade || '') && typeof totals[x.name] === 'number')
+      .map((x) => x.name)
+      .sort((a, b) => totals[b] - totals[a]);
+    const gradeRank = sameGrade.indexOf(name) + 1;
     const ci = ((show.checkins || {}).people || []).find((p) => p.name === name) || null;
     const ahead = ((show.outlook || {}).people || []).find((p) => p.name === name) || null;
     const drawn = ((show.drawings || {}).people || []).find((p) => p.name === name) || null;
@@ -115,8 +122,9 @@
       grade: roster.grade_label || (ci && ci.grade_label) || '',
       team: roster.team_name || (ci && ci.team_name) || '',
       score: (sc.totals || {})[name],
-      rank: ranked.rank || null,
-      of: ranking.length,
+      rank: gradeRank || ranked.rank || null,
+      of: gradeRank ? sameGrade.length : ranking.length,
+      among: gradeRank ? (roster.grade_label || 'grade') : 'team',
       strongest: ranked.strongest || '',
       weakest: ranked.weakest || '',
       e,
@@ -170,7 +178,7 @@
         el('span', { class: 'pc-avatar' }, p.initials)),
       el('div', { class: 'pc-rank' },
         p.rank ? el('b', {}, `${p.rank}`) : null,
-        p.rank ? el('span', {}, `of ${p.of}`) : null)),
+        p.rank ? el('span', { title: `Ranked among ${p.among} only` }, `of ${p.of}`) : null)),
     el('div', { class: 'pc-name' }, name,
       name === state.myself ? el('span', { class: 'pill pill-ok pc-you' }, 'You') : null),
     el('div', { class: 'pc-sub' }, [p.grade, p.team].filter(Boolean).join(' · ') || 'No grade or team yet'),
@@ -372,7 +380,7 @@
           signal ? el('span', { class: `pill pill-${SIGNAL_CLASS[signal.key] || 'info'}` }, signal.label) : null),
         el('div', { class: `pf-score v-${tone.score(p.score) || 'none'}` },
           el('b', {}, p.score === undefined || p.score === null ? '—' : num(p.score, 1)),
-          el('span', {}, p.rank ? `score · ${p.rank} of ${p.of}` : 'score'))),
+          el('span', {}, p.rank ? `score · ${p.rank} of ${p.of} (${p.among})` : 'score'))),
       el('div', { class: 'pf-tiles' },
         tile('Efficiency', fmt.ratio(e.cpi), tone.cpi(e.cpi)),
         tile('Hours used', pct(e.utilisation), tone.utilisation(e.utilisation)),
