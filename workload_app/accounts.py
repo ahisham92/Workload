@@ -130,20 +130,6 @@ CREATE TABLE IF NOT EXISTS import_keys (
     last_result TEXT
 );
 
--- The key a senior's own Outlook (a Power Automate flow on their Microsoft
--- 365 account) sends each new email in with.  One per senior and unit; only
--- its digest is kept.  It can add emails to that senior's drafts and do
--- nothing else.
-CREATE TABLE IF NOT EXISTS inbox_keys (
-    unit_id     TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    key_hash    TEXT NOT NULL UNIQUE,
-    created_at  TEXT NOT NULL,
-    last_used   TEXT,
-    last_result TEXT,
-    PRIMARY KEY (unit_id, user_id)
-);
-
 -- A phone (or browser) that has turned notifications on.  The endpoint is the
 -- address at its maker's push service; p256dh and auth are the keys a message
 -- is sealed with for that phone alone.  site is the address the app was
@@ -574,64 +560,6 @@ class Accounts:
         with self._connect() as db:
             return db.execute(
                 "DELETE FROM import_keys WHERE unit_id = ? AND user_id = ?",
-                (unit_id, user_id)).rowcount > 0
-
-    # -- inbox keys ------------------------------------------------------
-    #
-    # Like an import key, for a senior's Outlook: it opens one door, adding
-    # an email to that senior's drafts in one unit.
-
-    def make_inbox_key(self, user_id: int, unit_id: str) -> str:
-        if self.unit(user_id, unit_id) is None:
-            raise AccountError("That unit is not yours.")
-        key = "selmail_" + secrets.token_urlsafe(TOKEN_BYTES)
-        with self._connect() as db:
-            db.execute("DELETE FROM inbox_keys WHERE unit_id = ? AND user_id = ?",
-                       (unit_id, user_id))
-            db.execute(
-                "INSERT INTO inbox_keys (unit_id, user_id, key_hash, created_at) "
-                "VALUES (?, ?, ?, ?)", (unit_id, user_id, _token_hash(key), now()))
-        return key
-
-    def inbox_key_owner(self, key: Optional[str]) -> Optional[Dict[str, Any]]:
-        """``{"user", "unit"}`` for an inbox key that is still good, else None."""
-        if not key or not isinstance(key, str):
-            return None
-        with self._connect() as db:
-            row = db.execute(
-                "SELECT unit_id, user_id FROM inbox_keys WHERE key_hash = ?",
-                (_token_hash(key),)).fetchone()
-        if row is None:
-            return None
-        user = self.user(row["user_id"])
-        unit = self.unit(row["user_id"], row["unit_id"])
-        if user is None or unit is None:
-            return None
-        return {"user": user, "unit": unit}
-
-    def inbox_key_info(self, user_id: int, unit_id: str) -> Optional[Dict[str, Any]]:
-        with self._connect() as db:
-            row = db.execute(
-                "SELECT created_at, last_used, last_result FROM inbox_keys "
-                "WHERE unit_id = ? AND user_id = ?", (unit_id, user_id)).fetchone()
-        if row is None:
-            return None
-        info = dict(row)
-        info["last_result"] = json.loads(info["last_result"]) \
-            if info["last_result"] else None
-        return info
-
-    def record_inbox(self, user_id: int, unit_id: str, result: Dict[str, Any]) -> None:
-        with self._connect() as db:
-            db.execute(
-                "UPDATE inbox_keys SET last_used = ?, last_result = ? "
-                "WHERE unit_id = ? AND user_id = ?",
-                (now(), json.dumps(result, default=str), unit_id, user_id))
-
-    def revoke_inbox_key(self, user_id: int, unit_id: str) -> bool:
-        with self._connect() as db:
-            return db.execute(
-                "DELETE FROM inbox_keys WHERE unit_id = ? AND user_id = ?",
                 (unit_id, user_id)).rowcount > 0
 
     # -- notifications ---------------------------------------------------

@@ -186,29 +186,6 @@ CREATE TABLE IF NOT EXISTS slots (
     created_at TEXT NOT NULL
 );
 
--- Emails a senior's own Outlook sent in: a draft task until the senior hands
--- it out (task_id is the request it became) or it is judged to need nothing.
--- Only the opening of each is kept, and only for a while; see emails.py.
-CREATE TABLE IF NOT EXISTS inbox (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,       -- whose mailbox it came from
-    message_key TEXT NOT NULL,          -- Outlook's id for it, or a digest
-    topic       TEXT NOT NULL DEFAULT '',  -- the subject without RE:/FW:
-    received_at TEXT,
-    sender      TEXT NOT NULL DEFAULT '',
-    subject     TEXT NOT NULL DEFAULT '',
-    snippet     TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL,          -- draft | no_action | assigned | dismissed
-    reason      TEXT NOT NULL DEFAULT '',
-    guess       TEXT NOT NULL DEFAULT '{}',
-    replies     INTEGER NOT NULL DEFAULT 0,
-    task_id     INTEGER,
-    decided_at  TEXT,
-    created_at  TEXT NOT NULL,
-    UNIQUE (user_id, message_key)
-);
-CREATE INDEX IF NOT EXISTS inbox_user ON inbox(user_id, status);
-
 -- What a team member said from their own My day: a task done, stuck, help
 -- needed, or days off.  Only ever written for the person signed in; the lead
 -- sees the open ones in Check-ins and marks them seen.
@@ -764,72 +741,6 @@ class TimesheetStore:
     def clear_drawing_list_row(self, row: int) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM drawing_list WHERE row = ?", (int(row),))
-
-    # -- emails in -------------------------------------------------------------
-    def inbox(self, user_id: int) -> List[Dict[str, Any]]:
-        with self._connect() as db:
-            return [dict(row) for row in db.execute(
-                "SELECT * FROM inbox WHERE user_id = ? ORDER BY id DESC",
-                (int(user_id),))]
-
-    def inbox_item(self, user_id: int, item_id: int) -> Optional[Dict[str, Any]]:
-        with self._connect() as db:
-            row = db.execute("SELECT * FROM inbox WHERE id = ? AND user_id = ?",
-                             (int(item_id), int(user_id))).fetchone()
-        return dict(row) if row else None
-
-    def inbox_by_key(self, user_id: int, message_key: str) -> Optional[Dict[str, Any]]:
-        with self._connect() as db:
-            row = db.execute("SELECT * FROM inbox WHERE user_id = ? AND message_key = ?",
-                             (int(user_id), message_key)).fetchone()
-        return dict(row) if row else None
-
-    def inbox_by_topic(self, user_id: int, topic: str,
-                       statuses: Sequence[str]) -> Optional[Dict[str, Any]]:
-        """The newest email of this conversation in one of ``statuses``."""
-        if not topic:
-            return None
-        marks = ",".join("?" for _ in statuses)
-        with self._connect() as db:
-            row = db.execute(
-                f"SELECT * FROM inbox WHERE user_id = ? AND topic = ? "
-                f"AND status IN ({marks}) ORDER BY id DESC LIMIT 1",
-                (int(user_id), topic, *statuses)).fetchone()
-        return dict(row) if row else None
-
-    def add_inbox(self, user_id: int, **fields: Any) -> int:
-        fields = {**fields, "user_id": int(user_id), "created_at": now()}
-        names = ", ".join(fields)
-        marks = ", ".join("?" for _ in fields)
-        with self._connect() as db:
-            return db.execute(f"INSERT INTO inbox ({names}) VALUES ({marks})",
-                              tuple(fields.values())).lastrowid
-
-    _INBOX_FIELDS = {"received_at", "sender", "subject", "snippet", "status",
-                     "reason", "guess", "replies", "task_id", "decided_at"}
-
-    def update_inbox(self, item_id: int, **fields: Any) -> None:
-        bad = set(fields) - self._INBOX_FIELDS
-        if bad:
-            raise ValueError(f"not inbox fields: {sorted(bad)}")
-        if not fields:
-            return
-        sets = ", ".join(f"{name} = ?" for name in fields)
-        with self._connect() as db:
-            db.execute(f"UPDATE inbox SET {sets} WHERE id = ?",
-                       (*fields.values(), int(item_id)))
-
-    def forget_old_inbox(self, before: str) -> None:
-        """Emails that needed nothing go; those handed out keep only their line."""
-        with self._connect() as db:
-            if not db.execute("SELECT 1 FROM inbox WHERE created_at < ? AND "
-                              "(status IN ('no_action', 'dismissed') OR snippet <> '') "
-                              "LIMIT 1", (before,)).fetchone():
-                return
-            db.execute("DELETE FROM inbox WHERE created_at < ? AND "
-                       "status IN ('no_action', 'dismissed')", (before,))
-            db.execute("UPDATE inbox SET snippet = '' WHERE created_at < ? "
-                       "AND snippet <> ''", (before,))
 
     # -- work coming ---------------------------------------------------------
     def planned_work(self) -> List[Dict[str, Any]]:
