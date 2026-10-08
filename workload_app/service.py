@@ -46,6 +46,15 @@ HOLIDAYS_AHEAD_DAYS = 400
 HOLIDAY_SETTING = "holiday_calendar"
 
 
+#: Which person in the unit the signed-in manager is ("this is me"), one per
+#: account.  Apart from the email inbox's own address (``inbox_me:``).
+ME_PREFIX = "team_me:"
+
+
+def me_key(user_id: int) -> str:
+    return f"{ME_PREFIX}{int(user_id)}"
+
+
 class ApiError(Exception):
     def __init__(self, status: int, message: str, errors: Optional[List[str]] = None):
         super().__init__(message)
@@ -256,6 +265,22 @@ class WorkloadService:
                 "engineers": wb.team(),
                 "years": wb.availability_years(),
             }
+
+    def team_me(self, user_id: int) -> Dict[str, Any]:
+        """Which of the unit's people the signed-in manager is, if they said."""
+        with self._lock:
+            me = self.store.setting(me_key(user_id)) or ""
+            known = {p["short_name"] for p in self.workbook.team()}
+            return {"me": me if me in known else ""}
+
+    def set_team_me(self, user_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            me = " ".join(str(body.get("me") or "").split())
+            if me and me not in {p["short_name"] for p in self.workbook.team()}:
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               f"{me} is not in this unit's team.")
+            self.store.set_setting(me_key(user_id), me or None)
+            return {"me": me}
 
     def add_engineer(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:

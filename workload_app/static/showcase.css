@@ -343,3 +343,4 @@ body.bd-dragging { cursor: grabbing; user-select: none; }
 .idea-body b { display: block; font-size: 14px; }
 .idea-body p { margin: 3px 0 8px; font-size: 13px; color: var(--muted); line-height: 1.45; }
 .idea-none { padding: 12px 14px; border-radius: 12px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.pc-you { margin-left: 6px; font-size: 11px; vertical-align: middle; }
