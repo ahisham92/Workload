@@ -34,7 +34,8 @@ async function loadGrowth(force = false) {
     grow.data = await api(`/api/growth${q}`);
     grow.quarter = grow.data.quarter;
   } catch (error) {
-    setChildren($('#growth-body'), el('div', { class: 'msg msg-bad' }, error.message));
+    setChildren($('#growth-body'), el('div', { class: 'msg msg-bad' }, error.message, ' ',
+      el('button', { class: 'btn btn-sm', type: 'button', onclick: () => loadGrowth(true) }, 'Try again')));
     return;
   } finally {
     grow.busy = false;

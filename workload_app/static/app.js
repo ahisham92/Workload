@@ -140,12 +140,29 @@ async function api(path, { quiet = false, ...options } = {}) {
   const done = quiet ? () => {} : voyage.trip(voyage.labelFor(path, options.method));
   let response;
   let payload = {};
+  const reading = !options.method || options.method === 'GET';
   try {
-    response = await fetch(BASE + path, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    // A read that never got an answer (the host restarting a worker, a
+    // dropped connection) is asked again, twice, before it is reported.
+    // Writes are never repeated: one that was lost may still have landed.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await fetch(BASE + path, {
+          headers: { 'Content-Type': 'application/json' },
+          ...options,
+          body: options.body ? JSON.stringify(options.body) : undefined,
+        });
+        break;
+      } catch (error) {
+        if (!reading || attempt >= 2) {
+          const lost = new Error('The server did not answer. Check the connection and try again.');
+          lost.errors = [lost.message];
+          lost.network = true;
+          throw lost;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
     try { payload = await response.json(); } catch { /* empty body */ }
   } finally {
     done();
