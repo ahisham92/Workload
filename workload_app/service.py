@@ -30,6 +30,7 @@ from . import (calendar_, checkins as checkins_module, config as cfg, daily, der
 from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .model import ValidationError, iso, today as _model_today
+from . import emails as emails_module
 from . import unit as unit_module
 from . import weekly as weekly_module
 from .unit import Unit, outside_message
@@ -1395,7 +1396,9 @@ class WorkloadService:
                 away=(inputs["config"].get("away") or {}).get(person, ()))
             task = wb.save_task({
                 "name": request["title"],
-                "definition": f"Came in {now:%a %d %b %H:%M}.",
+                "definition": " ".join(filter(None, [
+                    f"Came in {now:%a %d %b %H:%M}.",
+                    " ".join(str(body.get("note") or "").split())[:300]])),
                 "project_number": request["project_number"],
                 "assignees": [person],
                 "required_hours": request["hours"],
@@ -1422,6 +1425,143 @@ class WorkloadService:
             data["status"] = cfg.TASK_DONE_STATUS
             saved = wb.save_task(data, task_id=task_id)
             return {"task": saved, "save": self._commit()}
+
+    # -- emails in, as draft tasks ---------------------------------------
+    def inbox(self, user_id: int) -> Dict[str, Any]:
+        """One senior's emails: drafts to hand out, and what needed nothing."""
+        with self._lock:
+            store = self.store
+            store.forget_old_inbox((_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
+                days=emails_module.KEEP_DAYS)).isoformat(timespec="seconds"))
+            items = emails_module.sorted_items(store.inbox(user_id))
+            by = {status: [i for i in items if i["status"] == status]
+                  for status in emails_module.STATUSES}
+            return {
+                "drafts": by[emails_module.STATUS_DRAFT],
+                "no_action": by[emails_module.STATUS_NO_ACTION][:50],
+                "assigned": by[emails_module.STATUS_ASSIGNED][:20],
+                "dismissed": by[emails_module.STATUS_DISMISSED][:20],
+                "quiet": emails_module.read_quiet(
+                    store.setting(emails_module.quiet_key(user_id))),
+                "me": store.setting(emails_module.me_key(user_id)) or "",
+                "keep_days": emails_module.KEEP_DAYS,
+            }
+
+    def take_email(self, user_id: int, body: Dict[str, Any], *,
+                   pasted: bool = False) -> Dict[str, Any]:
+        """One email in: a draft, a reply joining one, or no action."""
+        with self._lock:
+            if self.read_only:
+                raise ApiError(HTTPStatus.FORBIDDEN, "This unit is not yours to change.")
+            store = self.store
+            email = emails_module.clean(
+                emails_module.from_paste(body.get("text")) if pasted else body)
+            if not email["me"]:
+                email["me"] = store.setting(emails_module.me_key(user_id)) or ""
+            if store.inbox_by_key(user_id, email["message_key"]):
+                return {"status": "already", "added": False}
+            topic = emails_module.topic(email["subject"])
+            open_draft = store.inbox_by_topic(user_id, topic, [emails_module.STATUS_DRAFT])
+            if open_draft and not pasted:
+                # A reply in a conversation that is already a draft: one draft,
+                # with the newest words.
+                store.update_inbox(open_draft["id"], snippet=email["snippet"],
+                                   received_at=email["received_at"],
+                                   replies=int(open_draft["replies"] or 0) + 1)
+                store.add_inbox(user_id, message_key=email["message_key"], topic=topic,
+                                received_at=email["received_at"], sender=email["sender"],
+                                subject=email["subject"], snippet="",
+                                status=emails_module.STATUS_NO_ACTION,
+                                reason="A reply in a conversation that is already a draft.")
+                return {"status": emails_module.STATUS_DRAFT, "id": open_draft["id"],
+                        "added": False, "joined": True}
+            wb = self.workbook
+            reason = None if pasted else emails_module.judge(
+                email, quiet=emails_module.read_quiet(
+                    store.setting(emails_module.quiet_key(user_id))))
+            if reason is None and not pasted:
+                handed = store.inbox_by_topic(user_id, topic, [emails_module.STATUS_ASSIGNED])
+                task = next((t for t in wb.task_records()
+                             if handed and t.id == handed["task_id"]), None)
+                if task is not None and not task.done:
+                    who = (task.assignees or [""])[0]
+                    reason = (f"Already a task: {task.name}"
+                              + (f", with {who}" if who else "") + ".")
+            projects = {p.number: p.name for p in wb.projects()}
+            guess = emails_module.guess(email, projects=projects, today=_today())
+            status = emails_module.STATUS_NO_ACTION if reason else emails_module.STATUS_DRAFT
+            new_id = store.add_inbox(
+                user_id, message_key=email["message_key"], topic=topic,
+                received_at=email["received_at"], sender=email["sender"],
+                subject=email["subject"], snippet=email["snippet"], status=status,
+                reason=reason or "", guess=json.dumps(guess))
+            return {"status": status, "id": new_id, "added": True, "reason": reason or ""}
+
+    def _email(self, user_id: int, item_id: int) -> Dict[str, Any]:
+        item = self.store.inbox_item(user_id, item_id)
+        if item is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is no such email.")
+        return item
+
+    def assign_email(self, user_id: int, item_id: int,
+                     body: Dict[str, Any]) -> Dict[str, Any]:
+        """The senior's pick: the draft becomes a request, given a time slot."""
+        with self._lock:
+            item = self._email(user_id, item_id)
+            if item["status"] == emails_module.STATUS_ASSIGNED:
+                raise ApiError(HTTPStatus.CONFLICT, "That email is already a task.")
+            who = emails_module.sender_address(item["sender"])
+            result = self.add_request({
+                **{k: body.get(k) for k in ("title", "project_number", "hours", "due",
+                                            "role", "person", "now")},
+                "title": body.get("title") or emails_module.title_of(item),
+                "note": f"From an email{f' from {who}' if who else ''}.",
+            })
+            self.store.update_inbox(item_id, status=emails_module.STATUS_ASSIGNED,
+                                    task_id=result["task"]["id"],
+                                    decided_at=_dt.datetime.now().isoformat(timespec="minutes"))
+            return result
+
+    def set_email_status(self, user_id: int, item_id: int, status: str) -> Dict[str, Any]:
+        """Put an email aside as needing nothing, or bring it back as a draft."""
+        with self._lock:
+            item = self._email(user_id, item_id)
+            if status not in (emails_module.STATUS_DRAFT, emails_module.STATUS_DISMISSED):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "A draft, or put aside.")
+            if item["status"] == emails_module.STATUS_ASSIGNED:
+                raise ApiError(HTTPStatus.CONFLICT, "That email is already a task.")
+            self.store.update_inbox(
+                item_id, status=status,
+                reason="" if status == emails_module.STATUS_DRAFT else "You put it aside.",
+                decided_at=_dt.datetime.now().isoformat(timespec="minutes"))
+            return {"id": item_id, "status": status}
+
+    def save_inbox_settings(self, user_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Senders who never need a task, and the senior's own address."""
+        with self._lock:
+            store = self.store
+            quiet = emails_module.read_quiet(store.setting(emails_module.quiet_key(user_id)))
+            for typed in body.get("quiet_add") or []:
+                address = emails_module.sender_address(str(typed))
+                if address and address not in quiet:
+                    quiet.append(address)
+            drop = {emails_module.sender_address(str(t)) for t in body.get("quiet_remove") or []}
+            quiet = [q for q in quiet if q not in drop][:500]
+            store.set_setting(emails_module.quiet_key(user_id), json.dumps(quiet))
+            if "me" in body:
+                me = emails_module.sender_address(str(body.get("me") or ""))
+                if me and "@" not in me:
+                    raise ValidationError(["Give your work email address."])
+                store.set_setting(emails_module.me_key(user_id), me or None)
+            # Drafts from a sender now quiet are put aside with them.
+            if body.get("quiet_add"):
+                for item in store.inbox(user_id):
+                    if item["status"] == emails_module.STATUS_DRAFT and \
+                            emails_module.sender_address(item["sender"]) in quiet:
+                        store.update_inbox(item["id"], status=emails_module.STATUS_NO_ACTION,
+                                           reason="You said emails from this sender "
+                                                  "never need a task.")
+            return self.inbox(user_id)
 
     @_remembered
     def submissions(self) -> Dict[str, Any]:

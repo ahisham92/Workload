@@ -35,7 +35,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import (accounts as accounts_module, export as export_module,
+from . import (accounts as accounts_module, emails, export as export_module,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
@@ -1157,6 +1157,76 @@ class WorkloadApp:
         return {"revoked": self.accounts.revoke_import_key(ctx.user["id"],
                                                            unit["id"])}
 
+    # -- emails in -------------------------------------------------------
+    #
+    # Each senior's own Outlook sends its new emails here (a flow on their
+    # Microsoft 365 account), signed with that senior's inbox key; see
+    # emails.py.  Or the senior pastes one in from the phone.
+
+    def inbox(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {**ctx.service.inbox(ctx.user["id"]),
+                "key": self.accounts.inbox_key_info(ctx.user["id"], unit["id"])}
+
+    def paste_email(self, ctx: Context, query, body) -> Dict[str, Any]:
+        self._open_unit_or_refuse(ctx)
+        result = ctx.service.take_email(ctx.user["id"], body, pasted=True)
+        return {**result, **self.inbox(ctx, query, body)}
+
+    def assign_email(self, ctx: Context, query, body, item_id) -> Dict[str, Any]:
+        self._open_unit_or_refuse(ctx)
+        return ctx.service.assign_email(ctx.user["id"], _int(item_id), body)
+
+    def email_status(self, ctx: Context, query, body, item_id) -> Dict[str, Any]:
+        self._open_unit_or_refuse(ctx)
+        ctx.service.set_email_status(ctx.user["id"], _int(item_id),
+                                     str(body.get("status") or ""))
+        return self.inbox(ctx, query, body)
+
+    def inbox_settings(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {**ctx.service.save_inbox_settings(ctx.user["id"], body),
+                "key": self.accounts.inbox_key_info(ctx.user["id"], unit["id"])}
+
+    def make_inbox_key(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """A new key for this senior's Outlook, and the text its flow sends.
+
+        Shown once: only its digest is kept, so a new key shuts the old out.
+        """
+        unit = self._open_unit_or_refuse(ctx)
+        key = self.accounts.make_inbox_key(ctx.user["id"], unit["id"])
+        return {"unit": unit["name"], "key_value": key,
+                "flow_body": emails.flow_body(key),
+                "key": self.accounts.inbox_key_info(ctx.user["id"], unit["id"])}
+
+    def revoke_inbox_key(self, ctx: Context, query, body) -> Dict[str, Any]:
+        unit = self._open_unit_or_refuse(ctx)
+        return {"revoked": self.accounts.revoke_inbox_key(ctx.user["id"], unit["id"])}
+
+    def email_in(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """One email from a senior's Outlook, signed with their inbox key."""
+        owner = self.accounts.inbox_key_owner(body.get("key"))
+        if owner is None:
+            raise ApiError(HTTPStatus.UNAUTHORIZED,
+                           "That key is not recognised. Make a new one on the "
+                           "Today page, under Emails.")
+        user, unit = owner["user"], owner["unit"]
+        email = {k: v for k, v in body.items() if k != "key"}
+        service = WorkloadService(autosave=self.autosave)
+        try:
+            self._open(service, user["id"], unit["id"])
+            result = service.take_email(user["id"], email)
+        except (ApiError, ValidationError) as error:
+            message = error.message if isinstance(error, ApiError) else str(error)
+            self.accounts.record_inbox(user["id"], unit["id"],
+                                       {"ok": False, "error": message})
+            raise
+        finally:
+            service.close()
+        self.accounts.record_inbox(user["id"], unit["id"], {
+            "ok": True, "status": result["status"]})
+        return {"ok": True, "status": result["status"]}
+
     def nightly_import(self, ctx: Context, query, body) -> Dict[str, Any]:
         owner = self.accounts.import_key_owner(body.get("key"))
         if owner is None:
@@ -1392,6 +1462,14 @@ class WorkloadApp:
              lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
              "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
+            ("POST", "/api/inbox/email", self.email_in, "public"),
+            ("GET", "/api/inbox", self.inbox, "manager"),
+            ("POST", "/api/inbox/paste", self.paste_email, "manager"),
+            ("POST", "/api/inbox/settings", self.inbox_settings, "manager"),
+            ("POST", "/api/inbox/{}/assign", self.assign_email, "manager"),
+            ("POST", "/api/inbox/{}/status", self.email_status, "manager"),
+            ("POST", "/api/inbox-key", self.make_inbox_key, "manager"),
+            ("DELETE", "/api/inbox-key", self.revoke_inbox_key, "manager"),
             ("POST", "/api/requests",
              lambda ctx, q, b: ctx.service.add_request(b), "manager"),
             ("POST", "/api/requests/{}/done",
