@@ -48,7 +48,7 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
 
     about = [
         ("Unit", name),
-        ("Written out", _dt.datetime.now().strftime("%Y-%m-%d %H:%M")),
+        ("Written out", _dt.datetime.now().strftime("%d/%m/%Y %H:%M")),
         ("Hours per man-month", unit.hours_per_man_month()),
         ("Hours per day", unit.hours_per_day()),
         ("Plan year", unit.plan_year()),
@@ -188,6 +188,12 @@ def _cell(ws: Any, value: Any) -> Any:
 
     if isinstance(value, (list, dict, tuple, set)):
         value = str(value)
+    if isinstance(value, _dt.date):
+        # Shown day first, whatever the reader's Excel is set to.
+        cell = WriteOnlyCell(ws, value=value)
+        cell.number_format = ("dd/mm/yyyy hh:mm" if isinstance(value, _dt.datetime)
+                              else "dd/mm/yyyy")
+        return cell
     if not isinstance(value, str):
         return value
     value = ILLEGAL_CHARACTERS_RE.sub("", value)

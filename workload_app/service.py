@@ -779,7 +779,9 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             data = people_module.balance(
-                self.store, monthly_capacity=wb.hours_per_man_month(), year=year)
+                self.store, monthly_capacity=wb.hours_per_man_month(), year=year,
+                today=_today(),
+                work_days=wb.task_settings()["work_days"])
             data["roster"] = self._roster(wb)
             data["available_years"] = metrics.available_years(
                 wb, self._index(wb))

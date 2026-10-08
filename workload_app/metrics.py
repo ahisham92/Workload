@@ -18,7 +18,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import config as cfg
-from .model import Deliverable
+from .model import Deliverable, month_done, today
 from .unit import Unit, fresh_copy
 
 #: Job Type values the Phasing sheet uses to pick up proposal effort.
@@ -334,8 +334,13 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
     )
     totals: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
+    # The month we are in is judged on the working days so far, not on the
+    # whole month, and leave booked ahead is not time worked yet.
+    as_at = wb.as_at() or today()
+    work_days = wb.task_settings()["work_days"]
+
     for row in index.rows:
-        if row["date"] is None:
+        if row["date"] is None or row["date"] > as_at:
             continue
         if year is not None and row["date"].year != year:
             continue
@@ -365,7 +370,7 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
             values = months[name][month]
             month_year = int(month[:4])
             factor = engineer.availability.get(month_year, 1.0)
-            capacity = available * factor
+            capacity = available * factor * month_done(month, as_at, work_days)
             by_month.append({
                 "month": month,
                 "projects": _round(values["projects"]),

@@ -290,7 +290,7 @@ def as_html(report: Mapping[str, Any]) -> str:
     parts.append("<h2>Last week</h2>")
     if last["week"]:
         parts.append(
-            f"<p class='muted'>Week of {e(last['week'])}: the team booked "
+            f"<p class='muted'>Week of {e(_short(_day(last['week'])))}: the team booked "
             f"{_hours(last['hours'])} of the {_hours(last['capacity'])} it had "
             f"({_pct(last['load'])}), with {_hours(last['overtime'])} overtime.</p>")
         parts.append("<table><tr><th>Person</th><th>Booked</th><th>Had</th>"

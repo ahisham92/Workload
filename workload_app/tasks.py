@@ -514,7 +514,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
                 id=identifier,
                 name=f"{name} — submission day {position} of {len(days)}",
                 definition=(
-                    f"Preparation for the {due.isoformat()} submission of "
+                    f"Preparation for the {due:%d/%m/%Y} submission of "
                     f"{name}."
                 ),
                 project_number=str(deliverable.get("project_number") or ""),

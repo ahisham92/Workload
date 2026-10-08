@@ -30,6 +30,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .model import ValidationError
+from .timesheets import month_first as _month_first
 
 #: The template's columns, in order, and what each may be headed in a list
 #: somebody already keeps.
@@ -78,7 +79,7 @@ def _job(text: Any) -> str:
     return re.sub(r"\s+", "", str(text or "")).upper()
 
 
-def _as_date(value: Any) -> Optional[_dt.date]:
+def _as_date(value: Any, month_first: bool = False) -> Optional[_dt.date]:
     if isinstance(value, _dt.datetime):
         return value.date()
     if isinstance(value, _dt.date):
@@ -86,7 +87,10 @@ def _as_date(value: Any) -> Optional[_dt.date]:
     text = str(value or "").strip()
     if not text:
         return None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d %b %Y",
+    # Day first, unless the list is month first; a date that cannot be read
+    # the first way (12/31/2026) is read the other way round.
+    slashed = ("%m/%d/%Y", "%d/%m/%Y") if month_first else ("%d/%m/%Y", "%m/%d/%Y")
+    for fmt in ("%Y-%m-%d", *slashed, "%d-%m-%Y", "%d.%m.%Y", "%d %b %Y",
                 "%d-%b-%Y", "%d-%b-%y", "%d/%m/%y"):
         try:
             return _dt.datetime.strptime(text[:11].strip(), fmt).date()
@@ -128,7 +132,7 @@ def template(deliverables: Sequence[Dict[str, Any]] = ()) -> bytes:
     status.add("F2:F5000")
     for column in ("G", "I"):
         for row in range(2, 2001):
-            sheet[f"{column}{row}"].number_format = "yyyy-mm-dd"
+            sheet[f"{column}{row}"].number_format = "dd/mm/yyyy"
 
     notes = book.create_sheet("How to fill")
     for line in (
@@ -203,16 +207,18 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
         index = columns.get(key)
         return cells[index] if index is not None and index < len(cells) else None
 
+    rows = [cells or () for cells in rows]
+    month_first = _month_first(get(cells, key) for cells in rows
+                               for key in ("issued", "returned"))
     out = []
     for cells in rows:
-        cells = cells or ()
         number = str(get(cells, "number") or "").strip()
         title = str(get(cells, "title") or "").strip()
         job = _job(get(cells, "job_number"))
         if not job or not (number or title):
             continue
         status = str(get(cells, "status") or "").strip()
-        issued = _as_date(get(cells, "issued"))
+        issued = _as_date(get(cells, "issued"), month_first)
         code_raw = str(get(cells, "code") or "").strip().upper()
         code = CODES.get(code_raw[-1:] if code_raw.startswith("CODE") else code_raw[:1])
         out.append({
@@ -224,7 +230,7 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
             "sent": bool(issued or (SENT.search(status) and not NOT_SENT.search(status)))
                     and "supersed" not in status.lower(),
             "code": code if code_raw else None,
-            "returned": _as_date(get(cells, "returned")),
+            "returned": _as_date(get(cells, "returned"), month_first),
             "superseded": "supersed" in status.lower(),
         })
     return out

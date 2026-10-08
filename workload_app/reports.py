@@ -641,9 +641,12 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
             continue
         buckets[f"{date.year:04d}-{date.month:02d}"][row["engineer"]][row["job_number"]] += row["hours"]
 
+    # Reports frozen on a day count that day as done: frozen on 30 September,
+    # September is a finished month. On the live date, today is still going.
+    frozen = wb.as_at() is not None
     out: List[Dict[str, Any]] = []
     for label, first, last in _months_in(period):
-        if last >= as_at:
+        if last > as_at or (last == as_at and not frozen):
             continue                      # not finished yet, so not scored
         per: Dict[str, Dict[str, Any]] = {}
         for name in engineers:

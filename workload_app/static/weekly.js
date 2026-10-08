@@ -15,7 +15,7 @@ const WK_TONE_LABEL = { bad: 'First', warn: 'This week', ok: 'When you can' };
 
 function wkDay(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
   if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, opts);
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
 }
 
 const wkHours = (value) => `${fmt.hours(value)} h`;
@@ -53,7 +53,7 @@ function renderWeekly() {
       + 'Upload the latest exports to bring the report up to date.') : null,
     el('section', { class: 'panel wk-head' },
       el('div', { class: 'wk-week' }, `${r.unit} · ${r.title}`),
-      el('p', { class: 'wk-headline' }, r.headline)),
+      el('p', { class: 'wk-headline' }, dayFirstText(r.headline))),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('div', {},
         el('h3', {}, 'What to do this week'),
@@ -61,7 +61,7 @@ function renderWeekly() {
           + 'tap Go to open the tab where you act on it.'))),
       r.todo.length ? el('ol', { class: 'wk-todo' }, r.todo.map((t) => el('li', { class: `wk-${t.tone}` },
         el('span', { class: 'wk-tag' }, WK_TONE_LABEL[t.tone] || ''),
-        el('span', { class: 'wk-text' }, t.text),
+        el('span', { class: 'wk-text' }, dayFirstText(t.text)),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => switchView(t.view) }, 'Go'))))
         : el('div', { class: 'empty' }, 'Nothing needs you this week: the plan holds.'),
       r.more ? el('p', { class: 'muted small' },
@@ -85,7 +85,7 @@ function renderWeekly() {
         el('p', { class: 'muted' }, 'From the staffing forecast: where the work coming needs more people '
           + 'than the team has. Ask early; the date to ask by is in each line.'))),
       r.staffing.map((s) => el('div', { class: `msg ${s.severity === 'now' ? 'msg-bad' : 'msg-warn'}` },
-        el('b', {}, s.title), el('div', { class: 'small' }, s.detail))),
+        el('b', {}, s.title), el('div', { class: 'small' }, dayFirstText(s.detail)))),
       r.unstaffed.length ? el('p', {}, el('b', {}, 'Nobody booked on: '),
         r.unstaffed.map((p) => p.name).join(', '), '.') : null) : null);
 }

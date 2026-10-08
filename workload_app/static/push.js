@@ -25,7 +25,7 @@
 
   function day(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
     if (!iso) return '';
-    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, opts);
+    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', opts);
   }
 
   function keyBytes(text) {

@@ -43,13 +43,13 @@ function loadTone(load) {
 function dayName(iso) {
   if (!iso) return '—';
   const d = new Date(`${iso}T00:00:00`);
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
 function shortDate(iso) {
   if (!iso) return '—';
   const d = new Date(`${iso}T00:00:00`);
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 /* ------------------------------------------------------------ loading */
@@ -256,10 +256,10 @@ function renderNeeds(needs) {
           class: `finding finding-${level[a.severity] || 'warn'}`,
         },
         el('div', { class: 'card-head' },
-          el('b', {}, a.title),
+          el('b', {}, dayFirstText(a.title)),
           el('span', { class: `pill pill-${level[a.severity] === 'ok' ? 'ok' : level[a.severity]}` },
             label[a.severity] || a.severity)),
-        el('p', { class: 'muted' }, a.detail),
+        el('p', { class: 'muted' }, dayFirstText(a.detail)),
         a.kind === 'need' ? needWeeks(needs, a) : null)))
       : el('p', { class: 'muted' }, 'Nobody to forecast for yet.'),
     needsFootnote(needs));
@@ -715,7 +715,7 @@ async function overviewNeeds() {
     el('div', { class: 'findings' },
       [...asks, ...room].slice(0, 4).map((a) => el('div', {
         class: `finding finding-${a.severity === 'now' ? 'bad' : a.severity === 'soon' ? 'warn' : 'ok'}`,
-      }, el('b', {}, a.title), el('p', { class: 'muted' }, a.detail))),
+      }, el('b', {}, dayFirstText(a.title)), el('p', { class: 'muted' }, dayFirstText(a.detail)))),
       d.known ? el('div', { class: 'finding' },
         el('b', {}, `Drawings: ${fmt.int(Math.round(d.done))} of ${fmt.int(d.total)} done`),
         el('p', { class: 'muted' }, `${fmt.int(Math.round(d.left))} left`
@@ -1450,7 +1450,7 @@ function renderSubmissions() {
                 el('td', { class: 'wide' }, el('span', { class: 'code' }, `${item.project_number} `), item.name,
                   item.prepared ? el('span', { class: 'pill pill-ok', style: 'margin-left:6px' }, 'run-up planned') : null),
                 el('td', {}, el('span', { class: `pill ${pill}`,
-                  title: item.basis === 'overdue' ? `The register said ${item.register_date}` : '' }, text),
+                  title: item.basis === 'overdue' ? `The register said ${fmt.date(item.register_date)}` : '' }, text),
                   item.step_name ? el('span', { class: 'muted small' }, ` ${item.step_name}`) : null),
                 el('td', { class: 'num' }, item.hours_left === null ? '—' : fmt.hours(item.hours_left)),
                 el('td', { class: 'num' }, item.list ? `${fmt.int(item.list.issued)} of ${fmt.int(item.list.total)} out`

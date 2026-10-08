@@ -21,7 +21,7 @@ const LEVEL_LABEL = { now: 'Ask now', soon: 'This week', note: 'Good to know' };
 
 function ciDay(iso, opts = { weekday: 'short', day: 'numeric' }) {
   if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, opts);
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
 }
 
 function ciHours(value) {
@@ -357,7 +357,7 @@ function personCard(p, data) {
     p.checkpoints.length
       ? el('ul', { class: 'ci-points' }, ...p.checkpoints.map((c) => el('li', { class: `ci-point ci-${c.level}` },
         el('span', { class: `pill pill-${LEVEL_TONE[c.level]}` }, LEVEL_LABEL[c.level]),
-        el('span', {}, c.text), seenButton(c))))
+        el('span', {}, dayFirstText(c.text)), seenButton(c))))
       : el('p', { class: 'muted ci-none' }, 'Nothing to raise. A quick hello will do.'));
 }
 
