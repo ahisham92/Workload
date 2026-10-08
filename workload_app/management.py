@@ -14,7 +14,12 @@ So it is reserved, from what the app already knows about who leads whom:
 * **the team meeting** -- once a week, on the first working day, at the start
   of the day, longer for a bigger team;
 * **a one-to-one with each person** -- every second week, short, at the end of
-  a day, spread over the fortnight so no day is all one-to-ones.
+  a day, spread over the fortnight so no day is all one-to-ones;
+* **development time for everybody** -- not every day but every week, one
+  block at the end of the last working day of the week, longer for a junior,
+  with the person's goals for the quarter as what to work on (see ``growth``).
+  Like the meetings, it comes out of the hours free for project work and
+  requests are never booked over it.
 
 Every meeting carries its agenda, built from the same checkpoints the
 Check-ins tab raises.  Nothing is typed and nothing is stored.
@@ -102,15 +107,39 @@ def _working(first: _dt.date, days: int, config: Dict[str, Any]) -> List[_dt.dat
             if task_sheet.is_working_day(d, config)]
 
 
+#: Hours a week each person keeps for their own development, by grade.
+DEVELOPMENT_HOURS = {
+    "junior": 3.0,
+    "drafter": 2.0,
+    "bim": 2.0,
+    "engineer": 2.0,
+    "senior": 2.0,
+    MANAGER_GRADE: 2.0,
+}
+#: For somebody with no grade yet.
+DEVELOPMENT_HOURS_DEFAULT = 2.0
+
+
+def development_hours(grade: Optional[str]) -> float:
+    """Hours a week of development time for somebody of ``grade``."""
+    return DEVELOPMENT_HOURS.get(grade or "", DEVELOPMENT_HOURS_DEFAULT)
+
+
 class Plan:
     """Who leads whom, and what that puts in each day."""
 
     def __init__(self, roster: Sequence[Dict[str, Any]],
-                 teams: Sequence[Dict[str, Any]], config: Dict[str, Any]):
+                 teams: Sequence[Dict[str, Any]], config: Dict[str, Any],
+                 goals: Optional[Mapping[str, Sequence[str]]] = None):
         self.config = config
         self.led = leaders(roster, teams)
         self.support = {name: support_hours(led, config)
                         for name, led in self.led.items()}
+        #: Each active person's weekly development hours.
+        self.development = {p["name"]: development_hours(p.get("grade"))
+                            for p in roster if p.get("active", True)}
+        #: What each person works on in it: their goals for the quarter.
+        self.goals = dict(goals or {})
 
     def hours_a_day(self) -> Dict[str, float]:
         """What leading people takes from each leader's day, on average:
@@ -122,6 +151,63 @@ class Plan:
             weekly = (_team_meeting_minutes(led)
                       + len(led) * ONE_TO_ONE_MINUTES / ONE_TO_ONE_EVERY_WEEKS) / 60
             out[name] = round(min(a_day, self.support[name] + weekly / days), 2)
+        return out
+
+    def taken_a_day(self) -> Dict[str, float]:
+        """Everything that is not project work, on average a day: leading
+        people, and everybody's own development time."""
+        a_day = task_sheet.hours_per_day(self.config)
+        days = max(1, len(_working(_dt.date(2024, 1, 1), 7, self.config)))
+        out = dict(self.hours_a_day())
+        for name, hours in self.development.items():
+            out[name] = round(min(a_day, out.get(name, 0.0) + hours / days), 2)
+        return out
+
+    def development_day(self, name: str, day: _dt.date) -> Optional[_dt.date]:
+        """The day of ``day``'s week that holds ``name``'s development time:
+        the last working day of the week they are in."""
+        week = _working(_week_start(day, self.config), 7, self.config)
+        here = [d for d in week if not calendar_.is_away(self.config, name, d)]
+        return here[-1] if here else None
+
+    def development_on(self, day: _dt.date,
+                       meetings: Optional[Sequence[Dict[str, Any]]] = None
+                       ) -> List[Dict[str, Any]]:
+        """Each person's development block, on the day it falls: at the end of
+        the day, before any one-to-one they have there."""
+        config = self.config
+        if not task_sheet.is_working_day(day, config):
+            return []
+        if meetings is None:
+            meetings = self.meetings_on(day)
+        start = _dt.datetime.combine(day, _clock(config["day_start"]))
+        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        out = []
+        for name in sorted(self.development, key=str.lower):
+            hours = self.development[name]
+            if not hours or self.development_day(name, day) != day:
+                continue
+            length = _dt.timedelta(minutes=round(hours * 60))
+            taken = sorted(((m["start"], m["end"]) for m in meetings
+                            if name == m["leader"] or name in m["with"]),
+                           key=lambda pair: pair[1], reverse=True)
+            end = close
+            moved = True
+            while moved:
+                moved = False
+                for first, last in taken:
+                    if first < end and last > end - length:
+                        end = first
+                        moved = True
+            begin = max(start, end - length)
+            if end <= begin:
+                continue
+            goals = list(self.goals.get(name, ()))
+            out.append({"kind": "development", "leader": name, "with": [],
+                        "start": begin, "end": end, "title": "Development time",
+                        "agenda": ([f"Goal: {g}" for g in goals] if goals else
+                                   ["No goals set for this quarter yet: ask your "
+                                    "manager to set them on Growth."])})
         return out
 
     def meetings_on(self, day: _dt.date) -> List[Dict[str, Any]]:
@@ -188,6 +274,7 @@ class Plan:
         if agendas is not None:
             for meeting in meetings:
                 meeting["agenda"] = agendas(meeting, day)
+        meetings = meetings + self.development_on(day, meetings)
         return {"meetings": meetings, "support": self.support,
                 "led": {name: len(led) for name, led in self.led.items()}}
 
@@ -196,7 +283,8 @@ class Plan:
         requests around them."""
         out = []
         for day in (first + _dt.timedelta(days=i) for i in range(days)):
-            for meeting in self.meetings_on(day):
+            meetings = self.meetings_on(day)
+            for meeting in meetings + self.development_on(day, meetings):
                 if name == meeting["leader"] or name in meeting["with"]:
                     out.append((meeting["start"], meeting["end"]))
         return out

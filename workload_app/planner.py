@@ -320,8 +320,9 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             management: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
     """Who has what over the next few working days, before and after ``moves``.
 
-    ``management`` is the hours a day leading people takes from each leader
-    (``management.Plan.hours_a_day``); it is not there for project work.
+    ``management`` is the hours a day that are not project work for each
+    person -- leading people and their own development time
+    (``management.Plan.taken_a_day``).
     """
     management = management or {}
     today = today or _dt.date.today()

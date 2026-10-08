@@ -14,7 +14,7 @@ const myDay = { unit: null, day: null, sheet: null, date: null, week: null, open
 
 const MD_KIND = {
   task: 'Task', submission: 'Submission', meeting: 'Meeting', request: 'Request',
-  management: 'Team', work: 'Project work', done: 'Done',
+  management: 'Team', development: 'Development', work: 'Project work', done: 'Done',
 };
 
 function mdQuery(extra = {}) {
@@ -127,7 +127,23 @@ function renderMyDay() {
         onclick: () => { myDay.open = 'help'; renderMyDay(); } },
       'Need help with something else'));
 
-  setChildren($('#myday'), head, list, later, help);
+  setChildren($('#myday'), head, list, later, myGoals(day.goals), help);
+}
+
+/* Their own goals for the quarter, set by the manager; worked on in the
+   weekly development time. Read only here. */
+function myGoals(goals) {
+  if (!goals) return null;
+  const tone = { met: 'pill-ok', partly: 'pill-warn', not_met: 'pill-bad' };
+  return el('div', { class: 'md-later md-goals' },
+    el('h4', {}, `My goals · ${goals.label}`),
+    goals.items.length
+      ? el('ul', { class: 'md-goal-list' }, ...goals.items.map((g) => el('li', {},
+        el('span', {}, g.goal),
+        g.result ? el('span', { class: `pill ${tone[g.result] || ''}`, style: 'margin-left:6px' }, g.result_label) : null,
+        g.measure ? el('div', { class: 'muted' }, `How we will know: ${g.measure}`) : null)))
+      : el('p', { class: 'muted' }, 'No goals for this quarter yet. Ask your manager to set them.'),
+    el('p', { class: 'muted' }, 'Your development time each week is kept for these.'));
 }
 
 function blockItem(block) {

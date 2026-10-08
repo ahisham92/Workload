@@ -3,8 +3,9 @@
 Nobody types a plan.  A person's day is laid out from what the app already
 knows, in this order:
 
-1. **requests** that came in, at the time they were given, and the
-   **meetings** of anybody who leads people (see ``management``);
+1. **requests** that came in, at the time they were given, the
+   **meetings** of anybody who leads people and everybody's weekly
+   **development time** (see ``management``);
 2. for somebody who leads people, their daily **team support**;
 3. **tasks** on the list for that day -- the submission run-ups the
    submissions plan put there, meetings, anything else dated -- a task over
@@ -107,7 +108,10 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                 if name != meeting["leader"] and name not in meeting["with"]:
                     continue
                 fixed.append({"start": meeting["start"], "end": meeting["end"],
-                              "kind": "meeting", "title": _meeting_title(meeting, name),
+                              "kind": ("development"
+                                       if meeting["kind"] == "development"
+                                       else "meeting"),
+                              "title": _meeting_title(meeting, name),
                               "project": "", "task_id": None, "done": False,
                               "agenda": list(meeting.get("agenda") or ())})
             if support.get(name):
@@ -177,6 +181,8 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
 def _meeting_title(meeting: Dict[str, Any], name: str) -> str:
     """The meeting as the person reading their own day would put it."""
     leader = meeting["leader"]
+    if meeting["kind"] == "development":
+        return "Development time: your goals for the quarter"
     if meeting["kind"] == "one_to_one":
         other = meeting["with"][0] if name == leader else leader
         return f"One-to-one with {other}"

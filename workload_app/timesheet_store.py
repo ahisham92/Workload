@@ -225,6 +225,21 @@ CREATE TABLE IF NOT EXISTS member_marks (
     cleared_by  TEXT NOT NULL DEFAULT ''   -- undone | lead | done
 );
 CREATE INDEX IF NOT EXISTS member_marks_person ON member_marks(person, cleared_at);
+
+-- Each person's development goals for a quarter ("2026-Q4"): set by the
+-- manager at the start, marked met, partly or not met at the review.
+CREATE TABLE IF NOT EXISTS development_goals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    person      TEXT NOT NULL,
+    quarter     TEXT NOT NULL,
+    goal        TEXT NOT NULL,
+    measure     TEXT NOT NULL DEFAULT '',  -- how we will know it is done
+    result      TEXT NOT NULL DEFAULT '',  -- '' | met | partly | not_met
+    review_note TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    reviewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS development_goals_quarter ON development_goals(quarter, person);
 """ + "".join(f"""
 -- Counts the writes to the timesheet rows alone, whoever makes them, so the
 -- rows read before can be kept through every other kind of change.
@@ -527,6 +542,8 @@ class TimesheetStore:
                        (new, old))
             db.execute("UPDATE member_marks SET person = ? WHERE person = ?",
                        (new, old))
+            db.execute("UPDATE development_goals SET person = ? WHERE person = ?",
+                       (new, old))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
                        "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
@@ -674,6 +691,51 @@ class TimesheetStore:
             return db.execute(
                 "UPDATE member_marks SET cleared_at = ?, cleared_by = ? "
                 "WHERE id = ? AND cleared_at IS NULL", (now(), by, int(mark_id))).rowcount
+
+    # -- development goals -----------------------------------------------------
+    def goals(self, *, quarter: Optional[str] = None,
+              person: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql, args = "SELECT * FROM development_goals WHERE 1 = 1", []
+        if quarter is not None:
+            sql += " AND quarter = ?"
+            args.append(quarter)
+        if person is not None:
+            sql += " AND person = ?"
+            args.append(person)
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(sql + " ORDER BY quarter, person, id",
+                                                    args)]
+
+    def goal(self, goal_id: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM development_goals WHERE id = ?",
+                             (int(goal_id),)).fetchone()
+            return dict(row) if row else None
+
+    def add_goal(self, person: str, quarter: str, goal: str, measure: str = "") -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO development_goals (person, quarter, goal, measure, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (person, quarter, goal, measure, now())).lastrowid
+
+    def edit_goal(self, goal_id: int, goal: str, measure: str) -> int:
+        with self._connect() as db:
+            return db.execute(
+                "UPDATE development_goals SET goal = ?, measure = ? WHERE id = ?",
+                (goal, measure, int(goal_id))).rowcount
+
+    def review_goal(self, goal_id: int, result: str, note: str) -> int:
+        with self._connect() as db:
+            return db.execute(
+                "UPDATE development_goals SET result = ?, review_note = ?, "
+                "reviewed_at = ? WHERE id = ?",
+                (result, note, now() if result else None, int(goal_id))).rowcount
+
+    def remove_goal(self, goal_id: int) -> int:
+        with self._connect() as db:
+            return db.execute("DELETE FROM development_goals WHERE id = ?",
+                              (int(goal_id),)).rowcount
 
     # -- the drawing list ------------------------------------------------------
     def drawing_list(self) -> Dict[int, Dict[str, Any]]:

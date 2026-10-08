@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
-               management as management_module,
+               growth as growth_module, management as management_module,
                drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
                incoming, intake, metrics, myday, needs as needs_module,
@@ -1009,8 +1009,11 @@ class WorkloadService:
         config, absences, leave, public, choice = self._calendar(
             wb, rows, roster["people"], roster["teams"])
         return {
-            "management": management_module.Plan(roster["people"], roster["teams"],
-                                                 config),
+            "management": management_module.Plan(
+                roster["people"], roster["teams"], config,
+                goals=growth_module.goals_by_person(
+                    self.store.goals(quarter=growth_module.quarter_of(_today())),
+                    growth_module.quarter_of(_today()))),
             "rows": rows,
             "tasks": wb.task_records(),
             "roster": roster["people"],
@@ -1037,7 +1040,7 @@ class WorkloadService:
             config=inputs["config"], project_names=inputs["project_names"],
             drawings_left=drawings_module.left_by_project(inputs["drawings"]),
             saved=self.store.plan_moves(), days=days, today=_today(),
-            management=inputs["management"].hours_a_day())
+            management=inputs["management"].taken_a_day())
         suggested: List[Dict[str, Any]] = []
         if suggest:
             suggested = planner_module.suggest(moves=moves, **common)
@@ -1136,7 +1139,7 @@ class WorkloadService:
                           for name in t.assignees],
                 planned=self.store.planned_work(),
                 team_names={t["id"]: t["name"] for t in self.store.teams()},
-                management=inputs["management"].hours_a_day())
+                management=inputs["management"].taken_a_day())
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",
@@ -1410,7 +1413,7 @@ class WorkloadService:
                     project_names=inputs["project_names"],
                     drawings_left=drawings_module.left_by_project(inputs["drawings"]),
                     saved=self.store.plan_moves(), today=today,
-                    management=inputs["management"].hours_a_day(),
+                    management=inputs["management"].taken_a_day(),
                     days=max(1, len(task_sheet.working_days(
                         today, max(request["due"], today), inputs["config"]))))
                 history: Dict[str, set] = {}
@@ -1506,6 +1509,11 @@ class WorkloadService:
             page["next_day"] = following.isoformat()
             page["engineer"] = engineer
             page["known"] = engineer in wb.engineer_names()
+            quarter = growth_module.quarter_of(today)
+            page["goals"] = {
+                "quarter": quarter, "label": growth_module.label(quarter),
+                "items": [growth_module.goal_view(g) for g in
+                          self.store.goals(quarter=quarter, person=engineer)]}
             return page
 
     @_remembered
@@ -1644,6 +1652,101 @@ class WorkloadService:
                 raise ApiError(HTTPStatus.NOT_FOUND, "There is no such ask.")
             self.store.clear_mark(mark_id, "lead")
             return {"seen": mark_id, "save": self._commit()}
+
+    # -- developing people: goals each quarter and KPIs by grade ----------
+    @_remembered
+    def growth(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Development time, each person's goals for the quarter, and KPIs
+        weighed and ranked by grade."""
+        with self._lock:
+            wb = self.workbook
+            today = _today()
+            try:
+                quarter = growth_module.clean_quarter(
+                    (query.get("quarter") or [""])[0], today)
+            except growth_module.GrowthError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.errors[0])
+            inputs = self._planning(wb)
+            plan = inputs["management"]
+            first, last = growth_module.quarter_bounds(quarter)
+            delivery = self._delivery_by_grade(wb, inputs["roster"], first)
+            delivery_from = quarter
+            if not delivery:
+                # Early in a quarter nothing is booked yet: the quarter before
+                # stands in until it is, and the page says so.
+                delivery_from = growth_module.shift(quarter, -1)
+                delivery = self._delivery_by_grade(
+                    wb, inputs["roster"], growth_module.quarter_bounds(delivery_from)[0])
+            asks = [m for m in self.store.marks(since=first.isoformat())
+                    if m["created_at"][:10] <= last.isoformat()]
+            day = min(max(today, first), last)
+            return growth_module.build(
+                quarter=quarter, today=today, roster=inputs["roster"],
+                led=plan.led, delivery=delivery, goals=self.store.goals(),
+                asks=asks, development=plan.development, delivery_from=delivery_from,
+                development_day={name: iso(plan.development_day(name, day))
+                                 for name in plan.development})
+
+    def _delivery_by_grade(self, wb, roster: Sequence[Dict[str, Any]],
+                           first: _dt.date) -> Dict[str, Dict[str, float]]:
+        """The Reports scorecard for the quarter, run within each grade, so
+        nobody is set against a different grade."""
+        number = (first.month - 1) // 3 + 1
+        try:
+            report = reports.build(wb, kind="quarter", year=first.year,
+                                   quarter=f"Q{number}", index=self._index(wb))
+        except (ValueError, KeyError):
+            return {}
+        per = report.per_engineer
+        factors = wb.scorecard_factors()
+        by_grade: Dict[str, List[str]] = {}
+        for person in roster:
+            name = person["name"]
+            if person.get("active", True) and (per.get(name) or {}).get("actual_mm"):
+                by_grade.setdefault(person.get("grade") or "", []).append(name)
+        return {grade: reports._scorecard(per, names, factors)["totals"]
+                for grade, names in by_grade.items()}
+
+    def add_goal(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            names = [p["name"] for p in people_module.roster(
+                self.store, known=self.workbook.ts_sheets())["people"]]
+            goal = growth_module.clean_goal(body, people=names, today=_today(),
+                                            existing=self.store.goals())
+            saved = self._commit()
+            return {"id": self.store.add_goal(**goal), **goal, "save": saved}
+
+    def _goal(self, goal_id: int) -> Dict[str, Any]:
+        goal = self.store.goal(goal_id)
+        if goal is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is no such goal.")
+        return goal
+
+    def edit_goal(self, goal_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            goal = self._goal(goal_id)
+            text = growth_module._text(body.get("goal", goal["goal"]))
+            if not text:
+                raise growth_module.GrowthError(["Write the goal."])
+            saved = self._commit()
+            self.store.edit_goal(goal_id, text,
+                                 growth_module._text(body.get("measure", goal["measure"])))
+            return {"id": goal_id, "save": saved}
+
+    def review_goal(self, goal_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            self._goal(goal_id)
+            review = growth_module.clean_review(body)
+            saved = self._commit()
+            self.store.review_goal(goal_id, review["result"], review["note"])
+            return {"id": goal_id, **review, "save": saved}
+
+    def remove_goal(self, goal_id: int) -> Dict[str, Any]:
+        with self._lock:
+            self._goal(goal_id)
+            saved = self._commit()
+            self.store.remove_goal(goal_id)
+            return {"removed": goal_id, "save": saved}
 
     # -- emails in, as draft tasks ---------------------------------------
     def inbox(self, user_id: int) -> Dict[str, Any]:
