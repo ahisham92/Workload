@@ -10,11 +10,13 @@
  */
 'use strict';
 
-const myDay = { unit: null, day: null, sheet: null, date: null, week: null, open: null };
+const myDay = { unit: null, day: null, sheet: null, date: null, week: null, open: null,
+  calendar: null };
 
 const MD_KIND = {
   task: 'Task', submission: 'Submission', meeting: 'Meeting', request: 'Request',
   management: 'Team', development: 'Development', work: 'Project work', done: 'Done',
+  outlook: 'Outlook',
 };
 
 function mdQuery(extra = {}) {
@@ -51,6 +53,7 @@ async function loadMyDay(unit) {
   renderMyDay();
   renderTimeOff();
   renderSheet();
+  loadMyCalendar();
 }
 
 async function refreshDay() {
@@ -154,7 +157,8 @@ function blockItem(block) {
   const time = block.start ? `${block.start}–${block.end}` : '';
   const project = block.project
     ? el('span', { class: 'md-project', title: block.project_name || '' }, block.project) : null;
-  const sub = [MD_KIND[block.kind] || '', block.kind === 'work' ? '' : (block.project_name || '')]
+  const sub = [MD_KIND[block.source] || MD_KIND[block.kind] || '',
+    block.kind === 'work' ? '' : (block.project_name || '')]
     .filter(Boolean).join(' · ');
 
   let actions = null;
@@ -279,6 +283,71 @@ function renderTimeOff() {
           } }, 'Take back')
           : el('span', { class: 'muted small' }, ' · entered by your manager'))))
       : el('p', { class: 'muted small' }, 'No days off coming up.'));
+}
+
+/* ------------------------------------------------- Outlook meetings */
+
+/** Their own calendar link: read again now and then as the page opens, and
+    the day redrawn when a meeting came or went. */
+async function loadMyCalendar() {
+  try {
+    myDay.calendar = await api(`/api/me/calendar${mdQuery()}`, { quiet: true });
+  } catch (error) {
+    $('#mycalendar').hidden = true;
+    return;
+  }
+  $('#mycalendar').hidden = false;
+  renderMyCalendar();
+  const me = myDay.calendar.people[0];
+  if (me && me.linked) {
+    try {
+      const fresh = await api(`/api/me/calendar/refresh${mdQuery()}`, { method: 'POST', quiet: true });
+      myDay.calendar = fresh;
+      renderMyCalendar();
+      if (fresh.result && fresh.result.changed) await refreshDay();
+    } catch (error) { /* shown next time */ }
+  }
+}
+
+function renderMyCalendar() {
+  const me = (myDay.calendar && myDay.calendar.people[0]) || null;
+  if (!me) return;
+  const save = async (link) => {
+    try {
+      myDay.calendar = await api(`/api/me/calendar${mdQuery()}`, { method: 'PUT', body: { link } });
+    } catch (error) {
+      toast((error.errors || [error.message]).join(' '), 'bad');
+      return;
+    }
+    const now = myDay.calendar.people[0];
+    toast(now.problem ? now.problem : 'Linked. Your meetings are now in your day.', now.problem ? 'bad' : 'ok');
+    renderMyCalendar();
+    await refreshDay();
+  };
+  const remove = async () => {
+    try {
+      myDay.calendar = await api(`/api/me/calendar/remove${mdQuery()}`, { method: 'POST' });
+    } catch (error) { toast(error.message, 'bad'); return; }
+    toast('Unlinked. Your Outlook meetings are off your plan.', 'ok');
+    renderMyCalendar();
+    await refreshDay();
+  };
+  setChildren($('#mycalendar'),
+    el('h3', {}, 'My Outlook meetings'),
+    me.linked
+      ? el('div', {},
+        el('p', { class: me.problem ? 'muted cal-problem' : 'muted' },
+          el('span', { class: `pill ${me.problem ? 'pill-bad' : 'pill-ok'}` }, me.problem ? 'Not read' : 'Linked'),
+          ' ', calendarRead(me)),
+        el('p', { class: 'muted small' }, 'Your meetings come off your free time by themselves. ', CALENDAR_NOTE),
+        el('details', { class: 'cal-change' }, el('summary', {}, 'Paste a new link or unlink'),
+          calendarPaste(save, 'Save'),
+          el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: remove }, 'Unlink')))
+      : el('div', {},
+        el('p', { class: 'muted' }, 'Your meetings are not in your plan yet. Link your Outlook calendar once and they come off your free time by themselves.'),
+        calendarSteps(),
+        calendarPaste(save),
+        el('p', { class: 'muted small' }, CALENDAR_NOTE)));
 }
 
 /* ---------------------------------------------------- ready timesheet */

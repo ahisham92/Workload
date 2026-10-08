@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import datetime as _dt
 import functools
+import hashlib
 import json
 import threading
 import traceback
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import budgets as budgets_module
+from . import busy_calendar
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                growth as growth_module, management as management_module,
                drawing_list as drawing_list_module,
@@ -1013,7 +1015,8 @@ class WorkloadService:
                 roster["people"], roster["teams"], config,
                 goals=growth_module.goals_by_person(
                     self.store.goals(quarter=growth_module.quarter_of(_today())),
-                    growth_module.quarter_of(_today()))),
+                    growth_module.quarter_of(_today())),
+                outlook=self.store.calendar_busy(), today=_today()),
             "rows": rows,
             "tasks": wb.task_records(),
             "roster": roster["people"],
@@ -1626,6 +1629,95 @@ class WorkloadService:
                 self.store.remove_absence(mine["id"])
             self.store.clear_mark(mark["id"], "undone")
             return {"removed": mark["id"]}
+
+    # -- Outlook calendars: busy times only --------------------------------
+    #
+    # The link is sealed by the app before it gets here and read by the app
+    # (it holds the key and goes out to Outlook); this keeps who has one, and
+    # the busy times that came back.
+
+    def _people_names(self) -> List[str]:
+        roster = people_module.roster(self.store, known=self.workbook.ts_sheets())
+        return [p["name"] for p in roster["people"] if p.get("active", True)]
+
+    def calendars(self, *, person: Optional[str] = None) -> Dict[str, Any]:
+        """Whose calendar is linked, when it was last read and how much of the
+        coming week it fills -- never the link itself."""
+        with self._lock:
+            links = self.store.calendar_links()
+            busy = self.store.calendar_busy()
+            names = [person] if person else self._people_names()
+            today = _today()
+            week_end = today + _dt.timedelta(days=7)
+            out = []
+            for name in names:
+                link = links.get(name)
+                hours = sum(
+                    (_dt.datetime.fromisoformat(b) - _dt.datetime.fromisoformat(a)
+                     ).total_seconds() / 3600
+                    for a, b in busy.get(name, ())
+                    if today.isoformat() <= a[:10] < week_end.isoformat())
+                out.append({
+                    "person": name, "linked": link is not None,
+                    "added_by": link["added_by"] if link else "",
+                    "read_at": link["read_at"] if link else None,
+                    "problem": link["problem"] if link else "",
+                    "meetings": len([1 for a, _ in busy.get(name, ())
+                                     if today.isoformat() <= a[:10] < week_end.isoformat()]),
+                    "hours_next_7_days": round(hours, 1)})
+            return {"people": out,
+                    "linked": sum(1 for p in out if p["linked"]),
+                    "hosts": list(busy_calendar.HOSTS)}
+
+    def set_calendar_link(self, person: str, sealed: str, added_by: str) -> None:
+        with self._lock:
+            if person not in self._people_names():
+                raise ApiError(HTTPStatus.NOT_FOUND, f"{person} is not on the team.")
+            self.store.set_calendar_link(person, sealed, added_by)
+
+    def remove_calendar_link(self, person: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.store.remove_calendar_link(person):
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               f"No calendar is linked for {person}.")
+            return {"removed": person}
+
+    def working_hours(self):
+        with self._lock:
+            settings = self.workbook.task_settings()
+            return settings.get("day_start", "08:00"), settings.get("day_end", "17:00")
+
+    def calendar_zones(self) -> Dict[str, Optional[str]]:
+        """Each person's time zone, from the country whose holidays their team
+        (or else the unit) keeps; None when no country is set."""
+        with self._lock:
+            roster = people_module.roster(self.store, known=self.workbook.ts_sheets())
+            choice = self._holiday_choice(roster["teams"])
+            return {p["name"]: busy_calendar.COUNTRY_ZONES.get(
+                        choice["teams"].get(p.get("team_id") or "") or choice["unit"] or "")
+                    for p in roster["people"]}
+
+    def calendar_seals(self, people: Optional[Sequence[str]] = None
+                       ) -> Dict[str, str]:
+        with self._lock:
+            links = self.store.calendar_links()
+            return {name: row["link_seal"] for name, row in links.items()
+                    if people is None or name in people}
+
+    def record_calendar(self, person: str, *, busy=None, problem: str = "") -> bool:
+        """Busy times read from a person's calendar, or why it could not be."""
+        with self._lock:
+            first, last = busy_calendar.window(_today())
+            keep_from = first.isoformat()
+            if problem:
+                return self.store.calendar_read(person, problem=problem,
+                                                keep_from=keep_from)
+            spans = [(a.isoformat(timespec="minutes"), b.isoformat(timespec="minutes"))
+                     for a, b in busy or ()
+                     if b.date() >= first and a.date() <= last]
+            digest = hashlib.sha256(json.dumps(spans).encode()).hexdigest()
+            return self.store.calendar_read(person, digest=digest, busy=spans,
+                                            keep_from=keep_from)
 
     def _my_mark(self, engineer: str, mark_id: Any) -> Dict[str, Any]:
         try:
