@@ -431,6 +431,9 @@ class WorkloadApp:
             # They sign in with something else now. Same person, same units.
             self.accounts.set_site_login(user["id"], login)
             user["site_login"] = login
+        email = _site_email(site)
+        if email and not user["is_admin"]:
+            user = self._link_by_email(user, email)
         if user["role"] == ROLE_MEMBER and not self.accounts.memberships(user["id"]):
             # Every unit they were shown has been taken away again. Rather
             # than leave them at a page with nothing on it for good, they are
@@ -439,6 +442,37 @@ class WorkloadApp:
             self._services.pop(user["id"], None)
             user = self.accounts.user(user["id"])
         return user
+
+    def _link_by_email(self, user: Dict[str, Any], email: str) -> Dict[str, Any]:
+        """Link somebody to the team row a manager wrote their email on.
+
+        Only a row nobody else has been given is taken, and never in a unit
+        the person runs themselves. Somebody who runs units of their own stays
+        a manager: an account cannot be both.
+        """
+        try:
+            rows = self.accounts.rows_for_email(email, user["id"])
+        except AccountError:
+            return user
+        if not rows or self.accounts.units(user["id"]):
+            return user
+        linked = False
+        for row in rows:
+            taken = any(m["engineer"] == row["engineer"] and m["user_id"] != user["id"]
+                        for m in self.accounts.unit_members(row["unit_id"]))
+            if taken:
+                continue                   # somebody else is that person already
+            if user["role"] != ROLE_MEMBER:
+                self._services.pop(user["id"], None)
+                self.accounts.set_role(user["id"], ROLE_MEMBER)
+                user = self.accounts.user(user["id"])
+            self.accounts.grant(user_id=user["id"], unit_id=row["unit_id"],
+                                engineer=row["engineer"],
+                                granted_by=row["set_by"] or row["owner_id"])
+            self.accounts.mark_email_linked(row["unit_id"], row["engineer"],
+                                            user["id"])
+            linked = True
+        return self.accounts.user(user["id"]) if linked else user
 
     def _with_cookies(self, response: Response, ctx: Context) -> Response:
         if ctx.set_cookie:
@@ -1154,6 +1188,8 @@ class WorkloadApp:
             "unit": {"id": unit["id"], "name": unit["name"]},
             "members": self.accounts.unit_members(unit["id"]),
             "engineers": ctx.service.workbook.engineer_names(),
+            "emails": {name: row["email"] for name, row
+                       in self.accounts.member_emails(unit["id"]).items()},
         }
         if ctx.site is not None:
             mine = ctx.user.get("site_key")
@@ -1270,19 +1306,68 @@ class WorkloadApp:
         if self.accounts.membership(target, unit["id"]) is None:
             raise ApiError(HTTPStatus.NOT_FOUND,
                            "That account has no access to this unit.")
+        engineer = self.accounts.membership(target, unit["id"])["engineer"]
         self.accounts.revoke(user_id=target, unit_id=unit["id"])
         self._services.pop(target, None)
+        # Their email would only link them straight back in at their next
+        # sign-in, so it goes too.
+        linked = self.accounts.member_emails(unit["id"]).get(engineer)
+        if linked and linked["linked_user"] == target:
+            self.accounts.forget_member_email(unit["id"], engineer)
         return {"revoked": target}
+
+    def add_engineer(self, ctx: Context, query, body) -> Dict[str, Any]:
+        email = accounts_module.clean_email(body.get("email")) \
+            if "email" in body else None
+        unit = ctx.service.unit
+        if unit and email:
+            self._email_free(unit, email, None)
+        result = ctx.service.add_engineer(body)
+        if unit and email:
+            result["email"] = self.accounts.set_member_email(
+                unit["id"], result["engineer"], email,
+                set_by=ctx.user["id"])["email"]
+        return result
+
+    def _email_free(self, unit: Dict[str, Any], email: str,
+                    engineer: Optional[str]) -> None:
+        """Refuse, before anything is saved, an email somebody else has."""
+        taken = next((who for who, row
+                      in self.accounts.member_emails(unit["id"]).items()
+                      if row["email"] == email and who != engineer), None)
+        if taken:
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY,
+                           f"{taken} already has that email in this unit. "
+                           f"Each person needs their own.")
+
+    def _save_email(self, ctx: Context, unit: Dict[str, Any], engineer: str,
+                    email: str) -> str:
+        saved = self.accounts.set_member_email(unit["id"], engineer, email,
+                                               set_by=ctx.user["id"])
+        gone = saved["unlinked"]
+        if gone is not None:
+            held = self.accounts.membership(gone, unit["id"])
+            if held and held["engineer"] == engineer:
+                # A corrected email never leaves the wrong person looking in.
+                self.accounts.revoke(user_id=gone, unit_id=unit["id"])
+                self._services.pop(gone, None)
+        return saved["email"]
 
     def update_engineer(self, ctx: Context, query, body, name) -> Dict[str, Any]:
         """Rename or re-rate an engineer, and keep any access in step."""
-        result = ctx.service.update_engineer(name, body)
+        email = accounts_module.clean_email(body.get("email")) \
+            if "email" in body else None
         unit = ctx.service.unit
+        if unit and email:
+            self._email_free(unit, email, name)
+        result = ctx.service.update_engineer(name, body)
         renamed = result.get("engineer") or name
         if unit and renamed != name:
             # Otherwise a rename would quietly cut that person off from their
             # own page, which looks exactly like a bug to them.
             self.accounts.rename_engineer_in_memberships(unit["id"], name, renamed)
+        if unit and email is not None:
+            result["email"] = self._save_email(ctx, unit, renamed, email)
         return result
 
     def remove_engineer(self, ctx: Context, query, body, name) -> Dict[str, Any]:
@@ -1296,6 +1381,7 @@ class WorkloadApp:
                                          unit_id=unit["id"])
                     self._services.pop(row["user_id"], None)
                     result.setdefault("access_revoked", []).append(row["username"])
+            self.accounts.forget_member_email(unit["id"], name)
         return result
 
     def _open_unit_or_refuse(self, ctx: Context) -> Dict[str, Any]:
@@ -1700,7 +1786,7 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.team_me(ctx.user["id"]), "manager"),
             ("PUT", "/api/team/me",
              lambda ctx, q, b: ctx.service.set_team_me(ctx.user["id"], b), "manager"),
-            ("POST", "/api/team", lambda ctx, q, b: ctx.service.add_engineer(b), "manager"),
+            ("POST", "/api/team", self.add_engineer, "manager"),
             ("PUT", "/api/team/{}", self.update_engineer, "manager"),
             ("DELETE", "/api/team/{}", self.remove_engineer, "manager"),
             ("GET", "/api/reports",
@@ -1750,6 +1836,22 @@ class WorkloadApp:
             ("POST", "/api/save", lambda ctx, q, b: ctx.service.save(), "manager"),
             ("POST", "/api/reload", lambda ctx, q, b: ctx.service.reload(), "manager"),
         ]
+
+
+def _site_email(site: Dict[str, Any]) -> str:
+    """The email the mounting site vouches for, or ''.
+
+    The site says so under "email"; one that predates that key signs people
+    in with their email as their login, and that is used instead.
+    """
+    for value in (site.get("email"), site.get("login")):
+        try:
+            email = accounts_module.clean_email(value)
+        except AccountError:
+            continue
+        if email:
+            return email
+    return ""
 
 
 def _cookie(name: str, value: str, *, secure: bool,

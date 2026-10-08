@@ -118,6 +118,22 @@ CREATE TABLE IF NOT EXISTS memberships (
 );
 CREATE INDEX IF NOT EXISTS memberships_unit ON memberships(unit_id);
 
+-- The email a manager wrote against somebody on the team.  When a person
+-- the surrounding site signs in arrives with that email, they are linked to
+-- that row and land on their own page with no further step.  Kept lower-cased;
+-- linked_user is the account it linked, so a corrected email unlinks it.
+CREATE TABLE IF NOT EXISTS member_emails (
+    unit_id     TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+    engineer    TEXT NOT NULL,
+    email       TEXT NOT NULL,
+    set_by      INTEGER,
+    set_at      TEXT NOT NULL,
+    linked_user INTEGER,
+    PRIMARY KEY (unit_id, engineer),
+    UNIQUE (unit_id, email)
+);
+CREATE INDEX IF NOT EXISTS member_emails_email ON member_emails(email);
+
 -- The key a scheduled job on the manager's own PC signs its nightly import
 -- with.  One per unit; only its digest is kept, so it is shown once, when it
 -- is made.  It can import timesheets into that unit and do nothing else.
@@ -801,6 +817,89 @@ class Accounts:
         with self._connect() as db:
             db.execute("UPDATE memberships SET engineer = ? "
                        "WHERE unit_id = ? AND engineer = ?", (new, unit_id, old))
+            db.execute("UPDATE OR REPLACE member_emails SET engineer = ? "
+                       "WHERE unit_id = ? AND engineer = ?", (new, unit_id, old))
+
+    # -- linking by email ------------------------------------------------
+    #
+    # The manager writes each person's email on the Team tab.  The site
+    # vouches for the email of whoever it signs in; when the two are the same,
+    # that person is linked to that row.  Nobody can claim a row by typing an
+    # email: only the manager writes one, and only the site says who has it.
+
+    def member_emails(self, unit_id: str) -> Dict[str, Dict[str, Any]]:
+        """engineer -> {email, linked_user} for one unit."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT engineer, email, linked_user FROM member_emails "
+                "WHERE unit_id = ?", (unit_id,)).fetchall()
+        return {row["engineer"]: {"email": row["email"],
+                                  "linked_user": row["linked_user"]}
+                for row in rows}
+
+    def set_member_email(self, unit_id: str, engineer: str, email: Any, *,
+                         set_by: Optional[int] = None) -> Dict[str, Any]:
+        """Write (or, with an empty value, clear) one person's email.
+
+        Returns ``{"email", "unlinked"}``: ``unlinked`` is the account that had
+        been linked by the old email, which no longer is -- the caller takes
+        its access away, so a corrected email never leaves the wrong person in.
+        """
+        email = clean_email(email)
+        with self._connect() as db:
+            old = db.execute(
+                "SELECT email, linked_user FROM member_emails "
+                "WHERE unit_id = ? AND engineer = ?", (unit_id, engineer)).fetchone()
+            if old is not None and old["email"] == email:
+                return {"email": email, "unlinked": None}
+            if email:
+                taken = db.execute(
+                    "SELECT engineer FROM member_emails "
+                    "WHERE unit_id = ? AND email = ? AND engineer != ?",
+                    (unit_id, email, engineer)).fetchone()
+                if taken:
+                    raise AccountError(
+                        f"{taken['engineer']} already has that email in this "
+                        f"unit. Each person needs their own.")
+            db.execute("DELETE FROM member_emails WHERE unit_id = ? AND engineer = ?",
+                       (unit_id, engineer))
+            if email:
+                db.execute(
+                    "INSERT INTO member_emails (unit_id, engineer, email, set_by, "
+                    "set_at) VALUES (?, ?, ?, ?, ?)",
+                    (unit_id, engineer, email, set_by, now()))
+        return {"email": email,
+                "unlinked": old["linked_user"] if old is not None else None}
+
+    def forget_member_email(self, unit_id: str, engineer: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM member_emails WHERE unit_id = ? AND engineer = ?",
+                       (unit_id, engineer))
+
+    def rows_for_email(self, email: Any, user_id: int) -> List[Dict[str, Any]]:
+        """Rows with this email in units the account is not in yet.
+
+        Units the account owns are left out: a manager is never made a member
+        of their own unit.
+        """
+        email = clean_email(email)
+        if not email:
+            return []
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT e.unit_id, e.engineer, e.set_by, u.user_id AS owner_id "
+                "FROM member_emails e JOIN units u ON u.id = e.unit_id "
+                "WHERE e.email = ? AND u.user_id != ? AND NOT EXISTS ("
+                "  SELECT 1 FROM memberships m "
+                "  WHERE m.user_id = ? AND m.unit_id = e.unit_id)",
+                (email, user_id, user_id)).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_email_linked(self, unit_id: str, engineer: str, user_id: int) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE member_emails SET linked_user = ? "
+                       "WHERE unit_id = ? AND engineer = ?",
+                       (user_id, unit_id, engineer))
 
 
 # --------------------------------------------------------------------------
@@ -870,6 +969,19 @@ def check_password(password: str, username: str = "") -> None:
         raise AccountError("The password cannot be the username.")
     if password.strip() == "":
         raise AccountError("The password cannot be only spaces.")
+
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def clean_email(email: Any) -> str:
+    """An email as kept and compared: trimmed and lower-cased; '' for none."""
+    email = str(email or "").strip().lower()
+    if not email:
+        return ""
+    if len(email) > 254 or not EMAIL_PATTERN.match(email):
+        raise AccountError(f"{email} is not an email address.")
+    return email
 
 
 def clean_unit_name(name: str) -> str:
