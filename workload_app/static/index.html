@@ -87,6 +87,7 @@
   <button class="tab is-active" data-view="overview" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
   <button class="tab" data-view="planner" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h7"/></svg><span>Planner</span></button>
   <button class="tab" data-view="checkins" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="m15.5 14.5 2 2 3.5-4"/></svg><span>Check-ins</span></button>
+  <button class="tab" data-view="weekly" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/></svg><span>Weekly</span></button>
   <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
   <button class="tab" data-view="projects" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Projects</span></button>
   <button class="tab" data-view="reports" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Reports</span></button>
@@ -366,6 +367,21 @@
     <div id="checkins-body"><div class="empty">Working it out…</div></div>
   </section>
 
+  <section class="view" id="view-weekly">
+    <div class="view-head">
+      <div>
+        <h2>Weekly report</h2>
+        <p class="muted">Ready at the start of every week: what to do this week, how last week went and what is due. Nothing to fill in: it comes from the timesheets, the tasks and the submissions plan.</p>
+      </div>
+      <div class="row-actions">
+        <button class="btn" id="weekly-download" type="button">Download</button>
+        <button class="btn" id="weekly-refresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div id="weekly-body"><div class="empty">Putting the week together…</div></div>
+    <section class="panel" id="weekly-push"></section>
+  </section>
+
   <section class="view" id="view-resourcing">
     <div class="view-head">
       <div>
@@ -425,6 +441,7 @@
 <script src="app.js"></script>
 <script src="planner.js"></script>
 <script src="checkins.js"></script>
+<script src="weekly.js"></script>
 <script src="board.js"></script>
 <script src="showcase.js"></script>
 <script src="tabs.js"></script>

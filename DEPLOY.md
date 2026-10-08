@@ -196,6 +196,34 @@ python -m workload_app.admin restore <username> "Marine Structures" ~/Workload.x
 You can always take a copy away: the ⭳ button on a unit downloads everything it
 holds as a spreadsheet.
 
+## Notifications on the phone, and the weekly report
+
+The **Weekly** tab has the report for the week, made from the data the unit
+already holds, with a *Download* that saves it as one page (open it and print
+to PDF to send it on). Nothing to set up.
+
+Below it, *Turn on notifications on this phone* lets a manager's phone be told
+when the report is ready and when something needs them. On an iPhone this
+works from the home-screen app only (Share > Add to Home Screen, then open it
+from there). *Send a test* shows straight away whether the host can reach the
+phone's push service; PythonAnywhere's free accounts can only reach an
+allow-list of sites, paid accounts anything.
+
+Notifications go out when somebody presses *Check now*, after a nightly
+timesheet import, and -- the one that makes them arrive on their own -- from a
+**scheduled task**. The tab shows the exact line for this installation once a
+phone is on; it looks like
+
+```bash
+cd /home/<you>/Workload && /home/<you>/.virtualenvs/workload/bin/python -m workload_app.admin --data-dir /home/<you>/workload-data notify
+```
+
+On PythonAnywhere: **Tasks** tab, a daily time before the working day, paste
+the line, **Create**. Each thing is sent once, so running it more often only
+makes notifications quicker, never doubled. The server's signing key is kept
+in the data folder as `push.key`; losing it means each phone turns
+notifications on again.
+
 ## Updating
 
 ```bash

@@ -1002,6 +1002,24 @@ async function enterApp() {
   if (state.year === null) state.year = state.reference.plan_year;
   await refreshAll();
   switchView('overview');
+  openViewFromAddress();
+}
+
+/* A notification on the phone opens the app at the view it is about:
+   "#weekly", "#checkins" and so on. */
+function openViewFromAddress() {
+  const wanted = window.location.hash.replace(/^#/, '');
+  if (wanted && $(`.tab[data-view="${CSS.escape(wanted)}"]`)) switchView(wanted);
+}
+window.addEventListener('hashchange', () => { if (!$('#main').hidden) openViewFromAddress(); });
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const url = event.data && event.data.open;
+    if (!url) return;
+    const hash = new URL(url, window.location.href).hash;
+    if (hash && hash !== window.location.hash) window.location.hash = hash;
+    else openViewFromAddress();
+  });
 }
 
 /* --------------------------------------------------------------- modal */
@@ -2617,6 +2635,7 @@ function switchView(view) {
   if (view === 'resourcing') loadResourcing();
   if (view === 'planner' && window.planner) window.planner.load();
   if (view === 'checkins' && window.checkins) window.checkins.load();
+  if (view === 'weekly' && window.weekly) window.weekly.load();
   if (view === 'team' && window.showcase) window.showcase.teamCards();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
