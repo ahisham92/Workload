@@ -75,8 +75,12 @@ class ProgressError(ValidationError):
     pass
 
 
+def _key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
 def clean_mode(value: Any) -> str:
-    key = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    key = _key(value)
     if not key:
         return MODE_PRO_RATA
     if key in {"pro_rata", "prorata", "rata"}:
@@ -89,7 +93,7 @@ def clean_mode(value: Any) -> str:
 
 
 def clean_stage(value: Any) -> str:
-    key = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    key = _key(value)
     if not key:
         return STAGE_KEYS[0]
     if key not in STAGE_VALUE:

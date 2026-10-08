@@ -25,7 +25,7 @@ from . import config as cfg, progress
 from .model import as_text, stored_date
 from .tasks import Task
 from .unit import Unit
-from .xlsx_io import Workbook, col_to_index, from_serial, index_to_col
+from .xlsx_io import Workbook, col_to_index, index_to_col
 
 #: The workbook had room for twelve people, three of them where its own
 #: formulas looked and the rest in free space to the right and below.
@@ -345,9 +345,14 @@ def _tasks(wb: Workbook) -> Tuple[List[Task], Optional[Dict[str, Any]]]:
     """The Tasks sheet the app used to keep in the workbook, if it had one."""
     if cfg.SHEET_TASKS not in wb.sheet_names:
         return [], None
-    sheet = wb.sheet(cfg.SHEET_TASKS)
     settings = None
-    raw = sheet.get_value(cfg.TASKS_SETTINGS_CELL)
+
+    def value(ref: str):
+        # Through the workbook, so text Excel moved into its shared strings on
+        # a save reads as the text, not as the string's index.
+        return wb.get_value(cfg.SHEET_TASKS, ref)
+
+    raw = value(cfg.TASKS_SETTINGS_CELL)
     if isinstance(raw, str) and raw.strip().startswith("{"):
         try:
             stored = json.loads(raw)
@@ -358,42 +363,50 @@ def _tasks(wb: Workbook) -> Tuple[List[Task], Optional[Dict[str, Any]]]:
     cols = cfg.TASK_COLUMNS
 
     def text(ref: str) -> str:
-        value = sheet.get_value(ref)
-        if value is None:
+        found = value(ref)
+        if found is None:
             return ""
-        if isinstance(value, float) and value.is_integer():
-            return str(int(value))
-        return str(value)
+        if isinstance(found, float) and found.is_integer():
+            return str(int(found))
+        return str(found)
 
     def number(ref: str) -> Optional[float]:
-        value = sheet.get_value(ref)
-        if isinstance(value, (int, float)):
-            return float(value)
+        found = value(ref)
+        if isinstance(found, (int, float)):
+            return float(found)
         try:
-            return float(str(value))
+            return float(str(found))
         except (TypeError, ValueError):
             return None
 
+    def whole(ref: str) -> Optional[int]:
+        """A row's id or deliverable as a whole number, or None if it is not one."""
+        found = number(ref)
+        return int(found) if found is not None and found.is_integer() else None
+
     out: List[Task] = []
+    seen = set()
     for row in range(cfg.TASKS_FIRST_ROW, cfg.TASKS_LAST_ROW + 1):
-        identifier = sheet.get_value(f"{cols['id']}{row}")
-        if identifier in (None, ""):
+        identifier = whole(f"{cols['id']}{row}")
+        # A row without a usable id, or repeating one (a row copied in Excel),
+        # cannot be a task of its own; the first with each id is kept.
+        if identifier is None or identifier in seen:
             continue
+        seen.add(identifier)
         assignees = text(f"{cols['assignees']}{row}")
-        deliverable_row = sheet.get_value(f"{cols['deliverable_row']}{row}")
+        deliverable_row = whole(f"{cols['deliverable_row']}{row}")
         out.append(Task(
-            id=int(identifier),
+            id=identifier,
             name=text(f"{cols['name']}{row}"),
             definition=text(f"{cols['definition']}{row}"),
             project_number=text(f"{cols['project_number']}{row}"),
-            deliverable_row=int(deliverable_row)
-            if deliverable_row not in (None, "") else None,
+            deliverable_row=deliverable_row,
             deliverable_name=text(f"{cols['deliverable_name']}{row}"),
             assignees=[a.strip() for a in assignees.split(",") if a.strip()],
             required_hours=number(f"{cols['required_hours']}{row}"),
             actual_hours=number(f"{cols['actual_hours']}{row}"),
-            start=stored_date(sheet.get_value(f"{cols['start']}{row}")),
-            due=stored_date(sheet.get_value(f"{cols['due']}{row}")),
+            start=stored_date(value(f"{cols['start']}{row}")),
+            due=stored_date(value(f"{cols['due']}{row}")),
             status=text(f"{cols['status']}{row}") or cfg.TASK_STATUSES[0],
             kind=text(f"{cols['kind']}{row}") or cfg.TASK_KINDS[0],
             series=text(f"{cols['series']}{row}"),
@@ -433,14 +446,14 @@ def _timesheet_rows(wb: Workbook, names: List[str]) -> Dict[str, List[Dict[str, 
                 continue
             rows.append({
                 "job_type": as_text(raw.get("A")),
-                "job_number": as_text(raw.get("B")).strip(),
+                "job_number": as_text(raw.get("B")),
                 "full_name": as_text(raw.get("C")),
                 "regular_hours": float(raw.get("J") or 0.0)
                 if isinstance(raw.get("J"), (int, float)) else 0.0,
                 "overtime_hours": float(raw.get("K") or 0.0)
                 if isinstance(raw.get("K"), (int, float)) else 0.0,
-                "date": from_serial(float(date))
-                if isinstance(date, (int, float)) and date > 0 else None,
+                "date": stored_date(date)
+                if isinstance(date, (int, float)) else None,
                 "phase": int(phase) if isinstance(phase, (int, float)) else None,
                 "hours": float(hours) if isinstance(hours, (int, float)) else 0.0,
             })
@@ -532,8 +545,7 @@ def load_registers(unit: Unit, data: Dict[str, Any]) -> None:
             db.execute(
                 f"INSERT INTO deliverables ({', '.join(columns)}) "
                 f"VALUES ({', '.join('?' for _ in columns)})",
-                [_iso(item[c]) if isinstance(item[c], _dt.date) else item[c]
-                 for c in columns])
+                [_iso(item[c]) for c in columns])
             for name, share in item["shares"].items():
                 db.execute("INSERT INTO deliverable_shares (deliverable_row, "
                            "engineer, share) VALUES (?, ?, ?)",
@@ -587,7 +599,4 @@ def _iso(value: Any) -> Optional[str]:
 def _remove(path: Path) -> None:
     for each in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"),
                  Path(str(path) + "-journal")):
-        try:
-            each.unlink()
-        except FileNotFoundError:
-            pass
+        each.unlink(missing_ok=True)

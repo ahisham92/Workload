@@ -14,6 +14,7 @@ step, and the same application object serves the local server too.
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs
 
@@ -42,16 +43,19 @@ def application(environ: Dict[str, Any],
     except ApiError as exc:
         return _reply(start_response, Response.json(
             exc.status, {"error": exc.message, "errors": exc.errors}))
-    if request is None:
-        return _reply(start_response, Response.json(
-            400, {"error": "Bad request.", "errors": ["Bad request."]}))
     response = get_app().handle(request)
     return _reply(start_response, response, head=request.method == "HEAD")
 
 
-def _request_from(environ: Dict[str, Any]) -> Optional[Request]:
+def _request_from(environ: Dict[str, Any]) -> Request:
     method = environ.get("REQUEST_METHOD", "GET").upper()
     path = environ.get("PATH_INFO", "/") or "/"
+    try:
+        # PEP 3333 hands the URL's bytes over one byte to one character; the
+        # browser sent UTF-8, so "José" arrives as "JosÃ©" until read again.
+        path = path.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass                    # already text, from a door that decoded it
     query = parse_qs(environ.get("QUERY_STRING", ""))
 
     body: Dict[str, Any] = {}
@@ -109,8 +113,6 @@ def _reply(start_response: Callable[..., Any], response: Response,
 
 def _reason(status: int) -> str:
     try:
-        from http import HTTPStatus
-
         return HTTPStatus(status).phrase
     except ValueError:                                  # pragma: no cover
         return "Status"

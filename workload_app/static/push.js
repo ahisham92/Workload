@@ -9,7 +9,8 @@
  * Samsung Internet); on an iPhone, Apple only allows it for the app kept on
  * the home screen.
  *
- * Uses the page's own helpers: el, api, setChildren, toast.
+ * Uses the page's own helpers: el, api, setChildren, toast; and common.js's
+ * isApple, isStandalone and dayLabel.
  */
 (function () {
   'use strict';
@@ -18,15 +19,6 @@
 
   const supported = () => 'serviceWorker' in navigator && 'PushManager' in window
     && 'Notification' in window && window.isSecureContext;
-  const apple = () => /iphone|ipad|ipod/i.test(navigator.userAgent)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const homeScreen = () => window.matchMedia('(display-mode: standalone)').matches
-    || window.navigator.standalone === true;
-
-  function day(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
-    if (!iso) return '';
-    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', opts);
-  }
 
   function keyBytes(text) {
     const padded = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
@@ -73,11 +65,11 @@
   }
 
   function unsupportedMessage() {
-    if (apple() && !homeScreen()) {
+    if (isApple() && !isStandalone()) {
       return 'On an iPhone, Apple only lets the home-screen app show notifications: tap Share, '
         + 'then "Add to Home Screen", open Selecao+ from there and come back here.';
     }
-    if (apple()) {
+    if (isApple()) {
       return 'This iPhone is too old for notifications from web apps. Update it to iOS 16.4 '
         + 'or later in Settings > General > Software Update.';
     }
@@ -110,14 +102,14 @@
       el('span', { class: `wk-dot wk-dot-${d.failures ? 'warn' : 'ok'}` }),
       el('b', {}, d.label || 'A phone'),
       d.fingerprint === push.fingerprint ? ' (this one)' : '',
-      `, on since ${day(d.added_at)}`,
-      d.last_ok_at ? `, last reached ${day(d.last_ok_at)}` : '',
+      `, on since ${dayLabel(d.added_at)}`,
+      d.last_ok_at ? `, last reached ${dayLabel(d.last_ok_at)}` : '',
       d.failures ? el('span', { class: 'v-warn' },
         `. Not reached the last ${d.failures} time${d.failures === 1 ? '' : 's'}: ${d.last_error || ''}`) : ''))) : null;
     const sent = p.messages.length ? el('details', { class: 'wk-sent' },
       el('summary', {}, `Sent lately (${p.messages.length})`),
       el('ul', { class: 'wk-lines' }, p.messages.map((m) => el('li', {},
-        el('span', { class: 'muted small' }, `${day(m.created_at, { day: 'numeric', month: 'short' })} `),
+        el('span', { class: 'muted small' }, `${dayLabel(m.created_at, { day: 'numeric', month: 'short' })} `),
         el('b', {}, m.title), m.body ? el('div', { class: 'small muted' }, m.body) : null)))) : null;
     setChildren(box,
       el('div', { class: 'panel-head' }, el('div', {},

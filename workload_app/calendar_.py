@@ -102,10 +102,9 @@ def with_calendar(config: Dict[str, Any], *, holidays: Iterable[str] = (),
     out = dict(config)
     days_off = set(holidays)
     away: Dict[str, Set[str]] = defaultdict(set)
-    for name, days in dict(leave).items():
-        away[name] |= set(days)
-    for name, days in dict(own_holidays).items():
-        away[name] |= set(days)
+    for source in (leave, own_holidays):
+        for name, days in dict(source).items():
+            away[name] |= set(days)
     for absence in absences:
         try:
             start = _dt.date.fromisoformat(absence["start"])

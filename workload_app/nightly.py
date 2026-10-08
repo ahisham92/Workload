@@ -40,6 +40,9 @@ KIT_DIR = Path(__file__).resolve().parent / "data" / "nightly"
 #: in BISpark deletes some -- but not many fewer.  Past this share missing,
 #: the night's import is refused and the rows already held are kept.
 LARGEST_SHRINK = 0.10
+# A row or two fewer is a correction, not a lost date filter, even for
+# somebody who has only a handful of rows so far.
+SMALL_SHRINK = 2
 
 #: Where the unit keeps the pasted request, in its own settings.
 SOURCE_SETTING = "nightly_request"
@@ -174,7 +177,8 @@ def run(service: WorkloadService, files: Sequence[Dict[str, Any]],
         shrinking = []
         for person in staged["people"]:
             before = held.get(person["name"], 0)
-            if before and person["rows"] < before * (1 - LARGEST_SHRINK):
+            if (before - person["rows"] > SMALL_SHRINK
+                    and person["rows"] < before * (1 - LARGEST_SHRINK)):
                 shrinking.append(
                     f"{person['full_name']}: {person['rows']} rows in tonight's "
                     f"export, {before} already held")

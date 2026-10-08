@@ -218,8 +218,17 @@ def _check_unit_database(path: Path) -> None:
 
 
 def remove_unit_file(data_dir: Path, user_id: int, filename: str) -> None:
-    """A unit's file goes; its copies stay, in case it was a mistake."""
+    """A unit's file goes; its copies stay, in case it was a mistake.
+
+    One more copy is kept first, so putting it back loses nothing done since
+    the last copy (which can be half a day old).
+    """
     path = unit_path(data_dir, user_id, filename)
+    if path.is_file():
+        try:
+            keep_a_copy(data_dir, user_id, path)
+        except (sqlite3.Error, OSError):          # a damaged file still goes
+            pass
     _remove_database(path)
     Path(str(path) + ".lock").unlink(missing_ok=True)
     if legacy.is_workbook(path):
@@ -271,10 +280,7 @@ def backup_if_due(data_dir: Path, user_id: int, unit_file: Path) -> Optional[Pat
 
 def backups_of(data_dir: Path, user_id: int, unit_id: str) -> List[Path]:
     """A unit's own database copies, oldest first."""
-    folder = backups_dir(data_dir, user_id)
-    if not folder.is_dir():
-        return []
-    return _copies(folder, unit_id)
+    return _copies(backups_dir(data_dir, user_id), unit_id)
 
 
 def _copies(folder: Path, unit_id: str) -> List[Path]:

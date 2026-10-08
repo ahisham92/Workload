@@ -40,17 +40,7 @@ function loadTone(load) {
   return load > 1.0001 ? 'bad' : load < 0.8 ? 'warn' : 'ok';
 }
 
-function dayName(iso) {
-  if (!iso) return '—';
-  const d = new Date(`${iso}T00:00:00`);
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
-function shortDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(`${iso}T00:00:00`);
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
+const shortDate = (iso) => dateText(iso, { day: 'numeric', month: 'short' });
 
 /* ------------------------------------------------------------ loading */
 
@@ -87,9 +77,9 @@ async function openPlanner({ quiet = false } = {}) {
   } else if (plan.view === 'people') {
     try {
       plan.needs = plan.needs || await api('/api/needs');
-      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+      showNeeds();
     } catch (error) {
-      if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
+      if (!quiet) toastError(error);
     }
   } else {
     await loadPlanner({ quiet });
@@ -108,7 +98,7 @@ async function loadPlanner({ quiet = false } = {}) {
     plan.needs = needs;
     renderPlanner();
   } catch (error) {
-    if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
+    if (!quiet) toastError(error);
     // A move that no longer makes sense (somebody removed, a task done) is
     // dropped rather than leaving the tab stuck on an error.
     if (plan.moves.length && error.status === 422) {
@@ -143,7 +133,7 @@ async function suggestMoves() {
     renderPlanner();
     toast(`${data.suggested.length} handover(s) suggested. Nothing changes until you commit them.`, 'ok');
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -164,7 +154,7 @@ async function commitMoves() {
     if (result.save) markSaved(result.save);
     await loadPlanner({ quiet: true });
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -178,7 +168,7 @@ async function undoSaved(move) {
     await loadPlanner({ quiet: true });
     toast('Handover undone.', 'ok');
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -201,7 +191,7 @@ function renderPlanner() {
   setChildren(host,
     el('div', { class: 'plan-toolbar' }, daySelect),
     data.stale ? el('div', { class: 'msg msg-warn' },
-      `The newest timesheet is from ${dayName(data.pace_to)}. A pace that old is a guess: `
+      `The newest timesheet is from ${dateText(data.pace_to)}. A pace that old is a guess: `
       + 'import this month’s timesheets for an outlook worth acting on.') : null,
     plannerCards(data),
     window.board ? window.board.render(data) : null,
@@ -271,6 +261,11 @@ const COMING_STATUS = {
   'taken over': ['muted', 'on its own figures now'],
 };
 
+/** The More people subtab: the forecast, and the work coming. */
+function showNeeds() {
+  setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
+}
+
 /** A project just assigned: one line, and the forecast above counts it. */
 function workComing(needs) {
   if (!needs) return null;
@@ -287,17 +282,20 @@ function workComing(needs) {
     'aria-label': 'Rough hours', class: 'num-input' });
   const start = el('input', { type: 'date', 'aria-label': 'Starts', value: today });
   const end = el('input', { type: 'date', 'aria-label': 'Ends' });
+  let adding = false;
   const add = async () => {
     if (!name.value.trim() && !job.value.trim()) { name.focus(); return; }
     if (!Number(hours.value)) { hours.focus(); return; }
+    if (adding) return;           // a second tap while the first is on its way
+    adding = true;
     try {
       const result = await api('/api/planned-work', { method: 'POST', body: {
         name: name.value, job_number: job.value, team_id: team.value,
         hours: hours.value, start: start.value, end: end.value } });
       plan.needs = result.needs;
       toast(`${result.name} is in the forecast from ${shortDate(result.start)} to ${shortDate(result.end)}.`, 'ok');
-      setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
-    } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+      showNeeds();
+    } catch (error) { toastError(error); } finally { adding = false; }
   };
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   return el('section', { class: 'panel' },
@@ -323,8 +321,8 @@ function workComing(needs) {
           try {
             const result = await api(`/api/planned-work/${c.id}/remove`, { method: 'POST' });
             plan.needs = result.needs;
-            setChildren($('#planner-body'), renderNeeds(plan.needs), workComing(plan.needs));
-          } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+            showNeeds();
+          } catch (error) { toastError(error); }
         } }, 'Remove'));
     })) : null);
 }
@@ -359,7 +357,7 @@ function needsFootnote(needs) {
   if (needs.drawings && needs.drawings.drafting_hours_per_drawing) {
     notes.push(`The drawing office's share is drawings left at ${fmt.hours(needs.drawings.drafting_hours_per_drawing)} h a drawing, this unit's own rate.`);
   }
-  notes.push(`Ask ${needs.rules.lead_weeks} weeks before somebody is needed. Timesheets run to ${dayName(needs.data_through)}.`);
+  notes.push(`Ask ${needs.rules.lead_weeks} weeks before somebody is needed. Timesheets run to ${dateText(needs.data_through)}.`);
   return el('p', { class: 'muted small' }, notes.join(' '));
 }
 
@@ -380,9 +378,9 @@ function whoHasWhat(data) {
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, `Who has what, ${dayName(data.from)} to ${dayName(data.to)}`),
+        el('h3', {}, `Who has what, ${dateText(data.from)} to ${dateText(data.to)}`),
         el('p', { class: 'muted' },
-          `Each person at the pace their timesheets set from ${dayName(data.pace_from)} to ${dayName(data.pace_to)}, `
+          `Each person at the pace their timesheets set from ${dateText(data.pace_from)} to ${dateText(data.pace_to)}, `
           + 'with their open tasks where those need more. '
           + (trying ? 'The faint bar is before the handovers you are trying, the solid one after.'
             : 'Open someone to hand some of their work to somebody else.'))),
@@ -521,7 +519,7 @@ function movesPanel(data) {
         el('h3', {}, 'Handovers'),
         el('p', { class: 'muted' },
           'Try a handover and every figure above shows its effect. Nothing changes until you commit: '
-          + `a share of a project is then kept until ${dayName(data.to)} and lapses by itself; a task is simply reassigned.`)),
+          + `a share of a project is then kept until ${dateText(data.to)} and lapses by itself; a task is simply reassigned.`)),
       el('div', { class: 'row-actions' },
         el('button', { class: 'btn btn-sm', type: 'button', onclick: suggestMoves }, 'Suggest handovers'),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => tryNewWork(data) }, 'Try new work'),
@@ -554,12 +552,14 @@ function tryNewWork(data) {
     { name: 'project', label: 'What is it', placeholder: 'e.g. New berth, tender' },
     { name: 'to', label: 'Who would do it', type: 'select', options: people },
     { name: 'hours', label: `Hours over the next ${plan.days} working days`, type: 'number', min: 1, step: 1 },
-  ], async (values) => {
+  ], async () => {
+    // The modal's Save calls this with nothing: the values are read here.
+    const values = modalValues();
     const move = { kind: 'extra', project: String(values.project || '').trim(),
       to: values.to, hours: Number(values.hours) };
     if (!move.project || !move.hours) {
-      showModalErrors(['Say what the work is and roughly how many hours.']);
-      return;
+      // Thrown, so the modal stays open with the message in it.
+      throw new Error('Say what the work is and roughly how many hours.');
     }
     closeModal();
     await tryMoves([...plan.moves, move]);
@@ -569,17 +569,16 @@ function tryNewWork(data) {
 function keepWhatIf() {
   openModal('Keep this as a what-if', [
     { name: 'name', label: 'Name it', placeholder: 'e.g. Berth tender comes in, Kirolos helps' },
-  ], async (values) => {
-    try {
-      await api('/api/what-ifs', { method: 'POST',
-        body: { name: values.name, days: plan.days, moves: plan.moves } });
-      closeModal();
-      toast('Kept. Compare it with the others under What-ifs.', 'ok');
-      plan.whatIfs = null;
-      await loadPlanner({ quiet: true });
-    } catch (error) {
-      showModalErrors(error.errors || [error.message]);
-    }
+  ], async () => {
+    // A refusal is thrown on to the modal's Save, which shows it and keeps
+    // the modal open; caught here, the modal closed over it.
+    const values = modalValues();
+    await api('/api/what-ifs', { method: 'POST',
+      body: { name: values.name, days: plan.days, moves: plan.moves } });
+    closeModal();
+    toast('Kept. Compare it with the others under What-ifs.', 'ok');
+    plan.whatIfs = null;
+    await loadPlanner({ quiet: true });
   });
 }
 
@@ -590,7 +589,7 @@ async function removeWhatIf(item) {
     plan.whatIfs = null;
     renderPlanner();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -750,6 +749,12 @@ function shiftDay(iso, days) {
   return isoDay(d);
 }
 
+/** Something changed the days: the forecast is worked out again and the day redrawn. */
+async function replanDay() {
+  plan.needs = null;
+  await loadDay({ quiet: true });
+}
+
 async function loadDay({ quiet = false } = {}) {
   const params = new URLSearchParams({ span: plan.span });
   if (plan.date) params.set('date', plan.date);
@@ -757,7 +762,7 @@ async function loadDay({ quiet = false } = {}) {
     plan.dayData = await api(`/api/day?${params}`, { quiet });
     renderDay();
   } catch (error) {
-    if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
+    if (!quiet) toastError(error);
     return;
   }
   if (!plan.calendars) refreshCalendars();
@@ -780,13 +785,12 @@ async function addMeeting(body) {
   try {
     await api('/api/meetings', { method: 'POST', body });
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
     return false;
   }
   toast(`Added. ${body.people.length === 1 ? 'Their' : 'Everyone\'s'} day now keeps that time.`, 'ok');
-  plan.needs = null;
   plan.meetings = null;
-  await loadDay({ quiet: true });
+  await replanDay();
   return true;
 }
 
@@ -794,9 +798,8 @@ async function removeMeeting(m) {
   try {
     await api(`/api/meetings/${m.id}/remove`, { method: 'POST' });
   } catch (error) { toast(error.message, 'bad'); return; }
-  plan.needs = null;
   plan.meetings = null;
-  await loadDay({ quiet: true });
+  await replanDay();
 }
 
 function meetingsPanel(data) {
@@ -827,13 +830,12 @@ async function refreshCalendars(force = false) {
     const result = await api('/api/calendars/refresh', { method: 'POST', body: { force }, quiet: !force });
     plan.calendars = result;
     if (result.result && result.result.changed) {
-      plan.needs = null;
-      await loadDay({ quiet: true });
+      await replanDay();
     } else {
       renderDay();
     }
   } catch (error) {
-    if (force) toast((error.errors || [error.message]).join(' '), 'bad');
+    if (force) toastError(error);
   }
 }
 
@@ -841,25 +843,23 @@ async function saveCalendar(person, link) {
   try {
     plan.calendars = await api('/api/calendars', { method: 'PUT', body: { person, link } });
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
     return;
   }
   const now = plan.calendars.people.find((p) => p.person === person) || {};
   toast(now.problem || `${person}'s meetings are in the plan.`, now.problem ? 'bad' : 'ok');
-  plan.needs = null;
-  await loadDay({ quiet: true });
+  await replanDay();
 }
 
 async function unlinkCalendar(person) {
   try {
     plan.calendars = await api('/api/calendars/remove', { method: 'POST', body: { person } });
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
     return;
   }
   toast(`${person}'s Outlook meetings are off the plan.`, 'ok');
-  plan.needs = null;
-  await loadDay({ quiet: true });
+  await replanDay();
 }
 
 function calendarPanel() {
@@ -875,13 +875,11 @@ function calendarPanel() {
       el('div', {},
         el('h3', {}, 'Outlook meetings'),
         el('p', { class: 'muted small' },
-          cal.linked
-            ? `${cal.linked} of ${people.length} people linked · ${fmt.hours(hours)} h of meetings in the next 7 days, already off their free time.`
-            : 'Nobody\'s calendar is linked yet, so meetings are not in the plan.',
+          `${cal.linked} of ${people.length} people linked · ${fmt.hours(hours)} h of meetings in the next 7 days, already off their free time.`,
           problems.length ? ` ${problems.length} could not be read.` : '')),
       el('div', { class: 'plan-nav' },
-        cal.linked ? el('button', { class: 'btn btn-sm', type: 'button',
-          onclick: () => refreshCalendars(true) }, 'Read now') : null,
+        el('button', { class: 'btn btn-sm', type: 'button',
+          onclick: () => refreshCalendars(true) }, 'Read now'),
         el('button', { class: 'btn btn-sm', type: 'button',
           onclick: () => { plan.calendarsOpen = !plan.calendarsOpen; renderDay(); } },
         plan.calendarsOpen ? 'Close' : 'Link calendars'))),
@@ -901,15 +899,41 @@ function calendarPanel() {
       : null);
 }
 
+/** Whether somebody on the day's plan is in the team chosen above it. The
+    day names each person's team (team_name), not its id, so the choice is
+    matched by the team's name as well. */
+function inChosenTeam(person, data) {
+  if (plan.team === 'all') return true;
+  if (person.team_id) return person.team_id === plan.team;
+  const team = ((data && data.teams) || []).find((t) => t.id === plan.team);
+  return Boolean(team) && person.team_name === team.name;
+}
+
+/** The last working day of the week ``iso`` is in (Python's weekday numbers
+    in ``workDays``: Monday 0 ... Sunday 6), so "this week" means this
+    week, Sunday to Thursday or Monday to Friday. On a day off it is the
+    end of the coming week. */
+function endOfWorkWeek(iso, workDays) {
+  const working = new Set(workDays && workDays.length ? workDays : [0, 1, 2, 3, 4]);
+  let last = null;
+  for (let i = 0; i < 7; i += 1) {
+    const day = shiftDay(iso, i);
+    const weekday = (new Date(`${day}T00:00:00`).getDay() + 6) % 7;
+    if (working.has(weekday)) last = day;
+    else if (last) break;
+  }
+  return last || shiftDay(iso, 6);
+}
+
 function renderDay() {
   const data = plan.dayData;
   if (!data || plan.view !== 'today') return;
   fillTeams(data.teams);
-  const shown = (people) => people.filter((p) => plan.team === 'all' || p.team_id === plan.team);
+  const shown = (people) => people.filter((p) => inChosenTeam(p, data));
   const step = plan.span === 'week' ? 7 : 1;
   const label = plan.span === 'week'
-    ? `Week of ${dayName(data.days[0] ? data.days[0].date : data.date)}`
-    : (data.date === data.today ? `Today, ${dayName(data.date)}` : dayName(data.date));
+    ? `Week of ${dateText(data.days[0] ? data.days[0].date : data.date)}`
+    : (data.date === data.today ? `Today, ${dateText(data.date)}` : dateText(data.date));
 
   setChildren($('#planner-body'),
     quickAdd(data),
@@ -958,11 +982,10 @@ async function saveHolidays(body, message) {
     const result = await api('/api/holidays', { method: 'PUT', body });
     if (result.save) markSaved(result.save);
     if (message) toast(message, 'ok');
-    plan.needs = null;
-    await loadDay({ quiet: true });
+    await replanDay();
     return result;
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
     return null;
   }
 }
@@ -971,7 +994,7 @@ async function saveHolidays(body, message) {
 async function openHolidays() {
   let view;
   try { view = await api('/api/holidays'); } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad'); return;
+    toastError(error); return;
   }
   const options = [{ value: '', label: 'None' },
     ...view.countries.map((c) => ({ value: c.code, label: c.name }))];
@@ -999,8 +1022,7 @@ async function openHolidays() {
       restore: Boolean(values.restore) } });
     if (result.save) markSaved(result.save);
     toast(result.holidays.unit ? `Public holidays: ${result.holidays.unit_name}.` : 'No public holidays.', 'ok');
-    plan.needs = null;
-    await loadDay({ quiet: true });
+    await replanDay();
   });
 }
 
@@ -1047,8 +1069,7 @@ function markAway(data, name) {
     const values = modalValues();
     const result = await api('/api/absences', { method: 'POST', body: values });
     toast(`${awayText(result)} is off the plan.`, 'ok');
-    plan.needs = null;
-    await loadDay({ quiet: true });
+    await replanDay();
   }, { person: name || '*', start: data.date, end: '' });
 }
 
@@ -1080,9 +1101,8 @@ function awayPanel(data) {
       : a.id ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
         try {
           await api(`/api/absences/${a.id}/remove`, { method: 'POST' });
-          plan.needs = null;
-          await loadDay({ quiet: true });
-        } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+          await replanDay();
+        } catch (error) { toastError(error); }
       } }, 'Remove') : el('span'))))
       : el('p', { class: 'muted small' },
         'Leave booked on timesheets shows here by itself. Add anything else, or a public holiday, so nobody is planned on a day they are not in.'));
@@ -1098,7 +1118,7 @@ function quickAdd(data) {
   const due = el('select', { 'aria-label': 'Wanted by' },
     el('option', { value: data.today }, 'today'),
     el('option', { value: shiftDay(data.today, 1) }, 'tomorrow'),
-    el('option', { value: shiftDay(data.today, 7) }, 'this week'));
+    el('option', { value: endOfWorkWeek(data.today, (data.holidays || {}).work_days) }, 'this week'));
   const who = el('select', { 'aria-label': 'Who' },
     el('option', { value: 'engineering' }, 'Engineer with room'),
     el('option', { value: 'drafting' }, 'Draftsman with room'),
@@ -1122,8 +1142,12 @@ function quickAdd(data) {
       ...extra,
     };
   };
+  let adding = false;
   const add = async (extra = {}) => {
     if (!title.value.trim()) { title.focus(); return; }
+    // A second tap (or Enter) while the first is on its way would add it twice.
+    if (adding) return;
+    adding = true;
     try {
       const result = await api('/api/requests', { method: 'POST', body: bodyOf(extra) });
       if (result.save) markSaved(result.save);
@@ -1135,7 +1159,9 @@ function quickAdd(data) {
       closeModal();
       await loadDay({ quiet: true });
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
+    } finally {
+      adding = false;
     }
   };
   const preview = async () => {
@@ -1144,7 +1170,7 @@ function quickAdd(data) {
       const view = await api('/api/requests/preview', { method: 'POST', body: bodyOf() });
       showPushes(view, add);
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
     }
   };
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
@@ -1169,8 +1195,8 @@ function pushedList(option) {
       `${fmt.hours(p.hours)} h of `, el('b', {}, p.title),
       el('span', { class: 'muted small' },
         p.kind === 'task'
-          ? `${p.job ? ` · ${p.job}` : ''}${p.due ? ` · due ${dayName(p.due)}` : ''}`
-            + `${p.late_until ? `, done about ${dayName(p.late_until)}` : ''}`
+          ? `${p.job ? ` · ${p.job}` : ''}${p.due ? ` · due ${dateText(p.due)}` : ''}`
+            + `${p.late_until ? `, done about ${dateText(p.late_until)}` : ''}`
           : p.kind === 'job' ? ` · ${p.job} project work moves later` : '')))));
 }
 
@@ -1210,7 +1236,7 @@ function showPushes(view, add) {
   openPanel(`What "${r.title}" pushes`,
     el('div', {},
       el('p', { class: 'muted' },
-        `${fmt.hours(r.hours)} h, wanted by ${dayName(r.due)}${r.project_number ? `, on ${r.project_number}` : ''}. `
+        `${fmt.hours(r.hours)} h, wanted by ${dateText(r.due)}${r.project_number ? `, on ${r.project_number}` : ''}. `
         + 'Each way below shows the planned work it would push back and what that costs. Nothing is added until you pick one.'),
       view.budget ? el('p', { class: 'small' },
         `${view.budget.job} has ${view.budget.remaining_mm} man-months of budget left; this uses about ${view.budget.uses_mm} of it.`) : null,
@@ -1245,14 +1271,14 @@ function requestList(data) {
             const result = await api(`/api/requests/${r.id}/done`, { method: 'POST' });
             if (result.save) markSaved(result.save);
             await loadDay({ quiet: true });
-          } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+          } catch (error) { toastError(error); }
         } }, 'Done')))));
 }
 
 function dayCards(day, shown) {
   if (!day) return null;
   if (!day.working_day) {
-    return el('div', { class: 'empty' }, `${dayName(day.date)} is not a working day.`);
+    return el('div', { class: 'empty' }, `${dateText(day.date)} is not a working day.`);
   }
   const people = shown(day.people).filter((p) => p.blocks.length || p.over_hours);
   const away = shown(day.people).filter((p) => p.away);
@@ -1264,7 +1290,7 @@ function dayCards(day, shown) {
         el('header', {},
           el('b', {}, p.name),
           el('span', { class: 'muted small' }, [p.grade_label, p.team_name].filter(Boolean).join(' · ')),
-          el('span', { class: `pill ${p.away ? 'pill-bad' : p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
+          el('span', { class: `pill ${p.away || p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
             p.away ? 'away — hand these on'
               : p.over_hours ? `${fmt.hours(p.over_hours)} h over`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
@@ -1291,7 +1317,7 @@ function weekTable(data, shown) {
     const p = day.people.find((x) => x.name === name);
     if (!day.working_day || !p) return el('td', { class: 'muted' }, '—');
     if (p.away && !p.blocks.length) return el('td', { class: 'muted' }, 'away');
-    const load = data.days[0] ? (p.hours + p.over_hours) / (day.hours_per_day || 1) : null;
+    const load = (p.hours + p.over_hours) / (day.hours_per_day || 1);
     return el('td', {
       class: 'num week-cell clickable', 'data-sort': String(load),
       title: p.blocks.map((b) => `${b.start}–${b.end} ${b.title}`).join('\n'),
@@ -1304,7 +1330,7 @@ function weekTable(data, shown) {
     el('p', { class: 'muted' }, 'Each day as a share of a working day. Choose a day to see it hour by hour.'),
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, el('th', {}, 'Who'),
-        ...data.days.map((d) => el('th', { class: 'num' }, dayName(d.date))))),
+        ...data.days.map((d) => el('th', { class: 'num' }, dateText(d.date))))),
       el('tbody', {}, names.map((name) => el('tr', {},
         el('td', {}, name), ...data.days.map((d) => cell(d, name))))))));
 }
@@ -1314,13 +1340,12 @@ function dayText(data) {
   const unit = data.unit ? ` — ${data.unit}` : '';
   const lines = [];
   for (const day of data.days) {
-    lines.push(`${dayName(day.date)}${unit}`);
+    lines.push(`${dateText(day.date)}${unit}`);
     if (!day.working_day) { lines.push('  Not a working day.', ''); continue; }
-    const off = day.people.filter((p) => p.away
-      && (plan.team === 'all' || p.team_id === plan.team)).map((p) => p.name);
+    const off = day.people.filter((p) => p.away && inChosenTeam(p, data)).map((p) => p.name);
     if (off.length) lines.push(`  Away: ${off.join(', ')}`);
     for (const p of day.people) {
-      if (plan.team !== 'all' && p.team_id !== plan.team) continue;
+      if (!inChosenTeam(p, data)) continue;
       if (p.away || (!p.blocks.length && !p.over_hours)) continue;
       lines.push(`${p.name}${p.team_name ? ` (${p.team_name})` : ''}`
         + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h over` : ''));
@@ -1339,7 +1364,7 @@ async function shareDay(printIt) {
   const data = plan.dayData;
   if (!data) return;
   const text = dayText(data);
-  const title = `Plan for ${plan.span === 'week' ? 'the week of ' : ''}${dayName(data.days[0] ? data.days[0].date : data.date)}`;
+  const title = `Plan for ${plan.span === 'week' ? 'the week of ' : ''}${dateText(data.days[0] ? data.days[0].date : data.date)}`;
   if (printIt) {
     const page = window.open('', '_blank');
     if (!page) { toast('Allow pop-ups to print the plan.', 'bad'); return; }
@@ -1374,7 +1399,7 @@ async function loadSubmissions({ quiet = false } = {}) {
     plan.edits = {};
     renderSubmissions();
   } catch (error) {
-    if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
+    if (!quiet) toastError(error);
   }
 }
 
@@ -1404,7 +1429,7 @@ function renderSubmissions() {
       plan.needs = null;
       await loadSubmissions({ quiet: true });
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
     }
   };
   const counts = data.counts;
@@ -1478,18 +1503,6 @@ function waitingPanel(data) {
 
 /* -- the drawing list --------------------------------------------------- */
 
-function saveFile(result) {
-  const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  }));
-  const link = el('a', { href: url, download: result.filename });
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
 function changeText(change) {
   const parts = [];
   if (change.submitted_to_client) parts.push(`sent ${shortDate(change.submitted_to_client)}`);
@@ -1513,7 +1526,7 @@ function proposalsBlock(proposals, after) {
           toast(`${result.applied} deliverable(s) updated from the drawing list.`, 'ok');
           plan.submissions = null;
           if (after) await after();
-        } catch (error) { toast((error.errors || [error.message]).join(' '), 'bad'); }
+        } catch (error) { toastError(error); }
       } }, 'Apply')),
     el('ul', { class: 'plain-list' }, proposals.map((p) => el('li', {},
       el('span', { class: 'code' }, `${p.project_number} `), el('b', {}, p.name), ': ',
@@ -1567,8 +1580,11 @@ function openDrawingList() {
       + 'Any list with headings like Job Number, Drawing No., Status, Issued and Code will do.'),
     el('div', { class: 'row' },
       el('button', { class: 'btn', type: 'button', onclick: async () => {
-        try { saveFile(await api('/api/drawing-list/template')); } catch (error) {
-          toast((error.errors || [error.message]).join(' '), 'bad'); }
+        try {
+          const file = await api('/api/drawing-list/template');
+          downloadBase64(file.content_base64, file.filename);
+        } catch (error) {
+          toastError(error); }
       } }, 'Download the template'),
       el('label', { class: 'btn btn-primary file-btn' }, 'Upload a drawing list', input)),
     results));

@@ -38,12 +38,23 @@ def key_file(data_dir: Path) -> Path:
     path = Path(data_dir) / KEY_NAME
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Written 0600 from the start: never briefly world-readable.
-        handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # Written whole under a name of its own, then put in place in one
+        # step: a failed write never leaves an empty key behind, and a worker
+        # starting at the same moment reads a whole key or none.  0600 from
+        # the start: never briefly world-readable.
+        tmp = path.with_name(f".{KEY_NAME}.{os.getpid()}.{secrets.token_hex(4)}")
+        handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(handle, secrets.token_bytes(KEY_BYTES))
+            try:
+                os.write(handle, secrets.token_bytes(KEY_BYTES))
+            finally:
+                os.close(handle)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                pass                    # another worker's key is the key
         finally:
-            os.close(handle)
+            tmp.unlink(missing_ok=True)
     return path
 
 
@@ -61,6 +72,11 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
     return bytes(out[:length])
 
 
+def _xor(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    """``data`` run through the keystream: sealing and unsealing alike."""
+    return bytes(a ^ b for a, b in zip(data, _keystream(key, nonce, len(data))))
+
+
 def _subkeys(key: bytes, nonce: bytes):
     enc = hmac.new(key, b"encrypt" + nonce, hashlib.sha256).digest()
     mac = hmac.new(key, b"authenticate" + nonce, hashlib.sha256).digest()
@@ -72,7 +88,7 @@ def seal(key: bytes, plaintext: str) -> str:
     raw = str(plaintext).encode("utf-8")
     nonce = secrets.token_bytes(NONCE_BYTES)
     enc, mac = _subkeys(key, nonce)
-    cipher = bytes(a ^ b for a, b in zip(raw, _keystream(enc, nonce, len(raw))))
+    cipher = _xor(enc, nonce, raw)
     tag = hmac.new(mac, nonce + cipher, hashlib.sha256).digest()
     return base64.b64encode(nonce + cipher + tag).decode("ascii")
 
@@ -95,8 +111,6 @@ def unseal(key: bytes, blob: Optional[str]) -> Optional[str]:
                                              hashlib.sha256).digest()):
         return None                     # a different key, or a changed blob
     try:
-        return bytes(a ^ b for a, b in
-                     zip(cipher, _keystream(enc, nonce, len(cipher)))
-                     ).decode("utf-8")
+        return _xor(enc, nonce, cipher).decode("utf-8")
     except UnicodeDecodeError:          # pragma: no cover - tag rules this out
         return None

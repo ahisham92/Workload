@@ -17,7 +17,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from . import accounts as accounts_module, storage
 
@@ -50,16 +50,9 @@ class Report:
     def ok(self) -> bool:
         return not any(f.level == "bad" for f in self.findings)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "root": str(self.root),
-            "data_dir": str(self.data_dir),
-            "ok": self.ok,
-            "findings": [
-                {"level": f.level, "title": f.title, "detail": f.detail}
-                for f in self.findings
-            ],
-        }
+
+#: This checkout: the folder that holds ``workload_app``.
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def suggested_data_dir() -> Path:
@@ -67,17 +60,21 @@ def suggested_data_dir() -> Path:
     return Path.home() / "workload-data"
 
 
+def _data_dir(data_dir: Optional[Path]) -> Path:
+    """The data folder asked for, else the configured one, in full."""
+    chosen = Path(data_dir) if data_dir else accounts_module.data_dir()
+    return chosen.expanduser().resolve()
+
+
 def check(data_dir: Optional[Path] = None) -> Report:
     """Everything worth knowing before a deploy is reloaded."""
-    root = Path(__file__).resolve().parent.parent
-    resolved = Path(data_dir).expanduser().resolve() if data_dir \
-        else accounts_module.data_dir().expanduser().resolve()
-    report = Report(root=root, data_dir=resolved)
+    resolved = _data_dir(data_dir)
+    report = Report(root=ROOT, data_dir=resolved)
 
     _check_python(report)
     _check_dependencies(report)
-    _check_code(report, root)
-    _check_data_dir(report, root, resolved)
+    _check_code(report, ROOT)
+    _check_data_dir(report, ROOT, resolved)
     _check_accounts(report, resolved)
     return report
 
@@ -130,8 +127,7 @@ def _check_code(report: Report, root: Path) -> None:
         report.add("bad", "The front end is incomplete",
                    f"missing: {', '.join(missing)}")
     else:
-        report.add("ok", "Front end complete",
-                   str(root / "workload_app" / "static"))
+        report.add("ok", "Front end complete", str(static))
 
 
 def _check_data_dir(report: Report, root: Path, data_dir: Path) -> None:
@@ -224,9 +220,8 @@ def _check_accounts(report: Report, data_dir: Path) -> None:
 def wsgi_file(root: Optional[Path] = None,
               data_dir: Optional[Path] = None) -> str:
     """The host's WSGI file, with this checkout's real paths already in it."""
-    root = (root or Path(__file__).resolve().parent.parent).resolve()
-    resolved = (Path(data_dir).expanduser().resolve() if data_dir
-                else accounts_module.data_dir().expanduser().resolve())
+    root = (root or ROOT).resolve()
+    resolved = _data_dir(data_dir)
     # Never hand back a data directory that a deploy would overwrite.
     if resolved == root or root in resolved.parents:
         resolved = suggested_data_dir().resolve()
@@ -250,14 +245,14 @@ from workload_app.wsgi import application       # noqa: E402,F401
 
 def static_files(root: Optional[Path] = None) -> List[Dict[str, str]]:
     """The static mappings to add on the host's Web tab."""
-    root = (root or Path(__file__).resolve().parent.parent).resolve()
+    root = (root or ROOT).resolve()
     static = root / "workload_app" / "static"
     return [{"url": f"/{name}", "path": str(static / name)}
-            for name in ("app.css", "app.js", "member.js", "charts.js",
+            for name in ("app.css", "common.js", "app.js", "member.js", "charts.js",
                          "tables.js", "pocket.js", "voyage.js")]
 
 
-def render(report: Report, *, show_wsgi: bool = True) -> str:
+def render(report: Report) -> str:
     """The whole check as something to read in a console."""
     lines = [
         "Workload deployment check",
@@ -273,12 +268,11 @@ def render(report: Report, *, show_wsgi: bool = True) -> str:
     lines.append("Ready to serve." if report.ok
                  else "Not ready: fix the BAD lines above.")
 
-    if show_wsgi:
-        lines += ["", "-- WSGI file for this checkout "
-                      "(Web tab -> WSGI configuration file) --", ""]
-        lines += [f"  {line}" for line in wsgi_file(
-            report.root, report.data_dir).splitlines()]
-        lines += ["", "-- Static files (Web tab -> Static files) --", ""]
-        for mapping in static_files(report.root):
-            lines.append(f"  {mapping['url']:<12} {mapping['path']}")
+    lines += ["", "-- WSGI file for this checkout "
+                  "(Web tab -> WSGI configuration file) --", ""]
+    lines += [f"  {line}" for line in wsgi_file(
+        report.root, report.data_dir).splitlines()]
+    lines += ["", "-- Static files (Web tab -> Static files) --", ""]
+    for mapping in static_files(report.root):
+        lines.append(f"  {mapping['url']:<12} {mapping['path']}")
     return "\n".join(lines)

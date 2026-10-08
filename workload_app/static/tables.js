@@ -44,6 +44,7 @@
   const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
     'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const MON = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+  const monthNo = (name) => MONTHS.indexOf(name.toLowerCase()) + 1;
   const DATES = [
     // 08/10/2026, as every date is shown; may be followed by words ("overdue")
     [/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/, (m) => [m[3], m[2], m[1]]],
@@ -52,10 +53,10 @@
     [/^(\d{4})-(\d{2})$/, (m) => [m[1], m[2], 0]],
     // 8 Oct 2026 / Thu 8 Oct 2026
     [new RegExp(`^(?:[a-z]{3},? )?(\\d{1,2}) ${MON},? (\\d{4})\\b`, 'i'),
-      (m) => [m[3], MONTHS.indexOf(m[2].toLowerCase()) + 1, m[1]]],
+      (m) => [m[3], monthNo(m[2]), m[1]]],
     // Oct 2026 / Oct ’26
-    [new RegExp(`^${MON} (\\d{4})$`, 'i'), (m) => [m[2], MONTHS.indexOf(m[1].toLowerCase()) + 1, 0]],
-    [new RegExp(`^${MON} ’(\\d{2})$`, 'i'), (m) => [2000 + Number(m[2]), MONTHS.indexOf(m[1].toLowerCase()) + 1, 0]],
+    [new RegExp(`^${MON} (\\d{4})$`, 'i'), (m) => [m[2], monthNo(m[1]), 0]],
+    [new RegExp(`^${MON} ’(\\d{2})$`, 'i'), (m) => [2000 + Number(m[2]), monthNo(m[1]), 0]],
   ];
 
   /** A day-first date (or an ISO one) as a number that sorts by the real date. */

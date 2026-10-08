@@ -85,14 +85,15 @@ def quarter_of(day: _dt.date) -> str:
 
 def quarter_bounds(quarter: str) -> tuple:
     match = _QUARTER.match(quarter or "")
-    if not match:
+    if not match or int(match.group(1)) < 1:
         raise GrowthError([f"{quarter!r} is not a quarter, like 2026-Q4."])
     year, number = int(match.group(1)), int(match.group(2))
-    if year < 1:
-        raise GrowthError([f"{quarter!r} is not a quarter, like 2026-Q4."])
     first = _dt.date(year, 3 * number - 2, 1)
-    last = (_dt.date(year + 1, 1, 1) if number == 4
-            else _dt.date(year, 3 * number + 1, 1)) - _dt.timedelta(days=1)
+    try:
+        last = (_dt.date(year + 1, 1, 1) if number == 4
+                else _dt.date(year, 3 * number + 1, 1)) - _dt.timedelta(days=1)
+    except ValueError:                 # 9999-Q4: the calendar ends there
+        raise GrowthError([f"{quarter!r} is not a quarter, like 2026-Q4."])
     return first, last
 
 
@@ -252,13 +253,13 @@ def build(*, quarter: str, today: _dt.date, roster: Sequence[Dict[str, Any]],
              "No project hours booked in the quarter yet.")
 
         achieved = _achieved(mine[name])
+        set_goals = f"{len(mine[name])} goal{'s' if len(mine[name]) != 1 else ''}"
         if not mine[name]:
             why = "No goals set for this quarter yet."
         elif achieved is None:
-            why = (f"{len(mine[name])} goal{'s' if len(mine[name]) != 1 else ''} "
-                   "set; counted once reviewed.")
+            why = f"{set_goals} set; counted once reviewed."
         else:
-            why = f"From the review of {len(mine[name])} goal{'s' if len(mine[name]) != 1 else ''}."
+            why = f"From the review of {set_goals}."
         part("own_goals", achieved, why)
 
         if led_names:
@@ -311,7 +312,7 @@ def build(*, quarter: str, today: _dt.date, roster: Sequence[Dict[str, Any]],
 
     # Rank within each grade, never across.
     grades = []
-    order = [g for g, _label in people_module.GRADES]
+    order = people_module.GRADE_KEYS
     for grade in sorted({p["grade"] for p in people_out},
                         key=lambda g: (order.index(g) if g in order else len(order), g)):
         group = [p for p in people_out if p["grade"] == grade]

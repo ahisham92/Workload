@@ -45,6 +45,8 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .model import today as _today
+
 
 #: The job type of real project work. Proposals, leave, idle time and the rest
 #: are charge codes, not projects.
@@ -66,7 +68,7 @@ _GRADE_RULES: Sequence[Tuple[str, str]] = (
     (r"lead|principal|head|manager|director|senior|^p[3-9]\b", "senior"),
     (r"junior|graduate|trainee|assistant", "junior"),
     (r"^p[12]\b|engineer", "engineer"),
-    (r"professional|junior|graduate|trainee|assistant|^p0\b", "junior"),
+    (r"professional|^p0\b", "junior"),
 )
 
 #: A phase's type, read from what it is called. First match wins, so the
@@ -218,7 +220,11 @@ def plan_projects(rows: Sequence[Dict[str, Any]], *,
     oldest history that waits rather than this month's work.
     """
     have = {str(n).strip() for n in existing}
-    newest = max((r["date"] for r in rows if r.get("date")), default=None)
+    # The newest day worked: leave booked ahead is on the timesheets too, and
+    # a day off in January must not make this year's work look finished.
+    as_at = _today()
+    days = [r["date"] for r in rows if r.get("date")]
+    newest = max((d for d in days if d <= as_at), default=max(days, default=None))
 
     jobs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -317,9 +323,9 @@ def _proposal_key(number: str) -> Optional[Tuple[bool, int]]:
 
 
 def _proposal_plans(rows, have, newest, credit_steps, hours_per_mm):
-    taken = {_proposal_key(n) for n in have} - {None}
-    if newest is None:
+    if newest is None or "PP" not in credit_steps:
         return []
+    taken = {_proposal_key(n) for n in have} - {None}
     buckets: Dict[Tuple[str, int], List[Dict[str, Any]]] = defaultdict(list)
     for row in rows:
         day = row.get("date")
@@ -335,7 +341,7 @@ def _proposal_plans(rows, have, newest, credit_steps, hours_per_mm):
         number_stem, name_stem = next((n, m) for p, n, m in PROPOSAL_KINDS
                                       if p == prefix)
         number = f"{number_stem} {year % 100:02d}"
-        if (prefix.startswith("2"), year) in taken or "PP" not in credit_steps:
+        if (prefix.startswith("2"), year) in taken:
             continue
         finished = year < newest.year
         hours = sum(r.get("hours") or 0.0 for r in booked)

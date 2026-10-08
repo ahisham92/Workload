@@ -274,7 +274,11 @@ def _restore(db: Accounts, data_dir: Path, args) -> int:
         return 2
     # A unit still on its old workbook is brought across first, so the copy
     # kept of what it had is a database like every other copy.
-    storage.bring_across(data_dir, user["id"], unit["id"], unit["filename"])
+    found = storage.bring_across(data_dir, user["id"], unit["id"], unit["filename"])
+    if found["filename"] != unit["filename"]:
+        # The workbook is with the copies now; the unit is its database,
+        # whether or not the restore below goes through.
+        db.set_unit_filename(user["id"], unit["id"], found["filename"])
     try:
         result = storage.replace_unit_file(data_dir, user["id"], unit["id"],
                                            source.read_bytes())
@@ -428,7 +432,9 @@ def _units(db: Accounts, data_dir: Path, args) -> int:
                 print(f"      {low} to {high}, "
                       f"{sum(r['hours'] for r in store.all_rows()):,.1f} hours")
         kept = storage.backups_dir(data_dir, user["id"])
-        kept = sorted(kept.glob("*")) if kept.is_dir() else []
+        # By when each was made: the names start with the unit, not the date.
+        kept = sorted(kept.glob("*"), key=lambda p: p.stat().st_mtime) \
+            if kept.is_dir() else []
         print(f"  backups: {len(kept)}"
               + (f", newest {kept[-1].name}" if kept else ""))
     return 0

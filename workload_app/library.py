@@ -11,12 +11,11 @@ folder, so nothing in the app has any business listing the server's disk.
 
 from __future__ import annotations
 
-import datetime as _dt
 import os
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 from . import config as cfg
 
@@ -32,18 +31,6 @@ REQUIRED_SHEETS = [
 
 class NotAWorkbook(ValueError):
     """The chosen file is not a Workload workbook."""
-
-
-def describe(path: Path) -> Dict[str, Any]:
-    stat = path.stat()
-    return {
-        "path": str(path),
-        "name": path.name,
-        "folder": str(path.parent),
-        "size_mb": round(stat.st_size / 1_048_576, 2),
-        "modified": _dt.datetime.fromtimestamp(stat.st_mtime).isoformat(
-            timespec="seconds"),
-    }
 
 
 def check(path: Path) -> List[str]:
@@ -75,7 +62,7 @@ def validate(path: Path) -> Path:
     path = Path(path).expanduser()
     try:
         path = path.resolve(strict=True)
-    except (OSError, FileNotFoundError):
+    except OSError:
         raise NotAWorkbook(f"There is no file at {path}.")
     missing = check(path)
     if missing:

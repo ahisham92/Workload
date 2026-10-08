@@ -160,9 +160,14 @@ class TestWhoIsAsking:
     def test_the_pages_ask_for_everything_under_the_mount(self, app):
         """A page that asked the site's root for /api would get the wrong app."""
         static = Path(wsgi.__file__).parent / "static"
+        # BASE is worked out once, in common.js, which every page loads.
+        assert "const BASE = new URL('.', window.location.href)" in (
+            static / "common.js").read_text(encoding="utf-8")
+        for page in ("index.html", "member.html", "login.html"):
+            assert '<script src="common.js"></script>' in (
+                static / page).read_text(encoding="utf-8")
         for page in ("app.js", "member.js", "login.html"):
             body = (static / page).read_text(encoding="utf-8")
-            assert "const BASE = new URL('.', window.location.href)" in body
             assert "fetch('/api" not in body and "fetch(path" not in body
             assert "href = '/" not in body
         # And they are served from under it.

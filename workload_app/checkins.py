@@ -30,6 +30,7 @@ from . import daily
 from . import people as people_module
 from . import planner
 from . import tasks as task_sheet
+from .tasks import week_start
 
 #: Working days of free hours shown ahead.
 AHEAD_DAYS = 10
@@ -73,22 +74,14 @@ SIGNAL_ORDER = ["rest", "busy", "fresh", "steady"]
 LEVELS = ("now", "soon", "note")
 
 
-def week_start(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
-    """The first day of ``day``'s week -- a Sunday where the week starts then."""
-    start = day - _dt.timedelta(days=day.weekday())
-    if 6 in config["work_days"] and 4 not in config["work_days"]:
-        start -= _dt.timedelta(days=1)
-        if start + _dt.timedelta(days=7) <= day:
-            start += _dt.timedelta(days=7)
-    return start
-
-
-def _working(start: _dt.date, end: _dt.date, config: Dict[str, Any]) -> List[_dt.date]:
-    return task_sheet.working_days(start, end, config) if start <= end else []
-
-
 def _short(day: Optional[_dt.date]) -> str:
     return day.strftime("%a %d %b") if day else ""
+
+
+def _task_label(task: task_sheet.Task) -> str:
+    """A task as a check-in names it: "Name (project)"."""
+    label = task.name or f"Task {task.id}"
+    return f"{label} ({task.project_number})" if task.project_number else label
 
 
 def _hours(value: float) -> str:
@@ -120,7 +113,8 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
         day, name = row.get("date"), row.get("engineer")
         if not day or not name:
             continue
-        if name not in last_row or day > last_row[name]:
+        # Leave booked ahead is not a timesheet that has come in.
+        if day <= through and (name not in last_row or day > last_row[name]):
             last_row[name] = day
         if name not in first_row or day < first_row[name]:
             first_row[name] = day
@@ -136,10 +130,13 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
         # Somebody who joined in the window had no hours to give before their
         # first timesheet day: a new joiner's first week is not a quiet one.
         joined = first_row.get(name)
+        # Nor are the days after their newest timesheet quiet ones: those
+        # hours have not come in yet (the check-in asks for them).
+        seen = last_row.get(name)
         series = []
         for start in starts:
-            end = min(start + _dt.timedelta(days=6), through)
-            days = [d for d in _working(start, end, config)
+            end = min(start + _dt.timedelta(days=6), through, seen or through)
+            days = [d for d in task_sheet.working_days(start, end, config)
                     if joined is None or d >= joined]
             off = sum(1 for d in days if d.isoformat() in own)
             capacity = (len(days) - off) * a_day
@@ -251,8 +248,7 @@ def free_hours(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Tas
     measured = planner.pace(rows, config)["rates"]
     per: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for day in window:
-        active = planner._active_saved(saved, day, day)
-        rates, _ = planner._apply_project_moves(measured, active)
+        rates = planner.rates_in_force(measured, saved, day)
         laid = daily.plan_day(day=day, today=today, roster=roster, rates=rates,
                               tasks=tasks, slots=slots, config=config,
                               project_names=project_names,
@@ -289,14 +285,12 @@ def checkpoints(name: str, *, tasks: Sequence[task_sheet.Task], today: _dt.date,
     for task in tasks:
         if task.done or name not in task.assignees:
             continue
-        label = task.name or f"Task {task.id}"
-        if task.project_number:
-            label = f"{label} ({task.project_number})"
+        label = _task_label(task)
         if task.status == "Blocked":
             out.append(_point("now", "blocked", f"{label} is blocked. What do they need "
                               f"to get it moving?", task_id=task.id))
         elif task.due and task.due < today:
-            late = len(_working(task.due + _dt.timedelta(days=1), today, config))
+            late = len(task_sheet.working_days(task.due + _dt.timedelta(days=1), today, config))
             out.append(_point("now", "overdue",
                               f"{label} was due {_short(task.due)}"
                               f"{f', {late} working day(s) ago' if late else ''}. "
@@ -336,7 +330,7 @@ def checkpoints(name: str, *, tasks: Sequence[task_sheet.Task], today: _dt.date,
                           f"Suggest they book some leave."))
 
     if last_row and team_last and last_row < team_last:
-        gap = [d for d in _working(last_row + _dt.timedelta(days=1), team_last, config)
+        gap = [d for d in task_sheet.working_days(last_row + _dt.timedelta(days=1), team_last, config)
                if not calendar_.is_away(config, name, d)]
         if len(gap) >= TIMESHEET_GAP_DAYS:
             out.append(_point("soon", "timesheet",
@@ -397,7 +391,7 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             own = [r["date"] for r in rows if r.get("engineer") == name and r.get("date")]
             first_row = min(own) if own else None
         since_from = off or first_row
-        since = (len(_working(since_from + _dt.timedelta(days=1), through, config))
+        since = (len(task_sheet.working_days(since_from + _dt.timedelta(days=1), through, config))
                  if since_from else None)
         load = signal(series, days_since_break=since)
         days = ahead["people"].get(name, [])
@@ -405,9 +399,10 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         top = project_names.get(mine[0][1]) or mine[0][1] if mine else ""
         week = days[:5]
         asks, off_news = _said(name, marks, tasks, today)
+        last_row = past["last_row"].get(name)
         points = checkpoints(
             name, tasks=tasks, today=today, config=config, load=load,
-            last_row=past["last_row"].get(name), team_last=through,
+            last_row=last_row, team_last=through,
             ahead=days, top_work=top)
         stuck_tasks = {a["task_id"] for a in asks if a["kind"] == "stuck"}
         points = [_ask_point(a) for a in asks] + [
@@ -423,8 +418,7 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             "weeks": series,
             "signal": load,
             "last_day_off": off.isoformat() if off else None,
-            "last_timesheet": (past["last_row"].get(name).isoformat()
-                               if past["last_row"].get(name) else None),
+            "last_timesheet": last_row.isoformat() if last_row else None,
             "days": days,
             "free_week": round(sum(d["free"] for d in week), 1),
             "free_total": round(sum(d["free"] for d in days), 1),
@@ -497,11 +491,7 @@ def _said(name: str, marks: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet
             if mark.get("task_id") and (task is None or task.done
                                         or name not in task.assignees):
                 continue
-            label = ""
-            if task is not None:
-                label = task.name or f"Task {task.id}"
-                if task.project_number:
-                    label = f"{label} ({task.project_number})"
+            label = _task_label(task) if task is not None else ""
             asks.append({"id": mark["id"], "kind": mark["kind"], "note": mark["note"],
                          "task_id": mark.get("task_id"), "task": label,
                          "at": mark["created_at"]})

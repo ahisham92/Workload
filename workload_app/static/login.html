@@ -46,14 +46,15 @@
   </p>
 </main>
 
+<script src="common.js"></script>
 <script>
 const form = document.getElementById('login-form');
 const errors = document.getElementById('login-error');
 const button = document.getElementById('btn-login');
 
 /* If this installation has no accounts at all, say so rather than letting
-   somebody guess passwords against a door with nothing behind it. */
-const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
+   somebody guess passwords against a door with nothing behind it.
+   (BASE, where this page is served from, is common.js's.) */
 fetch(`${BASE}/api/auth/me`, { headers: { Accept: 'application/json' } })
   .then((r) => r.json())
   .then((data) => {

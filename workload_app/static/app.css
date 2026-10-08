@@ -1020,13 +1020,12 @@ tr.row-done .task-name { text-decoration: line-through; }
 
 .day-grid { display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-.day-card { background: var(--surface); border: 1px solid var(--border);
+.day-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); }
 .day-card.is-over { border-top: 3px solid var(--bad); }
 .day-card header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   margin-bottom: 6px; }
 .day-card header .pill { margin-left: auto; }
-.day-card { display: flex; flex-direction: column; }
 .day-card .day-away { margin-top: auto; align-self: flex-start; padding: 6px 0 0; border: 0;
   background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
 .day-card .day-away:hover { color: var(--accent, inherit); text-decoration: underline; }
@@ -1155,7 +1154,7 @@ tr.row-done .task-name { text-decoration: line-through; }
   font-size: 12.5px; color: var(--muted); padding: 7px 6px; min-width: 46px; }
 .ci-free-table td.ci-free { color: var(--ok); font-weight: 600;
   background: color-mix(in srgb, var(--ok) calc(var(--free, 0) * 30%), transparent); }
-.ci-free-table td.ci-over { color: var(--bad); }
+.ci-free-table td.ci-over { color: var(--bad); font-size: 11.5px; opacity: .8; }
 .ci-free-table td.ci-away { color: var(--muted); font-style: italic;
   background: repeating-linear-gradient(135deg, var(--surface-2) 0 6px, transparent 6px 12px); }
 .ci-free-table th.num { text-align: center; }
@@ -1176,13 +1175,11 @@ tr.row-done .task-name { text-decoration: line-through; }
 .ci-card.ci-rest { border-left-color: var(--bad); }
 .ci-card.ci-busy { border-left-color: var(--warn); }
 .ci-card.ci-fresh { border-left-color: var(--ok); }
-.ci-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.ci-head { align-items: flex-start; }
+.ci-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .ci-who { min-width: 0; }
 .ci-who .muted { font-size: 12px; margin-top: 1px; }
 .ci-head .swatch { margin-right: 6px; }
 td.ci-ask { white-space: normal; min-width: 280px; }
-.ci-free-table td.ci-over { font-size: 11.5px; opacity: .8; }
 .ci-chart .ci-bars { width: 100%; height: 64px; display: block; }
 .ci-bar-on { fill: var(--ok); opacity: .85; }
 .ci-bar-over { fill: var(--bad); }

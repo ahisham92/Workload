@@ -1,22 +1,12 @@
-"""Timesheet rows, in a database instead of the workbook.
+"""Timesheet rows, and everything else the planner keeps about a unit.
 
-The workbook consolidates the monthly sheets with ``VSTACK`` and reads the
-result up to a fixed row, and every ``SUMIFS`` in the file stops at that row
-too.  That design has two ceilings: the stack (raising it rewrites ~138,000
-formulas and takes the better part of a minute) and the twelve engineer slots
-the calendar and the share columns have room for.  A head of department with
-eighty people below him fits in neither.
+The rows live in the unit's own SQLite file, beside the registers ``Unit``
+keeps there (see ``unit``).  There is no cap: adding a person costs nothing,
+and a year of eighty people is a few hundred thousand rows -- which SQLite
+considers small.  ``metrics.TimesheetIndex`` reads its figures from here.
 
-So the rows live here instead: one SQLite file per unit, beside its workbook.
-There is no cap, adding a person costs nothing, and a year of eighty people is
-a few hundred thousand rows -- which SQLite considers small.
-
-The workbook keeps everything else, and keeps being the model: projects,
-deliverables, project types, rules of credit, the scorecard, the calendar.
-This holds only what those formulas used to sum over, and
-``metrics.TimesheetIndex`` reads from here instead of from the sheets.  On
-export the rows are written back into the TS sheets, as far as they fit, so
-the file you download is still a workbook that opens and calculates.
+The same file holds the teams, time away, drawing counts, budgets, meetings
+and the rest of what the screens keep, each in its own table below.
 """
 
 from __future__ import annotations
@@ -649,6 +639,8 @@ class TimesheetStore:
             db.execute("UPDATE OR REPLACE people SET name = ? WHERE name = ?",
                        (new, old))
             db.execute("UPDATE rows SET person = ? WHERE person = ?", (new, old))
+            # A team's lead is named the same way.
+            db.execute("UPDATE teams SET lead = ? WHERE lead = ?", (new, old))
             db.execute("UPDATE plan_moves SET from_person = ? "
                        "WHERE from_person = ?", (new, old))
             db.execute("UPDATE plan_moves SET to_person = ? "
@@ -676,6 +668,25 @@ class TimesheetStore:
                                (json.dumps(names),
                                 new if row["added_by"] == old else row["added_by"],
                                 row["id"]))
+            # Saved what-ifs name who work moves from and to.
+            for row in db.execute("SELECT id, moves FROM what_ifs").fetchall():
+                try:
+                    moves = json.loads(row["moves"] or "[]")
+                except ValueError:
+                    continue
+                if not isinstance(moves, list):
+                    continue
+                changed = False
+                for move in moves:
+                    if not isinstance(move, dict):
+                        continue
+                    for side in ("from", "to"):
+                        if move.get(side) == old:
+                            move[side] = new
+                            changed = True
+                if changed:
+                    db.execute("UPDATE what_ifs SET moves = ? WHERE id = ?",
+                               (json.dumps(moves), row["id"]))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
                        "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
@@ -710,10 +721,7 @@ class TimesheetStore:
             rows = db.execute(
                 "SELECT person, unit FROM rows WHERE unit <> '' "
                 "ORDER BY day IS NULL DESC, day, id").fetchall()
-        out: Dict[str, str] = {}
-        for row in rows:
-            out[row["person"]] = row["unit"]
-        return out
+        return {row["person"]: row["unit"] for row in rows}
 
     # -- drawings ----------------------------------------------------------
     def drawings(self) -> Dict[int, Dict[str, Any]]:
@@ -752,6 +760,14 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM plan_moves WHERE id = ?",
                               (int(move_id),)).rowcount
+
+    def highest_task_id(self) -> int:
+        """The highest task id anything kept here still names."""
+        with self._connect() as db:
+            return int(db.execute(
+                "SELECT MAX(id) FROM (SELECT MAX(task_id) AS id FROM slots "
+                "UNION ALL SELECT MAX(task_id) FROM member_marks "
+                "UNION ALL SELECT MAX(task_id) FROM week_plans)").fetchone()[0] or 0)
 
     # -- time slots for requests -------------------------------------------
     def slots(self) -> Dict[int, Dict[str, Any]]:

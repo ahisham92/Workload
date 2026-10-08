@@ -17,7 +17,8 @@ import html
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .checkins import _hours, week_start
+from .checkins import _hours
+from .tasks import week_start
 
 #: How many things to do the report leads with, most pressing first.
 TODO_AT_MOST = 7
@@ -36,6 +37,12 @@ def _day(value: Any) -> Optional[_dt.date]:
 
 def _short(day: Optional[_dt.date]) -> str:
     return day.strftime("%a %d %b").replace(" 0", " ") if day else ""
+
+
+def _full(value: Any) -> str:
+    """A date as shown everywhere: day first, 08/10/2026."""
+    day = _day(value)
+    return day.strftime("%d/%m/%Y") if day else str(value or "")
 
 
 def _pct(load: Optional[float]) -> str:
@@ -272,8 +279,9 @@ def as_html(report: Mapping[str, Any]) -> str:
         "li{margin:4px 0}.dot{display:inline-block;width:9px;height:9px;"
         "border-radius:50%;margin-right:8px}</style></head><body>",
         f"<h1>{e(report['unit'])}: weekly report</h1>",
-        f"<p class='muted'>{e(report['title'])} · made {e(report['made'])}"
-        + (f" · timesheets up to {e(report['through'])}" if report.get("through") else "")
+        f"<p class='muted'>{e(report['title'])} · made {e(_full(report['made']))}"
+        + (f" · timesheets up to {e(_full(report['through']))}"
+           if report.get("through") else "")
         + "</p>",
         f"<p><b>{e(report['headline'])}</b></p>",
         "<h2>What to do this week</h2>",

@@ -14,12 +14,12 @@ other drawing figure is worked out from it:
   over the drawings done on them -- the unit's own rate, read from its own
   history rather than assumed.
 
-Nothing here is written to the workbook.  The counts live in the unit's
-database beside the timesheet rows.
+The counts live in the unit's database beside the timesheet rows.
 """
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
@@ -46,6 +46,8 @@ def clean_count(value: Any) -> Optional[int]:
     try:
         number = float(str(value).strip().replace(",", ""))
     except ValueError:
+        raise DrawingsError(f"{value!r} is not a number of drawings.")
+    if not math.isfinite(number):
         raise DrawingsError(f"{value!r} is not a number of drawings.")
     if number < 0 or number != int(number):
         raise DrawingsError("A number of drawings is a whole number, 0 or more.")
@@ -204,7 +206,7 @@ def summary(deliverable_rows: Sequence[Dict[str, Any]],
     for person in person_out:
         key = person["team_id"] or people_module.UNASSIGNED
         entry = team_totals.setdefault(key, {
-            "id": key, "name": person["team_name"] or "Not in a team",
+            "id": key, "name": person["team_name"] or people_module.NO_TEAM,
             "done": 0.0, "left": 0.0})
         entry["done"] += person["done"]
         entry["left"] += person["left"]
@@ -212,7 +214,7 @@ def summary(deliverable_rows: Sequence[Dict[str, Any]],
                  for t in sorted(team_totals.values(), key=lambda t: t["name"])]
 
     total = sum(p["total"] for p in project_out)
-    done = sum(per_project[n]["done"] for n in per_project)
+    done = sum(t["done"] for t in per_project.values())
     return {
         "known": bool(per_deliverable),
         "total": int(total),

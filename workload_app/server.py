@@ -18,9 +18,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .app import Request, WorkloadApp, parse_body, parse_cookies
 from .service import ApiError, MAX_UPLOAD_BYTES
 
-# Re-exported so existing imports keep working.
-__all__ = ["Handler", "make_server", "WorkloadApp", "ApiError"]
-
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Workload/2.0"
@@ -60,7 +57,9 @@ class Handler(BaseHTTPRequestHandler):
             query=parse_qs(parsed.query),
             body=body,
             cookies=parse_cookies(self.headers.get("Cookie")),
-            secure=self.headers.get("X-Forwarded-Proto", "").lower() == "https",
+            # The first hop is the browser's, as on a host (see wsgi).
+            secure=(self.headers.get("X-Forwarded-Proto") or "").split(",")[0]
+            .strip().lower() == "https",
             accept_encoding=self.headers.get("Accept-Encoding") or "",
             if_none_match=self.headers.get("If-None-Match") or "",
         )

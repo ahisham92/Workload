@@ -13,7 +13,8 @@
  * library, so it stays light on a phone.
  *
  * Built on app.js's helpers (el, api, state, fmt, tone, engineerColor,
- * initials, setChildren) and checkins.js's `checkin`.
+ * initials, setChildren), charts.js's svgEl, checkins.js's `checkin` and
+ * SIGNAL_TONE, planner.js's loadTone, and common.js's clamp and dateText.
  */
 'use strict';
 
@@ -25,25 +26,11 @@
     loading: null,
   };
 
-  const SIGNAL_CLASS = { rest: 'bad', busy: 'warn', fresh: 'ok', steady: 'info' };
-  const NS = 'http://www.w3.org/2000/svg';
   const reduced = () => window.matchMedia
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const svg = svgEl;
 
-  function svg(tag, attrs = {}, ...children) {
-    const node = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (v !== null && v !== undefined) node.setAttribute(k, v);
-    }
-    for (const child of children.flat()) {
-      if (child === null || child === undefined) continue;
-      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
-    }
-    return node;
-  }
-
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
+  const pct = fmt.pct0;
   const hrs = (v) => `${fmt.hours(v || 0)} h`;
 
   /* ------------------------------------------------------------- data */
@@ -182,7 +169,7 @@
     el('div', { class: 'pc-name' }, name,
       name === state.myself ? el('span', { class: 'pill pill-ok pc-you' }, 'You') : null),
     el('div', { class: 'pc-sub' }, [p.grade, p.team].filter(Boolean).join(' · ') || 'No grade or team yet'),
-    signal ? el('span', { class: `pc-signal pill pill-${SIGNAL_CLASS[signal.key] || 'info'}` }, signal.label) : null,
+    signal ? el('span', { class: `pc-signal pill pill-${SIGNAL_TONE[signal.key] || 'info'}` }, signal.label) : null,
     el('div', { class: 'pc-stats' },
       statRow('Efficiency', fmt.ratio(e.cpi), (e.cpi || 0) / 1.4, tone.cpi(e.cpi),
         'Earned per man-month spent (CPI)'),
@@ -204,17 +191,12 @@
       el('div', { class: 'pc-next-head' },
         el('span', {}, 'Next 5 days'),
         loadAhead !== null && loadAhead !== undefined
-          ? el('b', { class: `v-${loadTone5(loadAhead)}` }, `${pct(loadAhead)} loaded`) : null),
+          ? el('b', { class: `v-${loadTone(loadAhead)}` }, `${pct(loadAhead)} loaded`) : null),
       work.length
         ? work.map((i) => el('div', { class: 'pc-job' },
           el('span', { class: 'pc-job-name' }, i.project ? `${i.project} ` : '', i.project && i.name !== i.project ? el('span', { class: 'muted' }, i.name) : (i.project ? '' : i.name)),
           el('span', { class: 'pc-job-hours' }, hrs(i.hours_after))))
         : el('div', { class: 'muted small' }, 'Nothing lined up.')));
-  }
-
-  function loadTone5(load) {
-    if (load === null || load === undefined) return '';
-    return load > 1.0001 ? 'bad' : load < 0.8 ? 'warn' : 'ok';
   }
 
   function maximaOf(names) {
@@ -310,8 +292,7 @@
       'aria-label': 'Load over the last weeks' },
     weeks.map((w, i) => {
       const v = w.load || 0;
-      const t = v > 1.0001 ? 'bad' : v < 0.8 ? 'warn' : 'ok';
-      return svg('rect', { class: `pf-bar t-${t}`, x: pad + i * bw + 3, y: y(v), width: bw - 6,
+      return svg('rect', { class: `pf-bar t-${loadTone(v)}`, x: pad + i * bw + 3, y: y(v), width: bw - 6,
         height: Math.max(1, H - pad - y(v)), rx: 3 },
       svg('title', {}, `Week of ${fmt.date(w.week)}: ${pct(v)} of their hours (${fmt.hours(w.hours)} h)`));
     }),
@@ -377,7 +358,7 @@
         el('div', { class: 'pf-who' },
           el('h3', {}, name),
           el('div', { class: 'muted' }, [p.grade, p.team].filter(Boolean).join(' · ')),
-          signal ? el('span', { class: `pill pill-${SIGNAL_CLASS[signal.key] || 'info'}` }, signal.label) : null),
+          signal ? el('span', { class: `pill pill-${SIGNAL_TONE[signal.key] || 'info'}` }, signal.label) : null),
         el('div', { class: `pf-score v-${tone.score(p.score) || 'none'}` },
           el('b', {}, p.score === undefined || p.score === null ? '—' : num(p.score, 1)),
           el('span', {}, p.rank ? `score · ${p.rank} of ${p.of} (${p.among})` : 'score'))),
@@ -557,7 +538,7 @@
       return `rgba(${f(r)},${f(g)},${f(b)},${alpha})`;
     }
 
-    const toneOf = (v) => (v === null || v === undefined ? 'none' : v > 1.0001 ? 'bad' : v < 0.8 ? 'warn' : 'ok');
+    const toneOf = (v) => loadTone(v) || 'none';
     const HMAX = 1.8;  // a load of 180% fills the height
     const UNIT = 0.9;  // height of a full load, in grid cells
 
@@ -683,7 +664,7 @@
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
       }
       // where the past ends and the coming weeks start
-      if (model.now !== null && model.now !== undefined && model.now > 0 && model.now < C) {
+      if (model.now > 0 && model.now < C) {
         const a = P(x0 + model.now, 0, z0 - 0.2); const b = P(x0 + model.now, 0, z1 + 0.1);
         ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = colors.text; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.restore();
@@ -740,7 +721,7 @@
         const p = P(x0 + c + 0.5, 0, z1 + 0.5);
         ctx.fillText(cols[c], p[0], p[1] + 4);
       }
-      if (model.now !== null && model.now !== undefined && model.now > 0 && model.now < C) {
+      if (model.now > 0 && model.now < C) {
         const t = P(x0 + model.now, 0, z1 + 0.15);
         ctx.font = '700 11px system-ui, sans-serif'; ctx.textAlign = 'left';
         ctx.fillStyle = colors.text; ctx.fillText('▲ today', t[0] - 6, t[1] + 16);
@@ -836,31 +817,32 @@
     if (scheme && scheme.addEventListener) {
       scheme.addEventListener('change', () => { if (canvas.isConnected) { readColors(); draw(); } });
     }
-    return { redraw: draw };
   }
 
   /* -------------------------------------- the landscape on Check-ins */
 
   const scape = { mode: 'next', outlook: null };
 
-  function shortWeek(iso) {
-    return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  }
+  function shortWeek(iso) { return dateText(iso, { day: 'numeric', month: 'short' }); }
 
   /** People: the last weeks from the timesheets, then the next two as laid out. */
   function peopleModel(data) {
     const people = (data.people || []).filter((p) => (p.weeks || []).length);
     if (!people.length) return null;
     const past = data.weeks || [];
+    // The unit's weeks start on its first working day (a Sunday for a
+    // Sunday-to-Thursday unit), as the past weeks from Check-ins do; the
+    // coming ones are cut the same way, or a Sunday lands in the week before.
+    const startDay = past.length ? new Date(`${past[past.length - 1]}T00:00:00`).getDay() : 1;
     // the next two weeks, from the days Check-ins lays out
     const ahead = [];
     for (const p of people) {
       const byWeek = new Map();
       for (const d of p.days || []) {
         const day = new Date(`${d.date}T00:00:00`);
-        const monday = new Date(day);
-        monday.setDate(day.getDate() - ((day.getDay() + 6) % 7));
-        const key = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+        const first = new Date(day);
+        first.setDate(day.getDate() - ((day.getDay() - startDay + 7) % 7));
+        const key = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-${String(first.getDate()).padStart(2, '0')}`;
         const w = byWeek.get(key) || { booked: 0, cap: 0 };
         if (!d.away) {
           w.booked += (d.booked || 0) + (d.over || 0);
@@ -956,7 +938,7 @@
     for (const c of data.can_take || []) {
       if (taking.has(c.name)) continue;
       out.push({ tone: 'room', title: `${c.name} can take the next job`,
-        text: `${hrs(c.free_week)} free this week${c.next_free ? `, from ${new Date(`${c.next_free}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}.`,
+        text: `${hrs(c.free_week)} free this week${c.next_free ? `, from ${dateText(c.next_free)}` : ''}.`,
         action: go('Add a task', () => switchView('tasks')) });
     }
     const urgent = [];

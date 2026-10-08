@@ -7,7 +7,8 @@
  * parts and weights, and people are ranked only against their own grade.
  *
  * Built on app.js's helpers (el, api, setChildren, openModal, modalValues,
- * toast, engineerColor, fmt).
+ * toast, engineerColor, fmt), checkins.js's statCard and LEVEL_TONE, and
+ * common.js's dateText.
  */
 'use strict';
 
@@ -18,12 +19,6 @@ const GR_PART_COLOR = {
   team_support: 'var(--series-4)', developing: 'var(--series-5)',
 };
 const GR_RESULT_TONE = { met: 'ok', partly: 'warn', not_met: 'bad', '': 'neutral' };
-const GR_LEVEL_TONE = { now: 'bad', soon: 'warn', note: 'info' };
-
-function grDay(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
-  if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
-}
 
 async function loadGrowth(force = false) {
   if (grow.busy) return;
@@ -93,9 +88,14 @@ function growthTodo(data) {
     el('div', { class: 'panel-head' }, el('div', {},
       el('h3', {}, 'What to do'),
       el('p', { class: 'muted' }, 'Most pressing first. Goals are set at the start of each quarter and reviewed at its end.'))),
-    el('ol', { class: 'gr-todo-list' }, ...data.todo.map((item) =>
-      el('li', { class: `gr-todo-item gr-${GR_LEVEL_TONE[item.level] || 'info'}` },
-        el('span', {}, dayFirstText(item.text)), action(item)))));
+    todoList(data.todo, action));
+}
+
+/** The numbered "what to do" list, most pressing first; budgets.js uses it too. */
+function todoList(items, action) {
+  return el('ol', { class: 'gr-todo-list' }, ...items.map((item) =>
+    el('li', { class: `gr-todo-item gr-${LEVEL_TONE[item.level] || 'info'}` },
+      el('span', {}, dayFirstText(item.text)), action(item))));
 }
 
 function growthStats(data) {
@@ -107,18 +107,14 @@ function growthStats(data) {
   const met = reviewed.length
     ? Math.round(100 * reviewed.reduce((s, g) => s + score[g.result], 0) / reviewed.length) : null;
   const hours = people.reduce((s, p) => s + (p.development_hours || 0), 0);
-  const card = (label, value, toneName, sub) => el('div', { class: 'card' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: `value ${toneName ? `v-${toneName}` : ''}` }, value),
-    el('div', { class: 'sub' }, sub));
   return el('div', { class: 'cards cards-4' },
-    card('Have goals', `${withGoals} of ${people.length}`,
+    statCard('Have goals', `${withGoals} of ${people.length}`,
       withGoals === people.length ? 'ok' : 'warn', data.label),
-    card('Goals set', goals.length, '', `${reviewed.length} reviewed so far`),
-    card('Goals met', met === null ? '—' : `${met}%`,
+    statCard('Goals set', goals.length, '', `${reviewed.length} reviewed so far`),
+    statCard('Goals met', met === null ? '—' : `${met}%`,
       met === null ? '' : met >= 70 ? 'ok' : met >= 40 ? 'warn' : 'bad',
       met === null ? 'counted at the review' : 'met = 100, partly = 50'),
-    card('Development time', `${fmt.hours(hours)} h a week`, 'ok',
+    statCard('Development time', `${fmt.hours(hours)} h a week`, 'ok',
       'kept in everyone\'s plan, nothing booked over it'));
 }
 
@@ -200,7 +196,7 @@ function personGoals(p, data) {
         el('div', { class: 'muted' }, [p.grade_label, p.team_name].filter(Boolean).join(' · '))),
       el('span', { class: 'pill pill-ok', title: 'Kept in their plan every week' },
         `${fmt.hours(p.development_hours)} h a week`
-        + (p.development_day && data.quarter === data.current ? ` · ${grDay(p.development_day, { weekday: 'short' })}` : ''))),
+        + (p.development_day && data.quarter === data.current ? ` · ${dateText(p.development_day, { weekday: 'short' })}` : ''))),
     p.goals.length
       ? el('ul', { class: 'gr-goals' }, ...p.goals.map(goalItem))
       : el('p', { class: 'muted gr-none' }, 'No goals for this quarter yet.'),

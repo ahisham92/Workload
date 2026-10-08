@@ -11,9 +11,8 @@ The methods are the ones the rest of the app has always called on a unit, and
 they return the same records (see ``model``), so the screens, the reports and
 the planner do not need to know where a unit is kept.
 
-Every write commits at once.  ``save`` is kept for the callers that still ask
-for it and does nothing; ``refresh`` notices a write made by another worker
-process, through a revision number every write bumps.
+Every write commits at once; ``refresh`` notices a write made by another
+worker process, through a revision number every write bumps.
 """
 
 from __future__ import annotations
@@ -194,7 +193,6 @@ CREATE TABLE IF NOT EXISTS phasing (
 #: Settings this module keeps in the store's ``settings`` table.
 _PREFIX = "unit."
 _MODEL = _PREFIX + "model"
-_REVISION = REVISION_KEY
 
 #: Cached values worked out from the timesheet rows and nothing else.
 ROW_KEYS = frozenset({"rows", "index", "leave"})
@@ -254,15 +252,9 @@ class Unit:
         if wrote:
             self.reload()
 
-    @contextmanager
-    def _write(self):
-        """A change, committed whole or not at all, that other readers notice.
-
-        Any write through ``_connect`` bumps the revision (``note_change``);
-        this is the name the writers use.
-        """
-        with self._connect() as db:
-            yield db
+    #: A change, committed whole or not at all, that other readers notice:
+    #: any write through ``_connect`` bumps the revision (``note_change``).
+    _write = _connect
 
     def _read_revision(self) -> Tuple[Any, str, str]:
         """Which version of the file this is: the file itself, its count of
@@ -272,8 +264,8 @@ class Unit:
         with self._connect() as db:
             counts = dict(db.execute(
                 "SELECT key, value FROM settings WHERE key IN (?, ?)",
-                (_REVISION, ROWS_REVISION_KEY)).fetchall())
-        return (_identity(self.path), counts.get(_REVISION, "0"),
+                (REVISION_KEY, ROWS_REVISION_KEY)).fetchall())
+        return (_identity(self.path), counts.get(REVISION_KEY, "0"),
                 counts.get(ROWS_REVISION_KEY, "0"))
 
     @property
@@ -429,10 +421,6 @@ class Unit:
             return sorted(years)
         return list(self._cached("availability_years", build))
 
-    def _availability_years(self) -> Dict[str, int]:
-        """The old shape (column -> year), for callers that still use it."""
-        return OrderedDict((str(year), year) for year in self.availability_years())
-
     def save_settings(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Change the unit's own numbers: hours per man-month, plan year..."""
         errors: List[str] = []
@@ -461,7 +449,7 @@ class Unit:
         if "availability_years" in data:
             try:
                 years = sorted({int(y) for y in data["availability_years"] or []})
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 years = []
                 errors.append("Availability years must be years.")
             changes["availability_years"] = json.dumps(years) if years else None
@@ -565,15 +553,7 @@ class Unit:
         """Add somebody to the team.  There is no limit to how many."""
         values = self._validate_engineer(data.get("short_name", ""), data)
         with self._write() as db:
-            position = db.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 AS n FROM engineers"
-            ).fetchone()["n"]
-            db.execute(
-                "INSERT INTO engineers (name, pattern, available_hours, position) "
-                "VALUES (?, ?, ?, ?)",
-                (values["name"], values["pattern"], values["available_hours"],
-                 position))
-            self._write_availability(db, values["name"], values["availability"])
+            position = self._insert_engineers(db, [values])
         return {"engineer": values["name"], "slot": position, "sheet": ""}
 
     def add_engineers(self, people: Sequence[Dict[str, Any]]) -> List[str]:
@@ -587,17 +567,23 @@ class Unit:
             names.add(values["name"].lower())
             checked.append(values)
         with self._write() as db:
-            position = db.execute(
-                "SELECT COALESCE(MAX(position), -1) + 1 AS n FROM engineers"
-            ).fetchone()["n"]
-            for offset, values in enumerate(checked):
-                db.execute(
-                    "INSERT INTO engineers (name, pattern, available_hours, "
-                    "position) VALUES (?, ?, ?, ?)",
-                    (values["name"], values["pattern"], values["available_hours"],
-                     position + offset))
-                self._write_availability(db, values["name"], values["availability"])
+            self._insert_engineers(db, checked)
         return [values["name"] for values in checked]
+
+    def _insert_engineers(self, db: sqlite3.Connection,
+                          checked: Sequence[Dict[str, Any]]) -> int:
+        """Checked people at the end of the team; the first one's position."""
+        position = db.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS n FROM engineers"
+        ).fetchone()["n"]
+        for offset, values in enumerate(checked):
+            db.execute(
+                "INSERT INTO engineers (name, pattern, available_hours, "
+                "position) VALUES (?, ?, ?, ?)",
+                (values["name"], values["pattern"], values["available_hours"],
+                 position + offset))
+            self._write_availability(db, values["name"], values["availability"])
+        return position
 
     def _write_availability(self, db: sqlite3.Connection, name: str,
                             availability: Dict[int, float]) -> None:
@@ -667,9 +653,7 @@ class Unit:
         cleared = sum(1 for d in self.deliverables() if d.shares.get(engineer))
         with self._write() as db:
             db.execute("DELETE FROM engineers WHERE name = ?", (engineer,))
-            for table in ("availability",):
-                db.execute(f"DELETE FROM {table} WHERE engineer = ?", (engineer,))
-            for table in ("project_shares", "deliverable_shares"):
+            for table in ("availability", "project_shares", "deliverable_shares"):
                 db.execute(f"DELETE FROM {table} WHERE engineer = ?", (engineer,))
         return {"engineer": engineer, "deliverables_cleared": cleared,
                 "sheet_removed": None}
@@ -1111,7 +1095,6 @@ class Unit:
         project, errors = self.validate_project(data)
         if errors:
             raise ValidationError(errors)
-        project.row = 0
         with self._write() as db:
             self._write_project(db, project)
         return project
@@ -1123,7 +1106,6 @@ class Unit:
         project, errors = self.validate_project(data, row=existing.row)
         if errors:
             raise ValidationError(errors)
-        project.row = existing.row
         with self._write() as db:
             self._write_project(db, project)
             if project.number != existing.number:
@@ -1304,7 +1286,6 @@ class Unit:
         deliverable, errors = self.validate_deliverable(data)
         if errors:
             raise ValidationError(errors)
-        deliverable.row = 0
         with self._write() as db:
             self._write_deliverable(db, deliverable)
         return deliverable
@@ -1315,7 +1296,6 @@ class Unit:
         deliverable, errors = self.validate_deliverable(data, row=row)
         if errors:
             raise ValidationError(errors)
-        deliverable.row = row
         with self._write() as db:
             self._write_deliverable(db, deliverable)
         return deliverable
@@ -1654,10 +1634,11 @@ class Unit:
         return task_list.save_settings(self, data)
 
     def task_load(self, *, weeks: Optional[int] = None,
-                  today: Optional[_dt.date] = None) -> Dict[str, Any]:
+                  today: Optional[_dt.date] = None,
+                  config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return task_list.load(
             task_list.read(self), self.engineer_names(),
-            self.task_settings(), today=today, weeks=weeks)
+            config or self.task_settings(), today=today, weeks=weeks)
 
     def save_task(self, data: Dict[str, Any],
                   task_id: Optional[int] = None) -> Dict[str, Any]:
@@ -1674,7 +1655,9 @@ class Unit:
 
     def generate_submission_tasks(self, *, only_row: Optional[int] = None,
                                   today: Optional[_dt.date] = None,
-                                  include_past: bool = False) -> Dict[str, Any]:
+                                  include_past: bool = False,
+                                  config: Optional[Dict[str, Any]] = None
+                                  ) -> Dict[str, Any]:
         """Fill in the run-up to every dated deliverable."""
         deliverables = []
         for source in self.deliverables():
@@ -1683,7 +1666,8 @@ class Unit:
             deliverables.append(item)
         return task_list.generate_submissions(
             self, deliverables, engineers=self.engineer_names(),
-            only_row=only_row, today=today, include_past=include_past)
+            only_row=only_row, today=today, include_past=include_past,
+            config=config)
 
     def generate_weekly_meetings(self, data: Dict[str, Any]) -> Dict[str, Any]:
         number = str(data.get("project_number") or "").strip()
@@ -1709,81 +1693,51 @@ class Unit:
     def register_issues(self) -> List[Dict[str, str]]:
         """What is missing or does not add up in the registers."""
         issues: List[Dict[str, str]] = []
+
+        def issue(level: str, where: str, message: str) -> None:
+            issues.append({"level": level, "where": where, "message": message})
+
         numbers = {p.number for p in self.projects()}
         weights = self.weight_by_project()
 
         for project in self.projects():
             total = weights.get(project.number)
             if total is None:
-                issues.append({
-                    "level": "info",
-                    "where": f"Project {project.number}",
-                    "message": (
-                        f"{project.number} has no deliverables, so its progress "
-                        f"falls back to its manual % complete."
-                    ),
-                })
+                issue("info", f"Project {project.number}",
+                      f"{project.number} has no deliverables, so its progress "
+                      f"falls back to its manual % complete.")
             elif abs(total - 1.0) > 1e-4:
-                issues.append({
-                    "level": "error",
-                    "where": f"Deliverables of {project.number}",
-                    "message": (
-                        f"Phase weights for {project.number} total "
-                        f"{total * 100:.1f}%, not 100%. Progress for this project "
-                        f"is not meaningful until they do."
-                    ),
-                })
+                issue("error", f"Deliverables of {project.number}",
+                      f"Phase weights for {project.number} total "
+                      f"{total * 100:.1f}%, not 100%. Progress for this project "
+                      f"is not meaningful until they do.")
 
         for deliverable in self.deliverables():
-            where = (f"{deliverable.project_number} · "
-                     f"{deliverable.name or 'deliverable'}")
+            label = deliverable.name or "deliverable"
+            where = f"{deliverable.project_number} · {label}"
             if deliverable.project_number not in numbers:
-                issues.append({
-                    "level": "error",
-                    "where": where,
-                    "message": (
-                        f"{deliverable.project_number} is not in the project "
-                        f"register."
-                    ),
-                })
+                issue("error", where,
+                      f"{deliverable.project_number} is not in the project "
+                      f"register.")
             total = sum(v for v in deliverable.shares.values() if v)
             if total and abs(total - 1.0) > 1e-4:
-                issues.append({
-                    "level": "error",
-                    "where": where,
-                    "message": (
-                        f"{deliverable.name or 'deliverable'}: the engineer split "
-                        f"totals {total * 100:.1f}%, not 100%."
-                    ),
-                })
+                issue("error", where,
+                      f"{label}: the engineer split totals {total * 100:.1f}%, "
+                      f"not 100%.")
             elif not total:
-                issues.append({
-                    "level": "warning",
-                    "where": where,
-                    "message": (
-                        f"{deliverable.name or 'deliverable'} has no engineer "
-                        f"split, so it earns nobody any credit."
-                    ),
-                })
-            if deliverable.type_code and deliverable.step_no is not None:
-                if self.credit_for(deliverable.type_code, deliverable.step_no) is None:
-                    issues.append({
-                        "level": "error",
-                        "where": where,
-                        "message": (
-                            f"Step {deliverable.step_no} is not valid for type "
-                            f"{deliverable.type_code}."
-                        ),
-                    })
+                issue("warning", where,
+                      f"{label} has no engineer split, so it earns nobody any "
+                      f"credit.")
+            if (deliverable.type_code and deliverable.step_no is not None
+                    and self.credit_for(deliverable.type_code,
+                                        deliverable.step_no) is None):
+                issue("error", where,
+                      f"Step {deliverable.step_no} is not valid for type "
+                      f"{deliverable.type_code}.")
             if deliverable.ts_phase is None:
-                issues.append({
-                    "level": "warning",
-                    "where": where,
-                    "message": (
-                        f"{deliverable.name or 'deliverable'} has no timesheet "
-                        f"phase, so no timesheet hours can be attributed to it."
-                    ),
-                })
+                issue("warning", where,
+                      f"{label} has no timesheet phase, so no timesheet hours "
+                      f"can be attributed to it.")
         return issues
 
     # -- counts, for the unit list ----------------------------------------
@@ -1860,7 +1814,7 @@ def shared(path: Union[str, Path]) -> Unit:
     key = Path(path).resolve()
     with _open_lock:
         unit = _open_units.pop(key, None)
-    if unit is None or unit.revision is None or unit.revision[0] != _identity(key):
+    if unit is None or unit.revision[0] != _identity(key):
         unit = Unit(key)
     else:
         unit.refresh()

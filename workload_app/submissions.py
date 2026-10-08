@@ -44,7 +44,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from . import derive
 from . import planner
 from . import tasks as task_sheet
-from .checkins import week_start
+from .tasks import week_start
 
 #: The credit at which a deliverable has been sent to the client.
 SUBMITTED_AT = 0.8
@@ -96,8 +96,9 @@ def pace_by_phase(rows: Iterable[Dict[str, Any]], config: Dict[str, Any]
     sums: Dict[tuple, float] = defaultdict(float)
     for row in dated:
         if first <= row["date"] <= last:
-            sums[(row["job_number"], row.get("phase"))] += float(row["hours"] or 0.0)
-            sums[(row["job_number"], _WHOLE_JOB)] += float(row["hours"] or 0.0)
+            hours = float(row["hours"] or 0.0)
+            sums[(row["job_number"], row.get("phase"))] += hours
+            sums[(row["job_number"], _WHOLE_JOB)] += hours
     return {key: value / len(window) for key, value in sums.items() if value > 0}
 
 

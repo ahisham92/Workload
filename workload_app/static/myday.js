@@ -5,7 +5,8 @@
  * Check-ins and on their phone); "I'm off on" for leave; and the ready
  * timesheet, their week by job and phase to copy into BISpark.
  *
- * Built on member.js's helpers (el, $, api, toast, setChildren, fmt, num).
+ * Built on member.js's helpers (el, api, toast, fmt, num) and common.js's
+ * ($, setChildren, toastError, dayLabel).
  * The server decides whose day it is from the account, never from here.
  */
 'use strict';
@@ -27,11 +28,6 @@ function mdQuery(extra = {}) {
   return text ? `?${text}` : '';
 }
 
-function mdDate(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
-  if (!iso) return '';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
-}
-
 async function loadMyDay(unit) {
   myDay.unit = unit || myDay.unit;
   try {
@@ -42,14 +38,10 @@ async function loadMyDay(unit) {
     myDay.day = day;
     myDay.sheet = sheet;
   } catch (error) {
-    $('#myday').hidden = true;
-    $('#mytimesheet').hidden = true;
-    $('#myoff').hidden = true;
+    for (const id of ['myday', 'mytimesheet', 'myoff']) $(`#${id}`).hidden = true;
     return;
   }
-  $('#myday').hidden = false;
-  $('#mytimesheet').hidden = false;
-  $('#myoff').hidden = false;
+  for (const id of ['myday', 'mytimesheet', 'myoff']) $(`#${id}`).hidden = false;
   renderMyDay();
   renderTimeOff();
   renderSheet();
@@ -74,11 +66,10 @@ async function refreshDay() {
 /* ------------------------------------------------------------- today */
 
 function dueChip(task) {
-  if (!task || !task.due) return null;
-  if (task.done) return null;
-  if (task.overdue) return el('span', { class: 'pill pill-bad' }, `Overdue · was due ${mdDate(task.due)}`);
+  if (!task || !task.due || task.done) return null;
+  if (task.overdue) return el('span', { class: 'pill pill-bad' }, `Overdue · was due ${dayLabel(task.due)}`);
   if (task.due_today) return el('span', { class: 'pill pill-warn' }, 'Due today');
-  return el('span', { class: 'pill pill-info' }, `Due ${mdDate(task.due)}`);
+  return el('span', { class: 'pill pill-info' }, `Due ${dayLabel(task.due)}`);
 }
 
 function renderMyDay() {
@@ -87,7 +78,7 @@ function renderMyDay() {
   const free = day.free_hours >= 0.25 ? `${fmt.hours(day.free_hours)} h free` : 'Full day';
   const head = el('div', { class: 'panel-head' },
     el('div', {},
-      el('h3', {}, isToday ? `My day · ${mdDate(day.date)}` : `My day · ${mdDate(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}`),
+      el('h3', {}, isToday ? `My day · ${dayLabel(day.date)}` : `My day · ${dayLabel(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}`),
       el('p', { class: 'muted' },
         day.away ? 'You are off this day.'
           : !day.working_day ? 'Not a working day.'
@@ -204,15 +195,20 @@ function blockItem(block) {
 
 function noteForm(placeholder, required, send) {
   const input = el('input', { type: 'text', maxlength: 300, placeholder, class: 'md-note' });
+  let sending = false;
   const submit = async () => {
     const note = input.value.trim();
     if (required && !note) { input.focus(); return; }
+    if (sending) return;          // Enter and Send together would send it twice
+    sending = true;
     try {
       await send(note);
       myDay.open = null;
       await refreshDay();
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
+    } finally {
+      sending = false;
     }
   };
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') submit(); });
@@ -228,7 +224,7 @@ async function markTask(taskId, kind, note = '', fromForm = false) {
     await api(`/api/me/tasks/${taskId}/mark${mdQuery()}`, { method: 'POST', body: { kind, note } });
   } catch (error) {
     if (fromForm) throw error;
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
     return;
   }
   toast(kind === 'done' ? 'Ticked off.' : 'Sent to your lead.', 'ok');
@@ -262,18 +258,22 @@ function renderTimeOff() {
   const end = el('input', { type: 'date', id: 'md-off-end', min: day.today, value: day.today });
   const note = el('input', { type: 'text', id: 'md-off-note', maxlength: 120, placeholder: 'Annual leave, course, site visit…' });
   start.addEventListener('change', () => { if (end.value < start.value) end.value = start.value; });
+  let adding = false;
   const add = async () => {
+    if (adding) return;           // a second tap would put the same days in twice
+    adding = true;
     try {
       await api(`/api/me/off${mdQuery()}`, { method: 'POST',
         body: { start: start.value, end: end.value || start.value, note: note.value } });
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
+      adding = false;
       return;
     }
     toast('Added. Your plan and your lead now leave you out those days.', 'ok');
-    await refreshDay();
+    try { await refreshDay(); } finally { adding = false; }
   };
-  const range = (o) => (o.start === o.end ? mdDate(o.start) : `${mdDate(o.start)} to ${mdDate(o.end)}`);
+  const range = (o) => (o.start === o.end ? dayLabel(o.start) : `${dayLabel(o.start)} to ${dayLabel(o.end)}`);
   setChildren($('#myoff'),
     el('h3', {}, "I'm off on"),
     el('p', { class: 'muted' }, 'Leave, a course, a site visit. Your plan leaves you out those days and your lead is told.'),
@@ -315,7 +315,7 @@ function renderMyMeetings() {
     try {
       await api(`/api/me/meetings${mdQuery()}`, { method: 'POST', body });
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
       return false;
     }
     toast('Added. Your day keeps that time.', 'ok');
@@ -377,7 +377,7 @@ function renderMyCalendar() {
     try {
       myDay.calendar = await api(`/api/me/calendar${mdQuery()}`, { method: 'PUT', body: { link } });
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
       return;
     }
     const now = myDay.calendar.people[0];
@@ -434,7 +434,7 @@ function renderSheet() {
   const head = el('tr', {},
     el('th', {}, 'Job'), el('th', {}, 'Phase'),
     ...sheet.days.map((d) => el('th', { class: 'num' },
-      mdDate(d.date, { weekday: 'short', day: 'numeric' }),
+      dayLabel(d.date, { weekday: 'short', day: 'numeric' }),
       el('div', { class: `md-src md-src-${d.source}` }, SOURCE_LABEL[d.source] || ''))),
     el('th', { class: 'num' }, 'Total'), el('th', {}, ''));
   const rows = sheet.lines.map((line) => {
@@ -454,7 +454,7 @@ function renderSheet() {
     el('td', {}, 'Day total'), el('td', {}, ''),
     ...sheet.days.map((d) => el('td', { class: 'num' }, cell(d.total))),
     el('td', { class: 'num' }, el('b', {}, quarters(sheet.total))), el('td', {}, ''));
-  const range = `${mdDate(sheet.week_start)} to ${mdDate(sheet.week_end)}`;
+  const range = `${dayLabel(sheet.week_start)} to ${dayLabel(sheet.week_end)}`;
   setChildren($('#mytimesheet'),
     el('div', { class: 'panel-head' },
       el('div', {},

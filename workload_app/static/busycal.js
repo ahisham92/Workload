@@ -4,7 +4,7 @@
  * busy" and pastes the ICS link. Selecao+ keeps only when they are busy, and
  * their plan, free hours and forecast leave that time out.
  *
- * Uses el() from app.js or member.js.
+ * Uses el() from app.js or member.js, and common.js's dateText.
  */
 'use strict';
 
@@ -48,11 +48,6 @@ function calendarPaste(save, label = 'Link my calendar') {
 const MEETING_KIND = { client: 'Client', trade: 'Other trade', internal: 'Internal' };
 const MEETING_REPEAT = { '': 'Once', weekly: 'Every week', fortnightly: 'Every 2 weeks' };
 
-function meetingDay(iso) {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB',
-    { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
 /** The add-a-meeting form. ``people`` (names) shows "Who goes" ticks, with
     ``ticked`` ticked; leave it empty for a person's own page. */
 function meetingForm({ day, people = [], ticked = [], add }) {
@@ -77,11 +72,20 @@ function meetingForm({ day, people = [], ticked = [], add }) {
   const boxes = people.map((name) => el('label', { class: 'meet-who' },
     el('input', { type: 'checkbox', value: name, ...(ticked.includes(name) ? { checked: '' } : {}) }),
     ` ${name}`));
+  let adding = false;
   const go = async () => {
+    // A second tap while the first is on its way would put the meeting (and
+    // every repeat of it) in twice.
+    if (adding) return;
+    adding = true;
     const body = { title: title.value, kind: kind.value, day: date.value, start: from.value,
       end: to.value, repeat: repeat.value, until: until.value || null,
       people: boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value) };
-    if (await add(body)) title.value = '';
+    try {
+      if (await add(body)) title.value = '';
+    } finally {
+      adding = false;
+    }
   };
   return el('div', { class: 'meet-form' },
     el('div', { class: 'meet-row' }, title,
@@ -101,12 +105,12 @@ function meetingForm({ day, people = [], ticked = [], add }) {
 function meetingList(meetings, { remove, canRemove = () => true, showPeople = true }) {
   if (!meetings.length) return el('p', { class: 'muted small' }, 'No meetings put in yet.');
   return el('ul', { class: 'request-list' }, meetings.map((m) => el('li', { class: 'request meet-item' },
-    el('span', { class: 'request-time' }, `${meetingDay(m.next)} ${m.start}–${m.end}`),
+    el('span', { class: 'request-time' }, `${dateText(m.next)} ${m.start}–${m.end}`),
     el('span', { class: 'request-what' },
       el('span', { class: `pill meet-${m.kind}` }, MEETING_KIND[m.kind] || m.kind), ' ',
       el('b', {}, m.title || 'Meeting'),
       el('span', { class: 'muted small' },
-        [m.repeat ? MEETING_REPEAT[m.repeat].toLowerCase() + (m.until ? ` until ${meetingDay(m.until)}` : '') : '',
+        [m.repeat ? MEETING_REPEAT[m.repeat].toLowerCase() + (m.until ? ` until ${dateText(m.until)}` : '') : '',
           showPeople ? m.people.join(', ') : ''].filter(Boolean).map((t) => ` · ${t}`).join(''))),
     canRemove(m) ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
       onclick: () => remove(m) }, 'Remove') : el('span'))));

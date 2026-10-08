@@ -7,7 +7,8 @@
  *
  * Used twice: on the manager's Planner (everybody, "Plan vs actual") and on
  * an engineer's own page ("My week", only theirs). Built on the page's own
- * helpers (el, api, toast, setChildren, fmt); the server does every sum.
+ * helpers (el, api, toast, setChildren, fmt) and common.js's toastError and
+ * dayLabel; the server does every sum.
  */
 'use strict';
 
@@ -19,12 +20,7 @@
     not_done: ['Not done', 'bad'], removed: ['Taken off the list', ''],
   };
 
-  function day(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
-    if (!iso) return '';
-    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', opts);
-  }
-
-  function pct(v) { return v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`; }
+  const pct = fmt.pct0;
   function hours(v) { return v === null || v === undefined ? '—' : `${fmt.hours(v)} h`; }
   function keptTone(v) { return v === null || v === undefined ? '' : v >= 0.8 ? 'ok' : v >= 0.6 ? 'warn' : 'bad'; }
 
@@ -69,7 +65,7 @@
         r.append(Object.assign(document.createElementNS(ns, 'title'), { textContent: `Tasks done ${pct(p.tasks_done_share)}` }));
       }
       add('text', { x: x + bw, y: H + 14, 'text-anchor': 'middle', class: 'pr-axis' },
-        day(p.week, { day: 'numeric', month: 'short' }));
+        dayLabel(p.week, { day: 'numeric', month: 'short' }));
     });
     return el('figure', { class: 'pr-trend-wrap' }, svg,
       el('figcaption', { class: 'muted small' },
@@ -138,7 +134,7 @@
           el('span', { class: `pill ${toneName ? `pill-${toneName}` : ''}` }, label),
           el('span', { class: 'pr-what' }, t.title,
             el('span', { class: 'muted small' }, `${t.job ? ` · ${t.job}` : ''} · ${fmt.hours(t.hours)} h`
-              + `${t.due ? ` · due ${day(t.due)}` : ''}`)));
+              + `${t.due ? ` · due ${dayLabel(t.due)}` : ''}`)));
       }))) : null;
 
     const onTop = person.on_top.length ? el('div', { class: 'pr-block' },
@@ -146,7 +142,7 @@
       el('ul', { class: 'pr-list' }, person.on_top.map((r) => el('li', {},
         el('span', { class: `pill ${r.done ? 'pill-ok' : 'pill-warn'}` }, r.done ? 'Done' : 'Open'),
         el('span', { class: 'pr-what' }, r.title,
-          el('span', { class: 'muted small' }, ` · ${fmt.hours(r.hours)} h · ${day(r.start)}`)))))) : null;
+          el('span', { class: 'muted small' }, ` · ${fmt.hours(r.hours)} h · ${dayLabel(r.start)}`)))))) : null;
 
     const slipList = slips.length ? el('div', { class: 'pr-block pr-slips' },
       el('h4', {}, 'Did not go to plan'),
@@ -171,7 +167,7 @@
       item.reason = reason;
       toast(reason ? 'Reason kept.' : 'Reason cleared.', 'ok');
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
       await (review.mine ? loadMine() : load());
     }
   }
@@ -181,7 +177,7 @@
     try {
       review.data = await api(`/api/plan-review${query}`);
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
       return;
     }
     render();
@@ -193,21 +189,21 @@
       toast('A new copy of this week’s plan is kept. Reasons already given stay.', 'ok');
       await load();
     } catch (error) {
-      toast((error.errors || [error.message]).join(' '), 'bad');
+      toastError(error);
     }
   }
 
   function weekNav(data, go) {
     return el('div', { class: 'pr-nav' },
       el('button', { class: 'btn btn-sm', type: 'button', onclick: () => go(data.previous) }, '‹ Week before'),
-      el('b', { class: 'pr-week' }, `${day(data.week)} to ${day(data.week_end)}`),
+      el('b', { class: 'pr-week' }, `${dayLabel(data.week)} to ${dayLabel(data.week_end)}`),
       el('button', { class: 'btn btn-sm', type: 'button', onclick: () => go(data.next) }, 'Week after ›'),
       data.state !== 'current' ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => go(null) }, 'This week') : null);
   }
 
   function lockNote(data) {
     if (data.locked) {
-      return el('span', { class: 'pill pill-ok' }, `Week’s plan copied${data.locked_at ? ` on ${day(data.locked_at)}` : ''}`);
+      return el('span', { class: 'pill pill-ok' }, `Week’s plan copied${data.locked_at ? ` on ${dayLabel(data.locked_at)}` : ''}`);
     }
     return el('span', { class: 'pill' }, data.state === 'past' ? 'No plan was kept for this week' : 'No copy kept yet: showing the plan as it stands');
   }

@@ -39,7 +39,7 @@ from . import busy_calendar
 from . import calendar_
 from . import tasks as task_sheet
 from .busy_calendar import _clock
-from .checkins import week_start
+from .tasks import week_start
 
 MANAGER_GRADE = "manager"
 
@@ -208,17 +208,14 @@ class Plan:
         config = self.config
         if not self.outlook or not task_sheet.is_working_day(day, config):
             return []
-        start = _dt.datetime.combine(day, _clock(config["day_start"]))
-        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        start, close = _day_span(day, config)
         out = []
         for name in sorted(self.outlook, key=str.lower):
             if calendar_.is_away(config, name, day):
                 continue
             spans = [(max(a, start), min(b, close)) for a, b in self.outlook[name]
                      if a < close and b > start]
-            held = [(m["start"], m["end"]) for m in taken
-                    if name == m["leader"] or name in m["with"]]
-            for first, last in busy_calendar.minus(spans, held):
+            for first, last in busy_calendar.minus(spans, _held(name, taken)):
                 if last > first:
                     out.append({"kind": "outlook", "leader": name, "with": [],
                                 "start": first, "end": last,
@@ -232,8 +229,7 @@ class Plan:
         config = self.config
         if not self.typed or not task_sheet.is_working_day(day, config):
             return []
-        start = _dt.datetime.combine(day, _clock(config["day_start"]))
-        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        start, close = _day_span(day, config)
         out = []
         for meeting in self.typed:
             if not (meeting["start"] < close and meeting["end"] > start):
@@ -242,9 +238,7 @@ class Plan:
             for name in meeting["people"]:
                 if calendar_.is_away(config, name, day):
                     continue
-                held = [(m["start"], m["end"]) for m in taken
-                        if name == m["leader"] or name in m["with"]]
-                for first, last in busy_calendar.minus([span], held):
+                for first, last in busy_calendar.minus([span], _held(name, taken)):
                     out.append({"kind": "typed", "leader": name, "with": [],
                                 "start": first, "end": last,
                                 "title": meeting["title"], "what": meeting["kind"],
@@ -283,17 +277,14 @@ class Plan:
             return []
         if meetings is None:
             meetings = self.meetings_on(day)
-        start = _dt.datetime.combine(day, _clock(config["day_start"]))
-        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        start, close = _day_span(day, config)
         out = []
         for name in sorted(self.development, key=str.lower):
             hours = self.development[name]
             if not hours or self.development_day(name, day) != day:
                 continue
             length = _dt.timedelta(minutes=round(hours * 60))
-            taken = sorted(((m["start"], m["end"]) for m in meetings
-                            if name == m["leader"] or name in m["with"]),
-                           key=lambda pair: pair[1], reverse=True)
+            taken = sorted(_held(name, meetings), key=lambda pair: pair[1], reverse=True)
             end = close
             moved = True
             while moved:
@@ -322,10 +313,9 @@ class Plan:
         config = self.config
         if not task_sheet.is_working_day(day, config):
             return []
-        start = _dt.datetime.combine(day, _clock(config["day_start"]))
-        close = _dt.datetime.combine(day, _clock(config["day_end"]))
-        week = _working(week_start(day, config), 7, config)
+        start, close = _day_span(day, config)
         fortnight_start = week_start(day, config)
+        week = _working(fortnight_start, 7, config)
         if (fortnight_start.toordinal() // 7) % ONE_TO_ONE_EVERY_WEEKS:
             fortnight_start -= _dt.timedelta(days=7)
         fortnight = _working(fortnight_start, 7 * ONE_TO_ONE_EVERY_WEEKS, config)
@@ -384,12 +374,8 @@ class Plan:
     def busy(self, name: str, first: _dt.date, days: int) -> List[tuple]:
         """The meeting times ``name`` is in over the coming days, for slotting
         requests around them."""
-        out = []
-        for day in (first + _dt.timedelta(days=i) for i in range(days)):
-            for meeting in [m for part in self.day_blocks(day) for m in part]:
-                if name == meeting["leader"] or name in meeting["with"]:
-                    out.append((meeting["start"], meeting["end"]))
-        return out
+        return [held for day in (first + _dt.timedelta(days=i) for i in range(days))
+                for held in _held(name, [m for part in self.day_blocks(day) for m in part])]
 
 
 def _days_a_week(config: Dict[str, Any]) -> int:
@@ -401,6 +387,18 @@ def _days_a_week(config: Dict[str, Any]) -> int:
 def _team_meeting_minutes(led: Sequence[Any]) -> int:
     return min(TEAM_MEETING_MAX,
                TEAM_MEETING_MINUTES + TEAM_MEETING_PER_PERSON * len(led))
+
+
+def _day_span(day: _dt.date, config: Dict[str, Any]) -> tuple:
+    """When ``day``'s working day starts and ends."""
+    return (_dt.datetime.combine(day, _clock(config["day_start"])),
+            _dt.datetime.combine(day, _clock(config["day_end"])))
+
+
+def _held(name: str, meetings: Sequence[Dict[str, Any]]) -> List[tuple]:
+    """The (start, end) of each of ``meetings`` that ``name`` runs or is in."""
+    return [(m["start"], m["end"]) for m in meetings
+            if name == m["leader"] or name in m["with"]]
 
 
 def _moment(value: Any) -> _dt.datetime:

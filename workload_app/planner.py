@@ -36,7 +36,7 @@ from . import config as cfg
 from . import derive
 from . import people as people_module
 from . import tasks as task_sheet
-from .model import ValidationError
+from .model import ValidationError, today as _today
 
 #: Working days of bookings a pace is read from.
 LOOKBACK_DAYS = 10
@@ -74,30 +74,27 @@ class PlanError(ValidationError):
 # days
 # --------------------------------------------------------------------------
 
-def days_ahead(today: _dt.date, count: int, config: Dict[str, Any]) -> List[_dt.date]:
-    """The next ``count`` working days, today included if it is one."""
+def _working_days(day: _dt.date, count: int, config: Dict[str, Any],
+                  step: int) -> List[_dt.date]:
+    """Up to ``count`` working days from ``day`` on, a day at a time by ``step``."""
     out: List[_dt.date] = []
-    day = today
-    guard = 0
-    while len(out) < count and guard < 400:
+    for _ in range(400):
+        if len(out) >= count:
+            break
         if task_sheet.is_working_day(day, config):
             out.append(day)
-        day += _dt.timedelta(days=1)
-        guard += 1
+        day += _dt.timedelta(days=step)
     return out
+
+
+def days_ahead(today: _dt.date, count: int, config: Dict[str, Any]) -> List[_dt.date]:
+    """The next ``count`` working days, today included if it is one."""
+    return _working_days(today, count, config, 1)
 
 
 def days_back(last: _dt.date, count: int, config: Dict[str, Any]) -> List[_dt.date]:
     """The ``count`` working days up to and including ``last``."""
-    out: List[_dt.date] = []
-    day = last
-    guard = 0
-    while len(out) < count and guard < 400:
-        if task_sheet.is_working_day(day, config):
-            out.append(day)
-        day -= _dt.timedelta(days=1)
-        guard += 1
-    return sorted(out)
+    return sorted(_working_days(last, count, config, -1))
 
 
 def clean_days(value: Any) -> int:
@@ -152,6 +149,8 @@ def _parse_share(value: Any) -> Optional[float]:
     try:
         share = float(value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(share):
         return None
     if share > 1.0 + 1e-9:          # typed as a percentage
         share /= 100.0
@@ -252,6 +251,13 @@ def _apply_project_moves(rates: Dict[Tuple[str, str], float],
     return out, moved
 
 
+def rates_in_force(rates: Dict[Tuple[str, str], float],
+                   saved: Iterable[Dict[str, Any]], day: _dt.date
+                   ) -> Dict[Tuple[str, str], float]:
+    """The pace on ``day``, with the committed handovers in force then."""
+    return _apply_project_moves(rates, _active_saved(saved, day, day))[0]
+
+
 def _apply_task_moves(assignees: Dict[int, List[str]],
                       moves: Iterable[Dict[str, Any]]) -> Dict[int, List[str]]:
     out = {key: list(value) for key, value in assignees.items()}
@@ -323,11 +329,13 @@ def _state(*, rates, assignees, tasks_by_id, window: List[_dt.date],
     out: Dict[str, Dict[str, Any]] = {}
     for person in set(pace_hours) | set(task_hours) | set(extra_hours):
         items: Dict[str, Dict[str, Any]] = {}
-        for key in (set(pace_hours.get(person, {})) | set(task_hours.get(person, {}))
-                    | set(extra_hours.get(person, {}))):
-            from_pace = pace_hours.get(person, {}).get(key, 0.0)
-            from_tasks = task_hours.get(person, {}).get(key, 0.0)
-            from_requests = extra_hours.get(person, {}).get(key, 0.0)
+        own_pace = pace_hours.get(person, {})
+        own_tasks = task_hours.get(person, {})
+        own_requests = extra_hours.get(person, {})
+        for key in set(own_pace) | set(own_tasks) | set(own_requests):
+            from_pace = own_pace.get(key, 0.0)
+            from_tasks = own_tasks.get(key, 0.0)
+            from_requests = own_requests.get(key, 0.0)
             rate = rates.get((person, key), 0.0)
             in_hand = (drawings_left.get(key, 0.0) * rate / on_project[key]
                        if on_project.get(key) else 0.0)
@@ -362,7 +370,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     (``management.Plan.taken_a_day``).
     """
     management = management or {}
-    today = today or _dt.date.today()
+    today = today or _today()
     window = days_ahead(today, days, config)
     end = window[-1] if window else today
     a_day = task_sheet.hours_per_day(config)
@@ -425,11 +433,11 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         person = people.get(name) or {}
         grade = person.get("grade") or people_module.DEFAULT_GRADE
         b, a = before.get(name, {}), after.get(name, {})
-        keys = set((b.get("items") or {})) | set((a.get("items") or {}))
+        b_items, a_items = b.get("items") or {}, a.get("items") or {}
         items = []
-        for key in keys:
-            bi = (b.get("items") or {}).get(key) or {}
-            ai = (a.get("items") or {}).get(key) or {}
+        for key in set(b_items) | set(a_items):
+            bi = b_items.get(key) or {}
+            ai = a_items.get(key) or {}
             items.append({
                 "key": key,
                 "project": "" if key.startswith(("task:", NEW_PREFIX)) else key,
@@ -469,7 +477,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         team = team_rows.setdefault(key, {
             "id": key,
             "name": person["team_name"] or (
-                (team_names or {}).get(key) or "Not in a team"),
+                (team_names or {}).get(key) or people_module.NO_TEAM),
             "people": 0, "capacity": 0.0,
             "before_hours": 0.0, "after_hours": 0.0,
             "over_before": 0, "over_after": 0,
@@ -570,6 +578,9 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     first.  Nobody is filled past ``FILL_TO`` to relieve somebody else.
     """
     plan = list(moves)
+    # Somebody who has left keeps a pace until their last timesheets age out
+    # of it, but no work is handed to them.
+    gone = {p["name"] for p in roster if not p.get("active", True)}
     history: Dict[str, set] = defaultdict(set)
     for row in rows:
         if row.get("job_number"):
@@ -602,7 +613,7 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             movable = pace_hours - min(pace_hours, item["task_hours"])
             if movable < 1:
                 continue
-            target = _best_target(view, person, item["project"], history)
+            target = _best_target(view, person, item["project"], history, gone)
             if target is None:
                 continue
             room = target["capacity"] * FILL_TO - target["after"]["hours"]
@@ -623,16 +634,17 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
 
 
 def _best_target(view: Dict[str, Any], person: Dict[str, Any], project: str,
-                 history: Mapping[str, set]) -> Optional[Dict[str, Any]]:
+                 history: Mapping[str, set], gone: Iterable[str] = ()
+                 ) -> Optional[Dict[str, Any]]:
+    gone = set(gone)
     candidates = [
         p for p in view["people"]
         if p["name"] != person["name"] and p["role"] == person["role"]
+        and p["name"] not in gone
         and p["after"]["hours"] < p["capacity"] * FILL_TO - 1
     ]
-    if not candidates:
-        return None
     knows = history.get(project, set())
-    return min(candidates, key=lambda p: (
+    return min(candidates, default=None, key=lambda p: (
         p["name"] not in knows,
         (p["team_id"] or "") != (person["team_id"] or ""),
         p["after"]["load"] or 0,

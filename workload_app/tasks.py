@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from . import config as cfg, progress
 from .xlsx_io import from_serial
-from .model import ValidationError, iso
+from .model import ValidationError, iso, today as _today
 
 
 class TaskError(ValidationError):
@@ -112,18 +112,15 @@ def _parse_date(value: Any) -> Optional[_dt.date]:
         return value.date()
     if isinstance(value, _dt.date):
         return value
-    if isinstance(value, (int, float)):
-        # The same reading as ``model.as_date``: a serial of nought or less is
-        # no date at all, and one past any calendar is a mistake to say so.
-        try:
+    try:
+        if isinstance(value, (int, float)):
+            # The same reading as ``model.as_date``: a serial of nought or less
+            # is no date at all, and one past any calendar is a mistake to say so.
             if not math.isfinite(value):
                 raise ValueError(value)
             return from_serial(float(value)) if value > 0 else None
-        except (OverflowError, ValueError):
-            raise TaskError([f"{value!r} is not a date the app understands (YYYY-MM-DD)."])
-    try:
         return _dt.date.fromisoformat(str(value)[:10])
-    except ValueError:
+    except (OverflowError, ValueError):
         raise TaskError([f"{value!r} is not a date the app understands (YYYY-MM-DD)."])
 
 
@@ -132,9 +129,9 @@ def _parse_hours(value: Any, label: str) -> Optional[float]:
         return None
     try:
         hours = float(value)
+        if not math.isfinite(hours):
+            raise ValueError(hours)
     except (TypeError, ValueError):
-        raise TaskError([f"{label} has to be a number of hours."])
-    if not math.isfinite(hours):
         raise TaskError([f"{label} has to be a number of hours."])
     if hours < 0:
         raise TaskError([f"{label} cannot be negative."])
@@ -158,10 +155,6 @@ def settings(source: Any) -> Dict[str, Any]:
         out.update({k: v for k, v in stored.items() if k in out})
     out["work_days"] = sorted({int(d) for d in out["work_days"] if 0 <= int(d) <= 6})
     return out
-
-
-def _write_settings(source: Any, values: Dict[str, Any]) -> None:
-    source.write_task_settings(dict(values))
 
 
 def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,7 +221,7 @@ def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
 
     if errors:
         raise TaskError(errors)
-    _write_settings(source, updated)
+    source.write_task_settings(dict(updated))
     return updated
 
 
@@ -268,6 +261,12 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
     assignees = data.get("assignees") or []
     if isinstance(assignees, str):
         assignees = [a.strip() for a in assignees.split(",") if a.strip()]
+    if not isinstance(assignees, (list, tuple)):
+        errors.append("Assignees have to be a list of names.")
+        assignees = []
+    # The same person twice is one person: their share is not halved.
+    assignees = list(dict.fromkeys(str(a).strip() for a in assignees
+                                   if str(a).strip()))
     unknown = [a for a in assignees if a not in engineers]
     if unknown:
         errors.append(
@@ -287,25 +286,19 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
     if kind not in cfg.TASK_KINDS:
         errors.append(f"Kind has to be one of {', '.join(cfg.TASK_KINDS)}.")
 
-    required = actual = None
-    start = due = None
-    for reader in (
-        lambda: _parse_hours(data.get("required_hours"), "Required hours"),
-        lambda: _parse_hours(data.get("actual_hours"), "Actual hours"),
-        lambda: _parse_date(data.get("start")),
-        lambda: _parse_date(data.get("due")),
-    ):
+    def attempt(parse, *args):
         try:
-            reader()
+            return parse(*args)
         except TaskError as error:
             errors.extend(error.errors)
-    if not errors:
-        required = _parse_hours(data.get("required_hours"), "Required hours")
-        actual = _parse_hours(data.get("actual_hours"), "Actual hours")
-        start = _parse_date(data.get("start"))
-        due = _parse_date(data.get("due"))
-        if start and due and due < start:
-            errors.append("A task cannot be due before it starts.")
+            return None
+
+    required = attempt(_parse_hours, data.get("required_hours"), "Required hours")
+    actual = attempt(_parse_hours, data.get("actual_hours"), "Actual hours")
+    start = attempt(_parse_date, data.get("start"))
+    due = attempt(_parse_date, data.get("due"))
+    if not errors and start and due and due < start:
+        errors.append("A task cannot be due before it starts.")
 
     deliverable_row = data.get("deliverable_row")
     if deliverable_row in ("", None):
@@ -323,14 +316,19 @@ def validate(data: Dict[str, Any], *, engineers: Sequence[str],
     code = ""
     revisions = 0
     pro_rata = None
-    try:
-        mode = progress.clean_mode(data.get("progress_mode"))
-        stage = progress.clean_stage(data.get("stage"))
-        code = progress.clean_code(data.get("review_code"))
-        revisions = progress.clean_revisions(data.get("revisions"))
-        pro_rata = _parse_fraction(data.get("pro_rata"))
-    except progress.ProgressError as error:
-        errors.extend(error.errors)
+    # Each checked on its own, so one mistake does not hide the others.
+    def checked(clean, value, default):
+        try:
+            return clean(value)
+        except ValidationError as error:
+            errors.extend(error.errors)
+            return default
+
+    mode = checked(progress.clean_mode, data.get("progress_mode"), mode)
+    stage = checked(progress.clean_stage, data.get("stage"), stage)
+    code = checked(progress.clean_code, data.get("review_code"), code)
+    revisions = checked(progress.clean_revisions, data.get("revisions"), revisions)
+    pro_rata = checked(_parse_fraction, data.get("pro_rata"), pro_rata)
     if mode == progress.MODE_WORKFLOW and stage != progress.SUBMITTED:
         # A code or a resubmission count on a deliverable that has not been
         # submitted is a mistake somebody will otherwise puzzle over later.
@@ -372,9 +370,9 @@ def _parse_fraction(value: Any) -> Optional[float]:
         return None
     try:
         number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(number)
     except (TypeError, ValueError):
-        raise TaskError(["Progress has to be a number."])
-    if not math.isfinite(number):
         raise TaskError(["Progress has to be a number."])
     if number < 0:
         raise TaskError(["Progress cannot be negative."])
@@ -383,8 +381,12 @@ def _parse_fraction(value: Any) -> Optional[float]:
     return round(number / 100 if number > 1 else number, 4)
 
 
-def next_id(tasks: Iterable[Task]) -> int:
-    return max((t.id for t in tasks), default=0) + 1
+def next_id(tasks: Iterable[Task], wb: Any = None) -> int:
+    """One past every id in use, and every id a slot, a mark or a kept week
+    plan still names, so a deleted task's id never comes back as a new one."""
+    store = getattr(wb, "store", None)
+    named = store.highest_task_id() if store is not None else 0
+    return max(max((t.id for t in tasks), default=0), named) + 1
 
 
 def save(wb: Any, data: Dict[str, Any], *, engineers: Sequence[str],
@@ -393,7 +395,7 @@ def save(wb: Any, data: Dict[str, Any], *, engineers: Sequence[str],
     existing = read(wb)
     task = validate(data, engineers=engineers, projects=projects, task_id=task_id)
     if task_id is None:
-        task.id = next_id(existing)
+        task.id = next_id(existing, wb)
         existing.append(task)
     else:
         position = next((i for i, t in enumerate(existing) if t.id == task_id), None)
@@ -439,6 +441,16 @@ def is_working_day(day: _dt.date, config: Dict[str, Any]) -> bool:
     return not (holidays and day.isoformat() in holidays)
 
 
+def week_start(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
+    """The first day of ``day``'s week -- a Sunday where the week starts then."""
+    start = day - _dt.timedelta(days=day.weekday())
+    if 6 in config["work_days"] and 4 not in config["work_days"]:
+        start -= _dt.timedelta(days=1)
+        if start + _dt.timedelta(days=7) <= day:
+            start += _dt.timedelta(days=7)
+    return start
+
+
 def working_days(start: _dt.date, end: _dt.date, config: Dict[str, Any]
                  ) -> List[_dt.date]:
     """Every working day from ``start`` to ``end`` inclusive."""
@@ -477,10 +489,10 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
     that already has its task, however it was since edited, is untouched.
     """
     config = config or settings(wb)
-    today = today or _dt.date.today()
+    today = today or _today()
     existing = read(wb)
     have = {(t.series, t.due) for t in existing}
-    identifier = next_id(existing)
+    identifier = next_id(existing, wb)
     added: List[Task] = []
     covered = 0
     past = 0
@@ -506,10 +518,10 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             continue
         shares = deliverable.get("shares") or {}
         assignees = [name for name in engineers if (shares.get(name) or 0) > 0]
+        name = deliverable.get("name") or f"Deliverable on row {row}"
         for position, day in enumerate(days, start=1):
             if (series, day) in have:
                 continue
-            name = deliverable.get("name") or f"Deliverable on row {row}"
             task = Task(
                 id=identifier,
                 name=f"{name} — submission day {position} of {len(days)}",
@@ -560,20 +572,35 @@ def generate_meetings(wb: Any, *, engineers: Sequence[str],
     Re-running it extends the series rather than doubling it.
     """
     config = config or settings(wb)
-    weekday = config["meeting_weekday"] if weekday is None else int(weekday)
-    weeks = int(config["meeting_weeks"] if weeks is None else weeks)
-    hours = float(config["meeting_hours"] if hours is None else hours)
+    errors: List[str] = []
+    try:
+        weekday = int(config["meeting_weekday"]
+                      if weekday in (None, "") else weekday)
+    except (TypeError, ValueError):
+        weekday = -1
     if not 0 <= weekday <= 6:
-        raise TaskError(["The meeting day has to be a day of the week."])
+        errors.append("The meeting day has to be a day of the week.")
+    try:
+        weeks = int(config["meeting_weeks"] if weeks in (None, "") else weeks)
+    except (TypeError, ValueError):
+        weeks = 0
     if not 1 <= weeks <= 104:
-        raise TaskError(["A meeting series runs between 1 and 104 weeks."])
+        errors.append("A meeting series runs between 1 and 104 weeks.")
+    try:
+        hours = _parse_hours(config["meeting_hours"]
+                             if hours in (None, "") else hours, "Meeting hours")
+    except TaskError as error:
+        errors.extend(error.errors)
+    if errors:
+        raise TaskError(errors)
+    hours = float(hours or 0.0)
 
-    start = start or _dt.date.today()
+    start = start or _today()
     first = start + _dt.timedelta(days=(weekday - start.weekday()) % 7)
 
     existing = read(wb)
     have = {(t.series, t.due) for t in existing}
-    identifier = next_id(existing)
+    identifier = next_id(existing, wb)
     series = meeting_series(project_number, weekday)
     label = project_name or project_number or "the unit"
     added: List[Task] = []
@@ -626,7 +653,7 @@ def load(tasks: Sequence[Task], engineers: Sequence[str],
     work with no date are counted separately: they are real, but they are not
     what makes the next four weeks fit or not fit.
     """
-    today = today or _dt.date.today()
+    today = today or _today()
     weeks = int(weeks or config["horizon_weeks"])
     end = today + _dt.timedelta(weeks=weeks) - _dt.timedelta(days=1)
     a_day = hours_per_day(config)

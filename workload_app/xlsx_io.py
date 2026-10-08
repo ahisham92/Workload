@@ -17,6 +17,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 #: above 60 are one higher than a plain day count; anchoring on 1899-12-30 gives
 #: the right answer for every date from 1900-03-01 onwards.
 _EPOCH = _dt.date(1899, 12, 30)
+#: The serial of the day after 31 December 9999, past which there is no date.
+_LAST_SERIAL = (_dt.date.max - _EPOCH).days + 1
 
 CellValue = Union[None, str, int, float, _dt.date, _dt.datetime]
 
@@ -250,7 +252,7 @@ class Workbook:
         value = self.get_value(sheet, ref)
         if value is None:
             return ""
-        if isinstance(value, float) and value == int(value):
+        if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
 
@@ -267,7 +269,7 @@ class Workbook:
 
     def get_date(self, sheet: str, ref: str) -> Optional[_dt.date]:
         value = self.get_number(sheet, ref)
-        if value is None or value <= 0:
+        if value is None or not 0 < value < _LAST_SERIAL:
             return None
         return from_serial(value)
 
@@ -283,16 +285,10 @@ class Workbook:
         sh = self.sheet(sheet)
         for number, cells in sh.iter_cells(first_row, last_row, columns):
             record: Dict[str, CellValue] = {"__row__": number}
-            has_value = False
             for col in columns:
                 cell = cells.get(col)
-                record[col] = None
-                if cell is None:
-                    continue
-                value = value_from_cell(cell, self.shared_strings)
-                record[col] = value
-                if value is not None and value != "":
-                    has_value = True
-            if has_value:
+                record[col] = (None if cell is None
+                               else value_from_cell(cell, self.shared_strings))
+            if any(record[col] not in (None, "") for col in columns):
                 out.append(record)
         return out

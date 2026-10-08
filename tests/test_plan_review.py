@@ -17,10 +17,20 @@ from workload_app import config as cfg
 from test_roles import call, site, osama, PASSWORD, _sign_in, Client  # noqa: F401
 
 
+#: A working day to run on: the copy of a week's plan is made on its first
+#: working day, so a run on a weekend pins itself to the Friday before.
+_TODAY = _dt.date.today() - _dt.timedelta(days=max(0, _dt.date.today().weekday() - 4))
+
+
+@pytest.fixture(autouse=True)
+def _on_a_working_day(monkeypatch):
+    monkeypatch.setenv("WORKLOAD_TODAY", _TODAY.isoformat())
+
+
 def _task(site, person, hours=6, due=None, **extra):
     body = {"name": extra.pop("name", "Check the pile caps"), "assignees": [person],
             "required_hours": hours,
-            "due": due or _dt.date.today().isoformat(), **extra}
+            "due": due or _TODAY.isoformat(), **extra}
     status, saved = call(site, "/api/tasks", "POST", body)
     assert status == 200, saved
     return saved.get("task", saved)
@@ -127,7 +137,7 @@ class TestTheSums:
 
 class TestLocking:
     def test_the_first_look_locks_once(self, site):
-        _task(site, "Osama", due=_next_working(_dt.date.today(), 2).isoformat())
+        _task(site, "Osama", due=_next_working(_TODAY, 2).isoformat())
         status, view = call(site, "/api/plan-review")
         assert status == 200, view
         assert view["locked"] is True and view["state"] == "current"
@@ -153,7 +163,7 @@ class TestLocking:
         assert again["locked_at"] == view["locked_at"]
 
     def test_relock_keeps_the_reasons(self, site):
-        _task(site, "Osama", due=_next_working(_dt.date.today(), 1).isoformat())
+        _task(site, "Osama", due=_next_working(_TODAY, 1).isoformat())
         _s, view = call(site, "/api/plan-review")
         line = next(t for p in view["people"] for t in p["tasks"])
         status, said = call(site, "/api/plan-review/reason", "POST",
@@ -223,13 +233,13 @@ class TestMyWeek:
 
 class TestUrgent:
     def test_what_it_pushes_before_it_is_added(self, site):
-        tomorrow = _next_working(_dt.date.today(), 1)
+        tomorrow = _next_working(_TODAY, 1)
         _task(site, "Osama", hours=14, due=tomorrow.isoformat(), name="Due tomorrow")
         _s, before = call(site, "/api/tasks")
         status, view = call(site, "/api/requests/preview", "POST", {
             "title": "Client wants the bearing check", "hours": 8, "due":
             tomorrow.isoformat(), "person": "Osama", "role": "engineering",
-            "now": f"{_dt.date.today()}T08:00"})
+            "now": f"{_TODAY}T08:00"})
         assert status == 200, view
         assert view["person"] == "Osama"
         urgent = view["urgent"]
@@ -242,8 +252,8 @@ class TestUrgent:
         assert len(after["tasks"]) == len(before["tasks"]), "a preview saves nothing"
 
     def test_when_there_is_room_waits_for_free_time(self, site):
-        due = _next_working(_dt.date.today(), 5).isoformat()
-        now = f"{_dt.date.today()}T08:00"
+        due = _next_working(_TODAY, 5).isoformat()
+        now = f"{_TODAY}T08:00"
         body = {"title": "Tidy the sketch", "hours": 1, "due": due,
                 "person": "Osama", "now": now}
         status, urgent = call(site, "/api/requests", "POST", body)
