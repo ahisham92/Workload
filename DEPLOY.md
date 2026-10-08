@@ -203,9 +203,12 @@ already holds, with a *Download* that saves it as one page (open it and print
 to PDF to send it on). Nothing to set up.
 
 Below it, *Turn on notifications on this phone* lets a manager's phone be told
-when the report is ready and when something needs them. On an iPhone this
-works from the home-screen app only (Share > Add to Home Screen, then open it
-from there). *Send a test* shows straight away whether the host can reach the
+when the report is ready and when something needs them. Team members given
+access find the same switch on their own page: they are told about their own
+week and deadlines and, when they lead people, about their team. Android
+phones work in the browser (Chrome, Edge, Firefox, Samsung Internet); on an
+iPhone Apple allows it from the home-screen app only (Share > Add to Home
+Screen, then open it from there). *Send a test* shows straight away whether the host can reach the
 phone's push service; PythonAnywhere's free accounts can only reach an
 allow-list of sites, paid accounts anything.
 

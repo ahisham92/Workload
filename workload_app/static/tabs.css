@@ -149,17 +149,6 @@
 .wk-bar-value { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
 .wk-bar-note { grid-column: 2 / 4; margin-top: -4px; }
 .wk-sub { margin: 18px 0 4px; font-size: 13px; }
-.wk-lines { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
-.wk-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--accent); }
-.wk-dot-bad { background: var(--bad); }
-.wk-dot-warn { background: var(--warn); }
-.wk-dot-ok { background: var(--ok); }
-.wk-task { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface-2); }
-.wk-task-line { display: flex; gap: 8px; align-items: center; }
-.wk-task-line code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: 11.5px; padding: 6px 8px;
-  border-radius: 6px; background: var(--surface); border: 1px solid var(--border); }
-.wk-sent { margin-top: 12px; }
-.wk-sent summary { cursor: pointer; font-weight: 600; }
 @keyframes wk-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @media (max-width: 700px) {
   .wk-headline { font-size: 16px; }
