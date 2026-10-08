@@ -19,6 +19,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
+from . import budgets as budgets_module
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                growth as growth_module, management as management_module,
                drawing_list as drawing_list_module,
@@ -1929,6 +1930,69 @@ class WorkloadService:
         with self._lock:
             self._staged.pop(token, None)
             return {"discarded": True}
+
+    # -- budgets ---------------------------------------------------------
+    #
+    # BISpark's Projects list and each job's staff expenditure: the
+    # department's budget, the team's share of it, and who spent what.
+
+    def budgets(self) -> Dict[str, Any]:
+        with self._lock:
+            return budgets_module.view(self)
+
+    def import_budgets(self, files: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Read and write any mix of Projects lists and staff expenditures."""
+        with self._lock:
+            if not files:
+                raise ApiError(HTTPStatus.BAD_REQUEST,
+                               "Choose a Projects export or a staff expenditure.")
+            parsed, errors = [], []
+            for item in _objects(files, "files"):
+                filename = str(item.get("filename") or "export.xlsx")
+                try:
+                    parsed.append(budgets_module.parse(
+                        filename, _decode(item.get("content_base64"))))
+                except budgets_module.BudgetError as error:
+                    errors.append(f"{filename}: {error.message}")
+            if not parsed:
+                raise ApiError(HTTPStatus.BAD_REQUEST,
+                               "Those files could not be read.", errors)
+            self._commit()
+            result = budgets_module.bring_in(self, parsed)
+            result["errors"] = errors
+            result["files"] = [{"filename": p["filename"], "kind": p["kind"],
+                                "jobs": len(p.get("jobs") or ()) or len(
+                                    {r["job_number"] for r in p.get("rows") or ()})}
+                               for p in parsed]
+            result["save"] = {"saved": True}
+            return result
+
+    def set_budget_share(self, job: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            self._commit()
+            try:
+                budgets_module.set_share(self, job, body.get("share_percent"))
+            except budgets_module.BudgetError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
+            return budgets_module.view(self)
+
+    def set_budget_person(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            self._commit()
+            try:
+                budgets_module.set_person(self, body)
+            except budgets_module.BudgetError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
+            return budgets_module.view(self)
+
+    def save_budget_requests(self, body: Dict[str, Any], parse_capture
+                             ) -> Dict[str, Any]:
+        with self._lock:
+            self._commit()
+            try:
+                return budgets_module.save_requests(self, body, parse_capture)
+            except budgets_module.BudgetError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
 
 
 

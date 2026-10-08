@@ -28,8 +28,9 @@ import zipfile
 from urllib.parse import urlparse
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Optional, Sequence
 
+from . import budgets
 from .service import ApiError, WorkloadService
 
 #: The files the scheduled job is made of, shipped with the app.
@@ -119,7 +120,8 @@ def request_for(service: WorkloadService) -> Dict[str, str]:
 
 
 def kit(request: Dict[str, str], *, shared_folder: str = "",
-        app_url: str = "", key: str = "") -> bytes:
+        app_url: str = "", key: str = "",
+        budget_requests: Optional[Dict[str, Any]] = None) -> bytes:
     """The zip each PC unpacks: the job, its settings and the request.
 
     With a key it is the manager's kit, which sends to Selecao+ at 1:00 am.
@@ -148,6 +150,10 @@ def kit(request: Dict[str, str], *, shared_folder: str = "",
                          "\r\n".join(lines) + "\r\n")
         archive.writestr("selecao-nightly/request.json",
                          json.dumps(request, indent=1))
+        if manager and budget_requests:
+            # The Projects list and each job's staff expenditure, once a day.
+            archive.writestr("selecao-nightly/budgets.json",
+                             json.dumps(budget_requests, indent=1))
     return buffer.getvalue()
 
 
@@ -163,7 +169,8 @@ def run(service: WorkloadService, files: Sequence[Dict[str, Any]],
             raise ApiError(HTTPStatus.BAD_REQUEST,
                            "The export could not be read as a timesheet.",
                            staged["errors"])
-        held = service.store.counts()
+        # Rows a staff expenditure filled in are not the person's own export.
+        held = service.store.counts(without_source=budgets.SPEND_SOURCE)
         shrinking = []
         for person in staged["people"]:
             before = held.get(person["name"], 0)
@@ -196,3 +203,34 @@ def run(service: WorkloadService, files: Sequence[Dict[str, Any]],
 
 def encode(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
+
+
+def run_budgets(service: WorkloadService, kind: str,
+                files: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """The budgets step of the night: the Projects list, then staff lists.
+
+    The answer to the Projects list names the jobs whose staff expenditure
+    the PC should ask for next, so the PC never has to read a spreadsheet.
+    """
+    if kind not in {"budgets", "spend"}:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"Nothing imports {kind!r}.")
+    if not files:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "No export came with the import.")
+    result = service.import_budgets(files)
+    wanted = "projects" if kind == "budgets" else "spend"
+    if not any(f["kind"] == wanted for f in result["files"]):
+        raise ApiError(HTTPStatus.BAD_REQUEST,
+                       "That export is not the one this step asks for.",
+                       result.get("errors") or [])
+    out = {
+        "kind": kind,
+        "jobs_listed": result["jobs_listed"],
+        "spend_jobs": result["spend_jobs"],
+        "rows_filled": result["rows_filled"],
+        "projects_updated": result["projects_updated"],
+        "warnings": (result["warnings"] + result["errors"])[:20],
+    }
+    if kind == "budgets":
+        out["jobs"] = budgets.jobs_to_fetch(service)
+    return out
+
