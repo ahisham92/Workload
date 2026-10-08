@@ -4,8 +4,9 @@ Nobody types a plan.  A person's day is laid out from what the app already
 knows, in this order:
 
 1. **requests** that came in, at the time they were given, the
-   **meetings** of anybody who leads people and everybody's weekly
-   **development time** (see ``management``);
+   **meetings** of anybody who leads people, everybody's weekly
+   **development time** (see ``management``) and the **Outlook meetings** of
+   anybody whose calendar is linked (see ``busy_calendar``);
 2. for somebody who leads people, their daily **team support**;
 3. **tasks** on the list for that day -- the submission run-ups the
    submissions plan put there, meetings, anything else dated -- a task over
@@ -28,6 +29,7 @@ import datetime as _dt
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from . import busy_calendar
 from . import calendar_
 from . import intake
 from . import people as people_module
@@ -107,6 +109,17 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
             for meeting in meetings:
                 if name != meeting["leader"] and name not in meeting["with"]:
                     continue
+                if meeting["kind"] == "outlook":
+                    # Only what no request or meeting above already holds.
+                    for first, last in busy_calendar.minus(
+                            [(meeting["start"], meeting["end"])],
+                            [(b["start"], b["end"]) for b in fixed]):
+                        fixed.append({"start": first, "end": last, "kind": "meeting",
+                                      "source": "outlook",
+                                      "title": _meeting_title(meeting, name),
+                                      "project": "", "task_id": None, "done": False,
+                                      "agenda": []})
+                    continue
                 fixed.append({"start": meeting["start"], "end": meeting["end"],
                               "kind": ("development"
                                        if meeting["kind"] == "development"
@@ -183,6 +196,8 @@ def _meeting_title(meeting: Dict[str, Any], name: str) -> str:
     leader = meeting["leader"]
     if meeting["kind"] == "development":
         return "Development time: your goals for the quarter"
+    if meeting["kind"] == "outlook":
+        return "In a meeting (from Outlook)"
     if meeting["kind"] == "one_to_one":
         other = meeting["with"][0] if name == leader else leader
         return f"One-to-one with {other}"

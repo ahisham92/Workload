@@ -292,6 +292,14 @@ class Accounts:
         return {row["id"]: secretbox.unseal(self._key, row["password_seal"])
                 for row in rows}
 
+    def seal(self, text: str) -> str:
+        """Something kept in a unit that should not read plainly from a copy
+        of it, such as a calendar link."""
+        return secretbox.seal(self._key, text)
+
+    def unseal(self, blob: Optional[str]) -> Optional[str]:
+        return secretbox.unseal(self._key, blob)
+
     def password_of(self, user_id: int) -> Optional[str]:
         with self._connect() as db:
             row = db.execute("SELECT password_seal FROM users WHERE id = ?",
