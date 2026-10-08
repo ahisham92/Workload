@@ -14,6 +14,7 @@ import io
 from typing import Any, Dict, Iterable, Optional, Sequence
 
 from . import metrics
+from .model import stored_date
 from .unit import Unit
 
 
@@ -141,7 +142,9 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
            for row, entry in sorted(drawn.items())),
           {2: 40})
 
-    away = [("Everybody" if a["person"] == "*" else a["person"], a["start"], a["end"],
+    # Kept as ISO text; written as dates, like the holidays beside them.
+    away = [("Everybody" if a["person"] == "*" else a["person"],
+             stored_date(a["start"]) or a["start"], stored_date(a["end"]) or a["end"],
              a.get("note", "")) for a in unit.store.absences()]
     away += [("Everybody", day, day, "Day off typed in") for day in unit.holidays()]
     sheet("Time away", ["Who", "From", "To", "Note"], sorted(

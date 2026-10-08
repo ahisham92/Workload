@@ -37,11 +37,11 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise ApiError(HTTPStatus.BAD_REQUEST, "Bad Content-Length.")
-        if length <= 0:
-            return {}
         if length > MAX_UPLOAD_BYTES * 2:
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Request too large.")
-        return parse_body(self.rfile.read(length),
+        # Parsed even when empty: a write with no body must still say it is
+        # JSON, which a form on another site cannot.
+        return parse_body(self.rfile.read(length) if length > 0 else b"",
                           self.headers.get("Content-Type") or "")
 
     def _handle(self, method: str) -> None:

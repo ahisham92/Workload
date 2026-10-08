@@ -142,9 +142,11 @@
     const ticks = [];
     const first = new Date(startAt);
     first.setDate(first.getDate() + ((8 - first.getDay()) % 7));   // next Monday
-    for (let t = first.getTime(); t < endAt; t += 7 * DAY) {
-      ticks.push(el('span', { class: 'tl-tick', style: `left:${x(t)}%` },
-        new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })));
+    // By the calendar, not by 7 x 24 h: across a clock change that would land
+    // at 23:00 on the Sunday and label the tick a day early.
+    for (const d = first; d.getTime() < endAt; d.setDate(d.getDate() + 7)) {
+      ticks.push(el('span', { class: 'tl-tick', style: `left:${x(d.getTime())}%` },
+        d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })));
     }
 
     const rows = people.map((name) => {

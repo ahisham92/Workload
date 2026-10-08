@@ -25,6 +25,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .model import ValidationError
+from .model import today as model_today
 
 #: What somebody is, in the order they rank. The label is what the app shows.
 GRADES = [
@@ -146,8 +147,12 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
     people = {p["name"]: p for p in roster(store)["people"]}
     teams = {team["id"]: dict(team) for team in store.teams()}
 
+    # Leave booked ahead is on the timesheets too, but a month not reached
+    # yet has not been worked: it is no part of how loaded anybody has been.
+    today = today or model_today()
     rows = [row for row in store.all_rows()
-            if year is None or (row["date"] and row["date"].year == year)]
+            if (year is None or (row["date"] and row["date"].year == year))
+            and not (row["date"] and row["date"] > today)]
 
     # hours[person][month], and the projects each person and team touched
     hours: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))

@@ -48,6 +48,7 @@ from . import derive
 from . import people as people_module
 from . import planner
 from . import tasks as task_sheet
+from .checkins import week_start
 
 #: How far ahead the forecast looks, in weeks.
 HORIZON_WEEKS = 12
@@ -77,16 +78,22 @@ def _monday(day: _dt.date) -> _dt.date:
     return day - _dt.timedelta(days=day.weekday())
 
 
-def weeks_ahead(today: _dt.date, count: int) -> List[Tuple[_dt.date, _dt.date]]:
+def weeks_ahead(today: _dt.date, count: int,
+                config: Optional[Dict[str, Any]] = None
+                ) -> List[Tuple[_dt.date, _dt.date]]:
     """``count`` weeks from today, each as (first day, last day).
 
-    The first week starts today rather than on its Monday, so a forecast made
-    on a Wednesday does not count Monday and Tuesday as still to work.
+    The first week starts today rather than on its first day, so a forecast
+    made on a Wednesday does not count the days before it as still to work.
+    With ``config`` the weeks are the unit's own: Sunday to Saturday where the
+    working week starts on a Sunday, so a forecast made on a Sunday in Cairo
+    does not open with a week of one day.
     """
     out = []
     start = today
     for _ in range(count):
-        end = _monday(start) + _dt.timedelta(days=6)
+        first = week_start(start, config) if config else _monday(start)
+        end = first + _dt.timedelta(days=6)
         out.append((start, end))
         start = end + _dt.timedelta(days=1)
     return out
@@ -108,7 +115,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     management = management or {}
     hours_per_mm = float(hours_per_mm or 0) or 185.0
     a_day = task_sheet.hours_per_day(config)
-    span = weeks_ahead(today, weeks)
+    span = weeks_ahead(today, weeks, config)
     week_dates = [task_sheet.working_days(a, b, config) for a, b in span]
     week_days = [len(days) for days in week_dates]
     person_week = [d * a_day for d in week_days]

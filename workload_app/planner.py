@@ -115,6 +115,7 @@ def clean_days(value: Any) -> int:
 def pace(rows: Iterable[Dict[str, Any]], config: Dict[str, Any], *,
          lookback: int = LOOKBACK_DAYS) -> Dict[str, Any]:
     """Hours a working day each person has been putting into each project."""
+    rows = list(rows)
     project_rows = [r for r in rows if r.get("date") and r.get("job_number")
                     and derive.is_project_work(r.get("job_type") or "")]
     if not project_rows:
@@ -128,7 +129,16 @@ def pace(rows: Iterable[Dict[str, Any]], config: Dict[str, Any], *,
             sums[(row["engineer"], row["job_number"])] += float(row["hours"] or 0.0)
     # Days somebody was off do not count against their pace: a week of leave
     # in the fortnight does not make them half as quick.
-    present = {name: max(1, calendar_.present_days(config, name, window))
+    # Nor do the days before somebody joined: three days in at full speed is
+    # full speed, not a third of it.
+    joined: Dict[str, _dt.date] = {}
+    for row in rows:
+        name, day = row.get("engineer"), row.get("date")
+        if name and day and (name not in joined or day < joined[name]):
+            joined[name] = day
+    present = {name: max(1, calendar_.present_days(
+                   config, name, [d for d in window
+                                  if name not in joined or d >= joined[name]]))
                for name, _project in sums}
     rates = {key: value / present[key[0]] for key, value in sums.items() if value > 0}
     return {"rates": rates, "from": first, "to": last, "days": len(window)}

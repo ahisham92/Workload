@@ -659,6 +659,11 @@ class TimesheetStore:
                        (new, old))
             db.execute("UPDATE development_goals SET person = ? WHERE person = ?",
                        (new, old))
+            # The weeks' plans kept, and who gave a slip's reason.
+            db.execute("UPDATE week_plans SET person = ? WHERE person = ?",
+                       (new, old))
+            db.execute("UPDATE week_plans SET reason_by = ? WHERE reason_by = ?",
+                       (new, old))
             db.execute("UPDATE OR REPLACE calendar_links SET person = ? "
                        "WHERE person = ?", (new, old))
             db.execute("UPDATE calendar_busy SET person = ? WHERE person = ?",

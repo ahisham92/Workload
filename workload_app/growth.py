@@ -88,6 +88,8 @@ def quarter_bounds(quarter: str) -> tuple:
     if not match:
         raise GrowthError([f"{quarter!r} is not a quarter, like 2026-Q4."])
     year, number = int(match.group(1)), int(match.group(2))
+    if year < 1:
+        raise GrowthError([f"{quarter!r} is not a quarter, like 2026-Q4."])
     first = _dt.date(year, 3 * number - 2, 1)
     last = (_dt.date(year + 1, 1, 1) if number == 4
             else _dt.date(year, 3 * number + 1, 1)) - _dt.timedelta(days=1)

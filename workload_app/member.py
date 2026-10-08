@@ -13,11 +13,11 @@ else's name, score or hours is in the payload at all.
 
 from __future__ import annotations
 
-import datetime as _dt
 from typing import Any, Dict, List, Optional
 
 from . import reports, tasks as task_sheet
 from .metrics import TimesheetIndex
+from .model import today as model_today
 from .unit import Unit
 
 
@@ -148,7 +148,7 @@ def _my_months(report: reports.ReportSet, engineer: str) -> List[Dict[str, Any]]
 def _my_tasks(wb: Unit, engineer: str) -> Dict[str, Any]:
     """The tasks with this person's name on them, and what they add up to."""
     settings = wb.task_settings()
-    today = _dt.date.today()
+    today = model_today()
     mine = [t for t in wb.task_records() if engineer in t.assignees]
     rows = []
     open_hours = overdue = 0

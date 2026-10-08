@@ -115,12 +115,15 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
     booked: Dict[Tuple[str, _dt.date], float] = defaultdict(float)
     extra: Dict[Tuple[str, _dt.date], float] = defaultdict(float)
     last_row: Dict[str, _dt.date] = {}
+    first_row: Dict[str, _dt.date] = {}
     for row in rows:
         day, name = row.get("date"), row.get("engineer")
         if not day or not name:
             continue
         if name not in last_row or day > last_row[name]:
             last_row[name] = day
+        if name not in first_row or day < first_row[name]:
+            first_row[name] = day
         if day < first or day > through or day.isoformat() in away.get(name, ()):
             continue
         key = (name, week_start(day, config))
@@ -130,10 +133,14 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
     out: Dict[str, List[Dict[str, Any]]] = {}
     for name in names:
         own = away.get(name, ())
+        # Somebody who joined in the window had no hours to give before their
+        # first timesheet day: a new joiner's first week is not a quiet one.
+        joined = first_row.get(name)
         series = []
         for start in starts:
             end = min(start + _dt.timedelta(days=6), through)
-            days = _working(start, end, config)
+            days = [d for d in _working(start, end, config)
+                    if joined is None or d >= joined]
             off = sum(1 for d in days if d.isoformat() in own)
             capacity = (len(days) - off) * a_day
             hours = booked.get((name, start), 0.0)

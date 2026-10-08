@@ -44,6 +44,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from . import derive
 from . import planner
 from . import tasks as task_sheet
+from .checkins import week_start
 
 #: The credit at which a deliverable has been sent to the client.
 SUBMITTED_AT = 0.8
@@ -221,9 +222,11 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
         if not item["date"]:
             continue
         day = _dt.date.fromisoformat(item["date"])
-        monday = day - _dt.timedelta(days=day.weekday())
-        week = weeks.setdefault(monday.isoformat(), {"week": monday.isoformat(),
-                                                     "count": 0, "drawings": 0})
+        # The unit's own week: a Sunday submission in Cairo opens its week
+        # rather than closing the one before.
+        first = week_start(day, config)
+        week = weeks.setdefault(first.isoformat(), {"week": first.isoformat(),
+                                                    "count": 0, "drawings": 0})
         week["count"] += 1
         week["drawings"] += item["drawings"] or 0
     return {
