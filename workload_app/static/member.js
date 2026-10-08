@@ -75,7 +75,8 @@ const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 async function api(path, { quiet = false, ...options } = {}) {
   // Anything slow brings up the loading ship, so a wait never looks stuck;
   // the background refreshes ask to stay quiet.
-  const done = quiet ? () => {} : voyage.trip(voyage.labelFor(path, options.method));
+  const done = quiet ? () => {} : voyage.trip(
+    voyage.labelFor(path, options.method), voyage.keyFor(path, options.method));
   let response;
   let payload = {};
   try {
@@ -86,7 +87,8 @@ async function api(path, { quiet = false, ...options } = {}) {
     });
     try { payload = await response.json(); } catch { /* empty body */ }
   } finally {
-    done();
+    // Only answered requests teach the ship how long this kind of work takes.
+    done(!(response && response.ok));
   }
   if (!response.ok) {
     if (response.status === 401) window.location.href = `${BASE}/login.html`;
