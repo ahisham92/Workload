@@ -908,15 +908,29 @@ class WorkloadApp:
         The permission is a row in ``memberships``; without one this answers
         Not Found, and with one it answers only what :mod:`member` builds.
         """
-        user_id = ctx.user["id"]
-        granted = self.accounts.memberships(user_id)
+        granted, row, service = self._member_unit(
+            ctx, (query.get("unit") or [None])[0])
+
+        kind = (query.get("period") or ["year"])[0]
+        data = member_view.build(
+            service.workbook, row["engineer"], kind=kind, year=_year(query),
+            quarter=(query.get("quarter") or [None])[0],
+            store=service._store)                      # noqa: SLF001 - same app
+        data["unit"] = {"id": row["unit_id"], "name": row["unit_name"],
+                        "manager": row.get("owner_name") or ""}
+        data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
+                          "engineer": g["engineer"]} for g in granted]
+        return data
+
+    def _member_unit(self, ctx: Context, wanted: Optional[str]):
+        """The unit a member was given access to, open for reading, and the
+        row that says who in it they are."""
+        granted = self.accounts.memberships(ctx.user["id"])
         if not granted:
             raise ApiError(
                 HTTPStatus.NOT_FOUND,
                 "No unit has been shared with you yet. Your manager can do "
                 "that from their Team tab.")
-
-        wanted = (query.get("unit") or [None])[0]
         row = next((g for g in granted if g["unit_id"] == wanted), granted[0])
         path = storage.unit_path(self.data_dir, row["owner_id"], row["filename"])
         if not path.is_file():
@@ -929,17 +943,70 @@ class WorkloadApp:
             service.open(path, unit={"id": row["unit_id"],
                                      "name": row["unit_name"]},
                          read_only=True)
+        return granted, row, service
 
-        kind = (query.get("period") or ["year"])[0]
-        data = member_view.build(
-            service.workbook, row["engineer"], kind=kind, year=_year(query),
-            quarter=(query.get("quarter") or [None])[0],
-            store=service._store)                      # noqa: SLF001 - same app
-        data["unit"] = {"id": row["unit_id"], "name": row["unit_name"],
-                        "manager": row.get("owner_name") or ""}
-        data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
-                          "engineer": g["engineer"]} for g in granted]
-        return data
+    # ------------------------------------------------------------------
+    # My day: the only things a member can change, and only their own
+    # ------------------------------------------------------------------
+
+    def _mine(self, ctx: Context, query, body):
+        """Who this member is in the unit they asked about -- from their
+        access, never from anything they sent."""
+        wanted = (query.get("unit") or [None])[0] or (body or {}).get("unit")
+        _, row, service = self._member_unit(ctx, wanted)
+        return row, service
+
+    def my_day(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.my_day(row["engineer"], query)
+
+    def my_timesheet(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.my_timesheet(row["engineer"], query)
+
+    def mark_my_task(self, ctx: Context, query, body, task_id) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        result = service.mark_my_task(row["engineer"], task_id, body)
+        if result["mark"]["kind"] != "done":
+            self._tell_leads(row)
+        return result
+
+    def ask_for_help(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        result = service.ask_for_help(row["engineer"], body)
+        self._tell_leads(row)
+        return result
+
+    def undo_my_mark(self, ctx: Context, query, body, mark_id) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.undo_my_mark(row["engineer"], mark_id)
+
+    def add_my_time_off(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        result = service.add_my_time_off(row["engineer"], body)
+        self._tell_leads(row)
+        return result
+
+    def remove_my_time_off(self, ctx: Context, query, body, mark_id) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.remove_my_time_off(row["engineer"], mark_id)
+
+    #: Set to False by tests: the phones are told on a thread of its own.
+    tell_in_background = True
+
+    def _tell_leads(self, row: Dict[str, Any]) -> None:
+        """Tell the manager's and team leads' phones now, not at 04:00. Each
+        hears only what is theirs (see notify), and a tap never waits on it."""
+        def run() -> None:
+            try:
+                notify.run(self, user_ids=notify.people_of_unit(
+                    self, row["owner_id"], row["unit_id"]), unit_ids=[row["unit_id"]])
+            except Exception:              # pragma: no cover - a notification
+                traceback.print_exc()      # never fails what was said
+        if self.tell_in_background:
+            threading.Thread(target=run, daemon=True).start()
+        else:
+            run()
 
     # ------------------------------------------------------------------
     # who on the team has an account
@@ -1365,6 +1432,15 @@ class WorkloadApp:
 
             # -- a team member's own page, which is all they can reach
             ("GET", "/api/me", self.my_view, "user"),
+            ("GET", "/api/me/day", self.my_day, "user"),
+            ("GET", "/api/me/timesheet", self.my_timesheet, "user"),
+            ("POST", "/api/me/tasks/{}/mark", self.mark_my_task, "user"),
+            ("POST", "/api/me/help", self.ask_for_help, "user"),
+            ("POST", "/api/me/marks/{}/undo", self.undo_my_mark, "user"),
+            ("POST", "/api/me/off", self.add_my_time_off, "user"),
+            ("POST", "/api/me/off/{}/remove", self.remove_my_time_off, "user"),
+            ("POST", "/api/marks/{}/seen",
+             lambda ctx, q, b, mark_id: ctx.service.seen_mark(_int(mark_id)), "manager"),
 
             # -- this account's units
             ("GET", "/api/units", self.units, "user"),

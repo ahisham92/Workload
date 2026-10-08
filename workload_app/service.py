@@ -23,7 +23,7 @@ from . import (calendar_, checkins as checkins_module, config as cfg, daily, der
                management as management_module,
                drawing_list as drawing_list_module,
                drawings as drawings_module, holidays as holidays_module,
-               incoming, intake, metrics, needs as needs_module,
+               incoming, intake, metrics, myday, needs as needs_module,
                people as people_module, submissions as submissions_module,
                planner as planner_module, progress, reports,
                tasks as task_sheet, timesheets)
@@ -1156,7 +1156,19 @@ class WorkloadService:
                 rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
                 config=inputs["config"], project_names=inputs["project_names"],
                 saved=self.store.plan_moves(), slots=self.store.slots(),
-                today=_today(), management=inputs["management"])
+                today=_today(), management=inputs["management"],
+                marks=self._open_marks())
+
+    def _open_marks(self) -> List[Dict[str, Any]]:
+        """What people said from My day that the lead has not dealt with,
+        with each day off they entered beside its mark."""
+        absences = {a["id"]: a for a in self.store.absences()}
+        out = []
+        for mark in self.store.marks(open_only=True):
+            if mark["kind"] == myday.OFF:
+                mark["absence"] = absences.get(mark["absence_id"])
+            out.append(mark)
+        return out
 
     @_remembered
     def weekly(self) -> Dict[str, Any]:
@@ -1178,7 +1190,8 @@ class WorkloadService:
         seen = checkins_module.build(
             rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
             config=inputs["config"], project_names=inputs["project_names"],
-            saved=saved, slots=slots, today=today, management=inputs["management"])
+            saved=saved, slots=slots, today=today, management=inputs["management"],
+            marks=self._open_marks())
         points = {p["name"]: p["checkpoints"] for p in seen["people"]}
         signals = {p["name"]: p["signal"]["label"] for p in seen["people"]}
         room = [p["name"] for p in seen["can_take"]]
@@ -1450,6 +1463,187 @@ class WorkloadService:
             data["status"] = cfg.TASK_DONE_STATUS
             saved = wb.save_task(data, task_id=task_id)
             return {"task": saved, "save": self._commit()}
+
+    # -- a team member's own day: the only writes a member can make --------
+    #
+    # A member opens their manager's unit for reading (``read_only``), and
+    # everything else they can reach stays read-only.  These few write on
+    # purpose, and only ever for ``engineer`` -- the person their access names,
+    # which the app takes from the membership, never from the request.
+
+    def _day_for(self, inputs: Dict[str, Any], day: _dt.date,
+                 engineer: str) -> Dict[str, Any]:
+        """One person's page of the day plan, without the meeting agendas
+        (those carry what the leader is told about other people)."""
+        me = [p for p in inputs["roster"] if p["name"] == engineer]
+        config = inputs["config"]
+        return daily.plan_day(
+            day=day, today=_today(), roster=me,
+            rates=daily.rates_on(day, inputs["rows"], config, self.store.plan_moves()),
+            tasks=inputs["tasks"], slots=self.store.slots(), config=config,
+            project_names=inputs["project_names"],
+            **inputs["management"].for_day(day, None))
+
+    @_remembered
+    def my_day(self, engineer: str, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            today = _today()
+            day = _date_in(query, "date", today)
+            inputs = self._planning(wb)
+            marks = self.store.marks(person=engineer)
+            page = myday.today_page(
+                engineer=engineer, day=self._day_for(inputs, day, engineer),
+                tasks=inputs["tasks"], marks=marks,
+                away=myday.my_time_off(self.store.absences(), marks, engineer, today),
+                today=today, project_names=inputs["project_names"])
+            page["today"] = today.isoformat()
+            following = today + _dt.timedelta(days=1)
+            for _ in range(14):
+                if task_sheet.is_working_day(following, inputs["config"]):
+                    break
+                following += _dt.timedelta(days=1)
+            page["next_day"] = following.isoformat()
+            page["engineer"] = engineer
+            page["known"] = engineer in wb.engineer_names()
+            return page
+
+    @_remembered
+    def my_timesheet(self, engineer: str, query: Dict[str, List[str]]) -> Dict[str, Any]:
+        with self._lock:
+            wb = self.workbook
+            today = _today()
+            inputs = self._planning(wb)
+            config = inputs["config"]
+            days = daily.week_of(_date_in(query, "week", today), config)
+            codes = sorted(calendar_.leave_codes(wb))
+            out = myday.ready_timesheet(
+                engineer=engineer, days=days,
+                plans={d.isoformat(): self._day_for(inputs, d, engineer) for d in days},
+                rows=inputs["rows"], tasks=inputs["tasks"],
+                deliverable_phases={d.row: d.ts_phase for d in wb.deliverables()},
+                project_names=inputs["project_names"], config=config,
+                leave_code=codes[0] if codes else "Leave", today=today)
+            anchor = days[0] if days else _date_in(query, "week", today)
+            out.update({
+                "engineer": engineer,
+                "week_start": days[0].isoformat() if days else anchor.isoformat(),
+                "week_end": days[-1].isoformat() if days else anchor.isoformat(),
+                "previous": (anchor - _dt.timedelta(days=7)).isoformat(),
+                "next": (anchor + _dt.timedelta(days=7)).isoformat(),
+                "this_week": bool(days and days[0] <= today <= days[-1] + _dt.timedelta(days=2)),
+            })
+            return out
+
+    def mark_my_task(self, engineer: str, task_id: Any,
+                     body: Dict[str, Any]) -> Dict[str, Any]:
+        """Done, stuck, or help needed, on a task with their name on it."""
+        with self._lock:
+            wb = self.workbook
+            kind = str(body.get("kind") or "")
+            if kind not in myday.TASK_MARKS:
+                raise myday.MyDayError(["Say done, stuck or need help."])
+            note = myday.clean_note(body.get("note"))
+            task = myday.my_task(wb.task_records(), engineer, task_id)
+            if kind == myday.DONE and task.done:
+                raise myday.MyDayError(["That task is already done."])
+            self._limit_open(engineer)
+            before = task.status
+            # A task has one live mark: a new one replaces what was said before.
+            for old in self.store.marks(person=engineer, open_only=True):
+                if old["task_id"] == task.id and old["kind"] in myday.TASK_MARKS:
+                    before = old["before"] or before
+                    self.store.clear_mark(old["id"], "replaced")
+            status = myday.STATUS_FOR.get(kind)
+            if status and status != task.status:
+                data = task.to_dict()
+                data["status"] = status
+                wb.save_task(data, task_id=task.id)
+            mark_id = self.store.add_mark(engineer, kind, task_id=task.id,
+                                          note=note, before=before)
+            return {"mark": myday._mark_view(self.store.mark(mark_id))}
+
+    def ask_for_help(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Help with something that is not on the task list."""
+        with self._lock:
+            note = myday.clean_note(body.get("note"))
+            if not note:
+                raise myday.MyDayError(["Say in a line what you need help with."])
+            self._limit_open(engineer)
+            mark_id = self.store.add_mark(engineer, myday.HELP, note=note)
+            return {"mark": myday._mark_view(self.store.mark(mark_id))}
+
+    def undo_my_mark(self, engineer: str, mark_id: Any) -> Dict[str, Any]:
+        """Take back what they said: the task goes back to how it was."""
+        with self._lock:
+            mark = self._my_mark(engineer, mark_id)
+            if mark["kind"] == myday.OFF:
+                raise myday.MyDayError(["Take time off back from the list of days off."])
+            if mark["task_id"] is not None and mark["kind"] in myday.STATUS_FOR:
+                wb = self.workbook
+                task = next((t for t in wb.task_records()
+                             if t.id == mark["task_id"]
+                             and engineer in t.assignees), None)
+                if task is not None and task.status == myday.STATUS_FOR[mark["kind"]] \
+                        and mark["before"] in cfg.TASK_STATUSES:
+                    data = task.to_dict()
+                    data["status"] = mark["before"]
+                    wb.save_task(data, task_id=task.id)
+            self.store.clear_mark(mark["id"], "undone")
+            return {"undone": mark["id"]}
+
+    def add_my_time_off(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """"I'm off on": their own days away, never anybody else's."""
+        with self._lock:
+            today = _today()
+            absence = calendar_.clean_absence(
+                {**body, "person": engineer}, people=[engineer], today=today)
+            if absence["end"] < today.isoformat():
+                raise myday.MyDayError(["Those days have passed."])
+            absence_id = self.store.add_absence(**absence)
+            mark_id = self.store.add_mark(engineer, myday.OFF, absence_id=absence_id,
+                                          note=absence["note"])
+            return {"mark_id": mark_id, **absence}
+
+    def remove_my_time_off(self, engineer: str, mark_id: Any) -> Dict[str, Any]:
+        """Only days off they entered themselves; the manager's stay."""
+        with self._lock:
+            mark = self._my_mark(engineer, mark_id)
+            if mark["kind"] != myday.OFF or mark["absence_id"] is None:
+                raise myday.MyDayError(["That is not time off you entered."])
+            mine = next((a for a in self.store.absences()
+                         if a["id"] == mark["absence_id"] and a["person"] == engineer),
+                        None)
+            if mine is not None:
+                self.store.remove_absence(mine["id"])
+            self.store.clear_mark(mark["id"], "undone")
+            return {"removed": mark["id"]}
+
+    def _my_mark(self, engineer: str, mark_id: Any) -> Dict[str, Any]:
+        try:
+            mark = self.store.mark(int(mark_id))
+        except (TypeError, ValueError):
+            mark = None
+        if mark is None or mark["person"] != engineer or mark["cleared_at"]:
+            raise ApiError(HTTPStatus.NOT_FOUND, "There is nothing of yours to undo there.")
+        return mark
+
+    def _limit_open(self, engineer: str) -> None:
+        open_now = [m for m in self.store.marks(person=engineer, open_only=True)
+                    if m["kind"] in (myday.STUCK, myday.HELP)]
+        if len(open_now) >= myday.OPEN_LIMIT:
+            raise myday.MyDayError([
+                "You have a lot of asks open already. Talk to your lead, or undo "
+                "the ones that are sorted."])
+
+    def seen_mark(self, mark_id: int) -> Dict[str, Any]:
+        """The lead has picked up a stuck or help ask."""
+        with self._lock:
+            mark = self.store.mark(mark_id)
+            if mark is None or mark["kind"] not in (myday.STUCK, myday.HELP):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such ask.")
+            self.store.clear_mark(mark_id, "lead")
+            return {"seen": mark_id, "save": self._commit()}
 
     # -- emails in, as draft tasks ---------------------------------------
     def inbox(self, user_id: int) -> Dict[str, Any]:
@@ -1776,6 +1970,16 @@ class WorkloadService:
 def _today():
     """Today, which the tests can pin with ``WORKLOAD_TODAY``."""
     return _model_today()
+
+
+def _date_in(query: Dict[str, List[str]], key: str, default: _dt.date) -> _dt.date:
+    raw = (query.get(key) or [""])[0]
+    if not raw:
+        return default
+    try:
+        return _dt.date.fromisoformat(raw)
+    except ValueError:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{raw!r} is not a date.")
 
 
 def _year(query: Dict[str, List[str]]) -> Optional[int]:

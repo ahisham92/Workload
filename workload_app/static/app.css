@@ -1231,6 +1231,8 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 .ci-point { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: baseline;
   font-size: 12.5px; padding-top: 6px; border-top: 1px dashed var(--border); }
 .ci-point .pill { font-size: 11px; padding: 1px 7px; }
+.ci-point:has(.ci-seen) { grid-template-columns: auto 1fr auto; }
+.ci-seen { padding: 1px 10px; font-size: 12px; margin-left: 6px; }
 .ci-none { margin: 4px 0 0; }
 
 /* The short version on Overview. */
@@ -1330,3 +1332,49 @@ td.ci-ask { white-space: normal; min-width: 280px; }
   .inbox-form input[type="text"] { flex-basis: 100%; width: 100%; box-sizing: border-box; }
   .inbox-top .muted { flex-basis: 100%; }
 }
+
+/* -------------------------------------------------------------- My day */
+.md-panel .panel-head { display: flex; justify-content: space-between; gap: 12px;
+  align-items: flex-start; flex-wrap: wrap; }
+.md-nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.md-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 0; }
+.md-item { display: grid; grid-template-columns: 86px 1fr; gap: 10px; padding: 10px 0;
+  border-top: 1px solid var(--border); }
+.md-item:first-child { border-top: 0; }
+.md-time { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted);
+  padding-top: 2px; }
+.md-title { font-weight: 600; overflow-wrap: anywhere; }
+.md-project { font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  color: var(--muted); white-space: nowrap; }
+.md-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 3px; }
+.md-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.md-actions .btn { min-height: 34px; }
+.md-done { border-color: var(--ok); color: var(--ok); }
+.md-is-done .md-title { text-decoration: line-through; color: var(--muted); }
+.md-meeting .md-time, .md-management .md-time { color: var(--accent); }
+.md-work .md-title { font-weight: 500; }
+.md-form { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.md-note { flex: 1 1 200px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.md-later h4 { margin: 16px 0 0; font-size: 13px; color: var(--muted); }
+.md-help { display: grid; gap: 8px; margin-top: 14px; justify-items: start; }
+.md-ask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.md-off-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.md-off-form input { padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.md-off-note { flex: 1 1 220px; }
+.md-off-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+.md-off-list li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.md-sheet td, .md-sheet th { white-space: nowrap; }
+.md-line-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.md-src { font-size: 10.5px; font-weight: 500; color: var(--muted); }
+.md-src-booked { color: var(--ok); }
+.md-src-off { color: var(--warn); }
+.md-total td { border-top: 2px solid var(--border); font-weight: 600; }
+.md-line-overhead .code, .md-line-no_job .code { color: var(--muted); }
+@media (max-width: 640px) {
+  .md-item { grid-template-columns: 1fr; gap: 2px; }
+  .md-actions .btn { flex: 1 1 auto; }
+  .md-off-form > * { flex: 1 1 100%; }
+}
+@media print { .md-actions, .md-form, .md-nav, .md-help, #myoff { display: none !important; } }
