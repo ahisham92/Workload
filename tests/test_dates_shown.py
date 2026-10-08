@@ -71,15 +71,15 @@ def test_no_iso_date_is_cut_out_for_the_screen(path):
 
 def test_both_fmt_dates_go_through_the_day_first_helper():
     for name in ("app.js", "member.js"):
-        source = _read(name)
-        assert "date: (v) => dayFirst(v)" in source, name
-        assert "function dayFirst(" in source, name
+        assert "date: (v) => dayFirst(v)" in _read(name), name
+    # The helper itself is shared by both pages, in common.js.
+    assert "function dayFirst(" in _read("common.js")
 
 
 # ------------------------------------------------------------ run under Node
 
 @needs_node
-@pytest.mark.parametrize("script", ["app.js", "member.js"])
+@pytest.mark.parametrize("script", ["common.js"])
 def test_fmt_date_is_dd_mm_yyyy(script):
     source = _read(script)
     code = _function(source, "dayFirst") + """
@@ -93,10 +93,11 @@ def test_fmt_date_is_dd_mm_yyyy(script):
 @needs_node
 def test_months_and_server_sentences_are_day_first():
     source = _read("app.js")
+    common = _read("common.js")
     code = "\n".join([
-        _const(source, "MONTH_NAMES"),
+        _const(common, "MONTH_NAMES"),
         _function(source, "monthLabel"),
-        _function(source, "dayFirstText"),
+        _function(common, "dayFirstText"),
         _function(source, "shortMonth"),
     ]) + """
     console.log(JSON.stringify([
@@ -117,7 +118,7 @@ def test_months_and_server_sentences_are_day_first():
 
 @needs_node
 def test_member_page_sentences_are_day_first_too():
-    source = _read("member.js")
+    source = _read("common.js")   # member.html loads it before member.js
     code = "\n".join([_const(source, "MONTH_NAMES"), _function(source, "dayFirstText")]) + """
     console.log(JSON.stringify(dayFirstText('Timesheets stop at 2026-09-30, since 2026-06.')));"""
     assert _node(code) == "Timesheets stop at 30/09/2026, since Jun 2026."

@@ -10,7 +10,8 @@
  *
  * The bar is built from the tabs on the page and follows them, so a tab added
  * to index.html appears here by itself: under More, unless it is named in
- * DAILY. Nothing in app.js needs to know the bar exists.
+ * DAILY. Nothing in app.js needs to know the bar exists. Uses common.js's
+ * make, isApple and isStandalone (loaded on the sign-in page too).
  */
 (function () {
   'use strict';
@@ -19,11 +20,6 @@
   // are on the page get a button of their own.
   const DAILY = ['overview', 'planner', 'checkins', 'weekly', 'today', 'tasks', 'timesheets', 'reports'];
   const SLOTS = 4;
-
-  const standalone = () => window.matchMedia('(display-mode: standalone)').matches
-    || window.navigator.standalone === true;
-  const isApple = () => /iphone|ipad|ipod/i.test(navigator.userAgent)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
   /* -- keeping it on the home screen ------------------------------------ */
 
@@ -42,19 +38,6 @@
   if (!tabs) return;
 
   /* -- the bar ------------------------------------------------------------ */
-
-  function make(tag, attrs, ...children) {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(attrs || {})) {
-      if (value === null || value === undefined || value === false) continue;
-      if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-      else node.setAttribute(key, value === true ? '' : value);
-    }
-    for (const child of children) {
-      if (child !== null && child !== undefined) node.append(child);
-    }
-    return node;
-  }
 
   const MORE_ICON = '<svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">'
     + '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/>'
@@ -132,7 +115,7 @@
   }
 
   function installRow() {
-    if (standalone()) return null;
+    if (isStandalone()) return null;
     const hint = make('p', { class: 'thumb-sheet-hint', hidden: true });
     const row = make('button', { type: 'button', class: 'thumb-sheet-row thumb-install',
       onclick: async () => {

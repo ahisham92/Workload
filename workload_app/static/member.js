@@ -4,12 +4,11 @@
  * hidden. The figures come from one endpoint, /api/me, which returns only this
  * person's data -- so there is nothing here to hide in the first place. My day
  * (myday.js) is the only part that writes, and only for this person.
+ *
+ * $, setChildren, BASE and the date helpers come from common.js.
  */
 
-const state = { data: null, unit: null, year: null, me: null, chosen: false };
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const state = { data: null, unit: null, year: null, chosen: false };
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -27,11 +26,6 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-function setChildren(node, ...children) {
-  node.replaceChildren(
-    ...children.filter((child) => child !== null && child !== undefined));
-}
-
 const num = (v, digits = 2) => (v === null || v === undefined || Number.isNaN(v)
   ? '—' : Number(v).toLocaleString(undefined, {
     minimumFractionDigits: digits, maximumFractionDigits: digits }));
@@ -45,26 +39,6 @@ const fmt = {
   /** Every date on screen is day-first, DD/MM/YYYY, whatever the phone's locale. */
   date: (v) => dayFirst(v),
 };
-
-/** "2026-10-08" (or "2026-10-08T16:43:15+00:00") as "08/10/2026"; '—' when blank.
- *  Anything that is not an ISO date is shown as it came. */
-function dayFirst(v) {
-  if (v === null || v === undefined || v === '') return '—';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
-}
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** Every ISO date inside a sentence the server wrote, made day-first (as in app.js). */
-function dayFirstText(text) {
-  if (text === null || text === undefined) return text;
-  return String(text)
-    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3/$2/$1')
-    .replace(/\b(since|in|from|to|until|till|of|by|before|after|for) (\d{4})-(0[1-9]|1[0-2])\b(?!-)/gi,
-      (_, word, y, mo) => `${word} ${MONTH_NAMES[Number(mo) - 1]} ${y}`);
-}
 
 /* The same colour rules as the manager's app: below target reads red. */
 const tone = {
@@ -87,11 +61,6 @@ function toned(value, kind, format = num) {
   const cls = typeof kind === 'function' ? kind(value) : kind;
   return el('span', { class: cls ? `v-${cls}` : '' }, format(value));
 }
-
-/* Where this page is served from. At an address of its own that is the root
-   and BASE is empty; as one tab of a larger site it is "/workload", and every
-   request below has to be made under it rather than at the site's root. */
-const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 
 async function api(path, { quiet = false, ...options } = {}) {
   // Anything slow brings up the loading ship, so a wait never looks stuck;
@@ -155,11 +124,11 @@ async function load() {
   render();
   // My day is for your own day: looking at somebody you lead shows their
   // figures only, and nothing on their page can be changed from yours.
-  const own = !state.data.viewer || state.data.engineer === state.data.viewer;
+  const own = isOwn(state.data);
   for (const id of ['myday', 'myweek', 'mytimesheet', 'myoff', 'mymeetings', 'mycalendar']) {
     if (!own && $(`#${id}`)) $(`#${id}`).hidden = true;
   }
-  if (own && window.myDay && dataKnown(state.data)) window.myDay.load(state.data.unit && state.data.unit.id);
+  if (own && window.myDay && state.data.known) window.myDay.load(state.data.unit && state.data.unit.id);
   if (window.selecaoPush && !state.pushShown) {
     state.pushShown = true;
     window.selecaoPush.show($('#member-push'));
@@ -179,7 +148,8 @@ async function refreshFigures() {
 
 window.memberPage = { refresh: refreshFigures };
 
-function dataKnown(data) { return Boolean(data && data.known); }
+/** Whether the page shows the signed-in person's own figures. */
+function isOwn(data) { return !data.viewer || data.engineer === data.viewer; }
 
 function render() {
   const data = state.data;
@@ -187,8 +157,7 @@ function render() {
   $('#member-unit').textContent = data.unit
     ? `${data.unit.name}${data.unit.manager ? ` · ${data.unit.manager}'s team` : ''}`
     : '';
-  const own = !data.viewer || data.engineer === data.viewer;
-  $('#member-title').textContent = own
+  $('#member-title').textContent = isOwn(data)
     ? `My workload — ${data.period.label}`
     : `${data.engineer}'s workload — ${data.period.label}`;
 
@@ -453,7 +422,6 @@ async function submitPassword() {
   try {
     const who = await api('/api/auth/me');
     if (!who.user) { window.location.href = `${BASE}/login.html`; return; }
-    state.me = who.user;
     state.site = who.site || null;
     if (state.site) {
       // The password is the site's, and so is the way back to everything else.

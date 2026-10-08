@@ -7,7 +7,7 @@
  * sets it. Everything is worked out by the server (workload_app/budgets.py).
  *
  * Built on app.js's helpers (el, api, setChildren, openModal, modalValues,
- * toast, fmt, filesBase64).
+ * toast, fmt, filesBase64), checkins.js's statCard and growth.js's todoList.
  */
 'use strict';
 
@@ -21,7 +21,6 @@ const BU_STATE = {
   no_budget: { label: 'No budget yet', tone: 'neutral' },
   closed: { label: 'Closed', tone: 'neutral' },
 };
-const BU_LEVEL = { now: 'bad', soon: 'warn', note: 'info' };
 const BU_BASIS = {
   set: 'set by you',
   booked: 'from who booked the hours',
@@ -34,11 +33,7 @@ function buMonth(iso) {
     .toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
 }
 
-function buDay(iso) {
-  if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB',
-    { day: 'numeric', month: 'short', year: 'numeric' });
-}
+const buDay = (iso) => dateText(iso, { day: 'numeric', month: 'short', year: 'numeric' });
 
 async function loadBudgets(force = false) {
   if (bud.busy) return;
@@ -62,7 +57,7 @@ function renderBudgets() {
   const live = data.jobs.filter((j) => j.listed);
   const closed = data.jobs.filter((j) => !j.listed);
   if (!data.jobs.length) {
-    setChildren(body, gettingStarted(data), automatePanel(data));
+    setChildren(body, gettingStarted(), automatePanel(data));
     return;
   }
   setChildren(body,
@@ -118,28 +113,22 @@ function budgetsTodo(data) {
     el('div', { class: 'panel-head' }, el('div', {},
       el('h3', {}, 'What to do'),
       el('p', { class: 'muted' }, 'Most pressing first.'))),
-    el('ol', { class: 'gr-todo-list' }, ...data.todo.map((item) =>
-      el('li', { class: `gr-todo-item gr-${BU_LEVEL[item.level] || 'info'}` },
-        el('span', {}, dayFirstText(item.text)), action(item)))));
+    todoList(data.todo, action));
 }
 
 function budgetsStats(data, live) {
   const t = data.totals;
-  const card = (label, value, toneName, sub) => el('div', { class: 'card' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: `value ${toneName ? `v-${toneName}` : ''}` }, value),
-    el('div', { class: 'sub' }, sub));
   const used = t.team_budget_mm ? t.team_spent_mm / t.team_budget_mm : null;
   const risky = t.over + t.short;
   return el('div', { class: 'cards cards-4' },
-    card('Your team\'s budget', `${fmt.mm(t.team_budget_mm)} MM`, '',
+    statCard('Your team\'s budget', `${fmt.mm(t.team_budget_mm)} MM`, '',
       `of ${fmt.mm(t.dept_budget_mm)} MM for the department`),
-    card('Spent by the team', `${fmt.mm(t.team_spent_mm)} MM`,
+    statCard('Spent by the team', `${fmt.mm(t.team_spent_mm)} MM`,
       used === null ? '' : used > 1 ? 'bad' : used > 0.85 ? 'warn' : 'ok',
       used === null ? 'no budgets yet' : `${fmt.pct0(used)} of the budget`),
-    card('Left', `${fmt.mm(t.team_left_mm)} MM`, tone.amount(t.team_left_mm),
+    statCard('Left', `${fmt.mm(t.team_left_mm)} MM`, tone.amount(t.team_left_mm),
       `across ${live.length} live job${live.length === 1 ? '' : 's'}`),
-    card('Jobs at risk', risky, risky ? 'bad' : 'ok',
+    statCard('Jobs at risk', risky, risky ? 'bad' : 'ok',
       `${t.over} over, ${t.short} running out early`));
 }
 
@@ -182,9 +171,14 @@ function buBudgetBars(live) {
 
 /* -------------------------------------------------------------- the jobs */
 
+/** A job's state tone for a pill or a message, where 'neutral' shows as 'info'. */
+function stateTone(job) {
+  const tone = (BU_STATE[job.state] || BU_STATE.ok).tone;
+  return tone === 'neutral' ? 'info' : tone;
+}
+
 function statePill(job) {
-  const state = BU_STATE[job.state] || BU_STATE.ok;
-  return el('span', { class: `pill pill-${state.tone === 'neutral' ? 'info' : state.tone}` }, state.label);
+  return el('span', { class: `pill pill-${stateTone(job)}` }, (BU_STATE[job.state] || BU_STATE.ok).label);
 }
 
 function shareCell(job) {
@@ -256,7 +250,7 @@ function jobDetail(job) {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => editShare(job) }, 'Set your share'),
         el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
           onclick: () => { bud.open = null; renderBudgets(); } }, 'Close'))),
-    el('p', { class: `msg msg-${(BU_STATE[job.state] || BU_STATE.ok).tone === 'neutral' ? 'info' : (BU_STATE[job.state] || BU_STATE.ok).tone}` }, next),
+    el('p', { class: `msg msg-${stateTone(job)}` }, next),
     el('div', { class: 'cards cards-4' },
       ...[
         ['BISpark budget', job.budget_mm, `spent ${fmt.mm(job.spent_mm)} by the department`],
@@ -302,7 +296,15 @@ function editShare(job) {
     closeModal();
     toast(values.share_percent === null ? 'Back to the share from who booked the hours.' : 'Share saved.', 'ok');
     renderBudgets();
+    registerChanged();
   }, { share_percent: job.share_basis === 'set' ? Math.round(job.share * 1000) / 10 : '' });
+}
+
+/** A share, a person or a new file moves the team's budget on the Projects
+    tab (where it follows BISpark) and the days the staff expenditure fills
+    in: the rest of the app is read again so it does not show the old ones. */
+function registerChanged() {
+  if (typeof refreshAll === 'function') refreshAll().catch(() => {});
 }
 
 /* ------------------------------------------------------- people on the jobs */
@@ -343,6 +345,7 @@ function editPerson(p) {
     closeModal();
     toast(`${p.name} saved.`, 'ok');
     renderBudgets();
+    registerChanged();
   }, { kind: p.set ? p.kind : 'default', from: p.from || '', to: p.to || '' });
 }
 
@@ -412,6 +415,7 @@ async function bringInFiles(input) {
     toast(parts.length ? `Brought in ${parts.join(', ')}.` : 'Nothing new in those files.', 'ok');
     for (const message of [...result.warnings, ...result.errors]) toast(message, 'bad');
     loadBudgets(true);
+    if ((result.projects_updated || []).length || result.rows_filled) registerChanged();
   } catch (error) {
     toast([error.message, ...(error.errors || [])].join(' '), 'bad');
   }

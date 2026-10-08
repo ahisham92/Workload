@@ -26,20 +26,8 @@ const state = {
   passwords: null,       // null until an administrator asks to see them
 };
 
-/* ---------------------------------------------------------------- helpers */
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-/** Replace a node's children, treating a null child as nothing at all.
- *
- *  Every render below builds its children with ternaries, and the DOM's own
- *  replaceChildren turns a null into the text "null" on the page.
- */
-function setChildren(node, ...children) {
-  node.replaceChildren(
-    ...children.filter((child) => child !== null && child !== undefined));
-}
+/* ---------------------------------------------------------------- helpers
+ * ($, setChildren, BASE, toastError and the date helpers are in common.js.) */
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -71,33 +59,10 @@ const fmt = {
   month: (v) => monthLabel(v),
 };
 
-/** "2026-10-08" (or "2026-10-08T16:43:15+00:00") as "08/10/2026"; '—' when blank.
- *  Anything that is not an ISO date is shown as it came. */
-function dayFirst(v) {
-  if (v === null || v === undefined || v === '') return '—';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
-}
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /** "2026-10" as "Oct 2026"; anything else as it came. */
 function monthLabel(v) {
   const m = /^(\d{4})-(\d{2})$/.exec(String(v ?? ''));
   return m ? `${MONTH_NAMES[Number(m[2]) - 1]} ${m[1]}` : (v ?? '');
-}
-
-/** Every ISO date inside a sentence the server wrote, made day-first:
- *  "2026-10-08" as "08/10/2026", and "since 2026-06" as "since Jun 2026". A
- *  bare "2026-06" is only read as a month after a word like "since", so a job
- *  number that happens to look like one is left alone. */
-function dayFirstText(text) {
-  if (text === null || text === undefined) return text;
-  return String(text)
-    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3/$2/$1')
-    .replace(/\b(since|in|from|to|until|till|of|by|before|after|for) (\d{4})-(0[1-9]|1[0-2])\b(?!-)/gi,
-      (_, word, y, mo) => `${word} ${MONTH_NAMES[Number(mo) - 1]} ${y}`);
 }
 
 /** Percentages are held as fractions in the workbook and shown as whole numbers. */
@@ -123,9 +88,9 @@ const tone = {
   utilisation: (v) => (v === null || v === undefined ? ''
     : v > 1.05 ? 'bad' : v >= 0.85 ? 'ok' : v >= 0.7 ? 'warn' : 'bad'),
   /** Distance from a target of 1.00, either side. */
-  target: (v, target = 1) => {
+  target: (v) => {
     if (v === null || v === undefined) return '';
-    const off = Math.abs(v - target) / (target || 1);
+    const off = Math.abs(v - 1);
     return off <= 0.15 ? 'ok' : off <= 0.3 ? 'warn' : 'bad';
   },
   /** How far a project has got. */
@@ -136,9 +101,17 @@ const tone = {
 };
 
 /** A number with its tone applied — as a class, so print keeps it too. */
-function toned(value, kind, format = num, ...rest) {
-  const cls = typeof kind === 'function' ? kind(value, ...rest) : kind;
+function toned(value, kind, format = num) {
+  const cls = typeof kind === 'function' ? kind(value) : kind;
   return el('span', { class: cls ? `v-${cls}` : '' }, format(value));
+}
+
+/** A figure on a card: what it is, the number (toned), and a line under it. */
+function figureCard(label, value, sub, cls) {
+  return el('div', { class: 'card' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: cls ? `value v-${cls}` : 'value' }, value),
+    el('div', { class: 'sub' }, sub));
 }
 
 /** A progress bar with its percentage beside it. */
@@ -160,11 +133,6 @@ function toast(message, kind = '') {
     setTimeout(() => node.remove(), 320);
   }, kind === 'bad' ? 8000 : 3800);
 }
-
-/* Where this page is served from. At an address of its own that is the root
-   and BASE is empty; as one tab of a larger site it is "/workload", and every
-   request below has to be made under it rather than at the site's root. */
-const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 
 async function api(path, { quiet = false, ...options } = {}) {
   // Anything slow brings up the loading ship, so a wait never looks stuck;
@@ -409,18 +377,22 @@ async function downloadUnit(unit) {
   try {
     const result = await voyage.during('Preparing the download',
       () => api(`/api/units/${unit.id}/download`));
-    const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    }));
-    const link = el('a', { href: url, download: result.filename });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBase64(result.content_base64, result.filename);
   } catch (error) {
     chooserError(error.errors || [error.message]);
   }
+}
+
+/** Hand base64 content to the browser as a file to save; planner.js and weekly.js use it too. */
+function downloadBase64(content, filename,
+  type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+  const bytes = Uint8Array.from(atob(content), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const link = el('a', { href: url, download: filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 function readFileBase64(file) {
@@ -472,7 +444,7 @@ function openLinkModal() {
       ? `Done — ${result.units} unit${result.units === 1 ? '' : 's'} brought across.`
       : 'That is already the account you are in.', 'ok');
     await renderChooser();
-  }, {});
+  });
 }
 
 function openAccountModal() {
@@ -487,13 +459,14 @@ function openAccountModal() {
   ], async () => {
     const body = modalValues();
     if ((body.new_password || '') !== (body.again || '')) {
-      showModalErrors(['Those two passwords are not the same.']);
-      return;
+      // Thrown, not shown and returned: a Save that returns closes the modal,
+      // and the message would go with it before anybody could read it.
+      throw new Error('Those two passwords are not the same.');
     }
     await api('/api/auth/password', { method: 'POST', body });
     closeModal();
     toast('Password changed. Every other session was signed out.', 'ok');
-  }, {});
+  });
 }
 
 
@@ -548,16 +521,19 @@ function renderResourcing() {
   const data = state.resourcing;
   if (!data) return;
 
-  const years = data.available_years || [];
-  const chosen = data.year;
-  setChildren($('#resourcing-year'),
-    el('option', { value: '' }, 'All years'),
-    ...years.map((y) => el('option', {
-      value: String(y), selected: String(y) === String(chosen) }, String(y))));
+  fillResourcingYears(data);
 
   setChildren($('#resourcing-body'),
     renderFindings(data), renderTeams(data), renderTeamTrend(data),
     renderPeople(data), renderProjectSpread(data));
+}
+
+/** The year picker shared by the balance and the map. */
+function fillResourcingYears(data) {
+  setChildren($('#resourcing-year'),
+    el('option', { value: '' }, 'All years'),
+    ...(data.available_years || []).map((y) => el('option', {
+      value: String(y), selected: String(y) === String(data.year) }, String(y))));
 }
 
 /* -- the picture -------------------------------------------------------- */
@@ -566,11 +542,7 @@ function renderMap() {
   const data = state.map;
   if (!data) return;
 
-  const years = data.available_years || [];
-  setChildren($('#resourcing-year'),
-    el('option', { value: '' }, 'All years'),
-    ...years.map((y) => el('option', {
-      value: String(y), selected: String(y) === String(data.year) }, String(y))));
+  fillResourcingYears(data);
 
   const colours = portfolioMap.teamColours(data.teams || []);
   const canvas = el('div', { class: 'map-canvas' });
@@ -619,10 +591,7 @@ function showMapDetail(node, data) {
              `${fmt.pct0(p.effort_share)} of the team's hours`],
             ['Share of work left', fmt.pct0(p.need_share),
              p.load === null ? '—' : `effort is ${Number(p.load).toFixed(2)}× that`],
-        ].map(([label, value, sub]) => el('div', { class: 'card' },
-          el('div', { class: 'label' }, label),
-          el('div', { class: 'value' }, value),
-          el('div', { class: 'sub' }, sub)))),
+        ].map(([label, value, sub]) => figureCard(label, value, sub))),
       el('p', { class: `msg msg-${p.state === 'crowded' ? 'bad'
         : p.state === 'starved' ? 'warn' : 'ok'}` },
         portfolioMap.STATE_WORD[p.state] || ''),
@@ -815,7 +784,7 @@ async function savePerson(name, body) {
     await api(`/api/people/${encodeURIComponent(name)}`, { method: 'PUT', body });
     await loadResourcing();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -841,7 +810,7 @@ async function movePeople(names, teamId) {
     toast(`${result.moved} moved to ${result.team || 'no team'}.`, 'ok');
     await loadResourcing();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -852,7 +821,7 @@ async function addTeam() {
     await api('/api/teams', { method: 'POST', body: { name } });
     await loadResourcing();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -867,7 +836,7 @@ async function editTeam(team) {
     await api(`/api/teams/${team.id}`, { method: 'PUT', body: { name, lead } });
     await loadResourcing();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -879,7 +848,7 @@ async function deleteTeam(team) {
     await api(`/api/teams/${team.id}`, { method: 'DELETE' });
     await loadResourcing();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -1022,7 +991,7 @@ async function resetPassword(user) {
     closeModal();
     toast(`Password changed for ${user.username}.`, 'ok');
     await loadAdmin();
-  }, {});
+  });
 }
 
 async function toggleAdmin(user) {
@@ -1031,7 +1000,7 @@ async function toggleAdmin(user) {
       { method: 'POST', body: { is_admin: !user.is_admin } });
     await loadAdmin();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -1044,7 +1013,7 @@ async function deleteAccount(user) {
     toast(`${user.username} deleted.`, 'ok');
     await loadAdmin();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -1078,6 +1047,11 @@ if ('serviceWorker' in navigator) {
 
 let modalSubmit = null;
 
+/** A choice given as a plain string, or as { value, label }. */
+function optionParts(option) {
+  return typeof option === 'string' ? [option, option] : [option.value, option.label];
+}
+
 function openModal(title, fields, onSubmit, values = {}) {
   $('#modal-title').textContent = title;
   const form = $('#modal-form');
@@ -1090,8 +1064,7 @@ function openModal(title, fields, onSubmit, values = {}) {
     if (field.type === 'select') {
       input = el('select', { id, name: field.name });
       for (const option of field.options) {
-        const value = typeof option === 'string' ? option : option.value;
-        const label = typeof option === 'string' ? option : option.label;
+        const [value, label] = optionParts(option);
         input.append(el('option', { value }, label));
       }
       input.value = values[field.name] ?? field.value ?? '';
@@ -1103,8 +1076,7 @@ function openModal(title, fields, onSubmit, values = {}) {
       const chosen = new Set(values[field.name] ?? field.value ?? []);
       input = el('div', { class: 'check-group', 'data-group': field.name },
         field.options.map((option) => {
-          const value = typeof option === 'string' ? option : option.value;
-          const label = typeof option === 'string' ? option : option.label;
+          const [value, label] = optionParts(option);
           const box = el('input', { type: 'checkbox', value });
           box.checked = chosen.has(value);
           return el('label', { class: 'check-chip' }, box, el('span', {}, label));
@@ -1231,10 +1203,7 @@ function renderOverview() {
       `${t.projects_not_started} not started · ${t.projects_live} live in the period`],
   ];
   setChildren($('#overview-cards'), ...cards.map(([label_, value, cls, sub]) =>
-    el('div', { class: 'card' },
-      el('div', { class: 'label' }, label_),
-      el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
-      el('div', { class: 'sub' }, sub))));
+    figureCard(label_, value, sub, cls)));
 
   renderFormation(report);
   renderHeroes(report);
@@ -1554,6 +1523,11 @@ function renderDataCheck(check) {
       : null);
 }
 
+/** A register issue's level as a message tone. */
+function issueTone(level) {
+  return level === 'error' ? 'bad' : level === 'warning' ? 'warn' : 'info';
+}
+
 function renderIssues(issues) {
   if (issues.length === 0) {
     setChildren($('#issues'), el('div', { class: 'msg msg-ok' },
@@ -1562,7 +1536,7 @@ function renderIssues(issues) {
     return;
   }
   setChildren($('#issues'), ...issues.map((issue) => {
-    const level = issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info';
+    const level = issueTone(issue.level);
     // Anything that names a project gets a way straight to it.
     const project = issue.project
       || state.projects.find((p) => issue.message.includes(p.number))?.number;
@@ -1594,8 +1568,7 @@ function renderTimesheets() {
       el('div', { class: 'card-head' },
         el('span', { class: 'label eng-name' },
           el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
-          name),
-        null),
+          name)),
       el('div', { class: 'value' }, fmt.int(e.all_time_rows),
         el('span', { class: 'value-unit' }, ' rows')),
       el('div', { class: 'sub' },
@@ -1683,13 +1656,7 @@ async function saveNightlySource() {
 }
 
 function saveZip(result) {
-  const bytes = Uint8Array.from(atob(result.kit_base64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
-  const link = el('a', { href: url, download: result.filename });
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  downloadBase64(result.kit_base64, result.filename, 'application/zip');
 }
 
 async function downloadNightlyKit() {
@@ -1715,7 +1682,11 @@ async function downloadTeamKit() {
 
 async function stopNightly() {
   if (!confirm('Stop nightly imports? Your PC kit stops working until you download a new one.')) return;
-  await api('/api/import-key', { method: 'DELETE' });
+  try {
+    await api('/api/import-key', { method: 'DELETE' });
+  } catch (error) {
+    alert((error.errors || [error.message]).join('\n'));
+  }
   renderNightly();
 }
 
@@ -1872,7 +1843,7 @@ async function applyImport(mode) {
     toast(`${fmt.int(result.rows_written)} rows imported.`, 'ok');
     await refreshAll();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -1892,16 +1863,16 @@ function statusPill(status) {
   return 'pill-neutral';
 }
 
-/** The sortable columns, in the order the table shows them.
- *
- *  Each one knows how to read its own value, so sorting and rendering cannot
- *  disagree about what a column holds.
- */
 /** A project the timesheets set up that nobody has confirmed yet. */
 function fromTimesheets(project) {
   return (project.notes || '').includes('Set up from timesheets');
 }
 
+/** The sortable columns, in the order the table shows them.
+ *
+ *  Each one knows how to read its own value, so sorting and rendering cannot
+ *  disagree about what a column holds.
+ */
 const PROJECT_COLUMNS = [
   { key: null, label: '#', num: true },
   { key: 'number', label: 'Number', text: true, of: (p) => p.number },
@@ -2012,6 +1983,7 @@ function renderProjects() {
           el('div', { class: 'empty' }, 'No projects match.')))
       : rows.map((project, position) => {
         const m = byNumber.get(project.number) || {};
+        const drawn = drawingsOf(project.number);
         return el('tr', { class: 'clickable', onclick: () => openProject(project.number) },
           el('td', { class: 'num muted' }, position + 1),
           el('td', { class: 'code' }, project.number),
@@ -2039,11 +2011,11 @@ function renderProjects() {
                     title: `Phase weights total ${fmt.pct(m.weight_total)}, not 100%` },
                     `${m.deliverables} · ${fmt.pct(m.weight_total)}`))
             : el('span', { class: 'pill pill-warn' }, 'none yet')),
-          el('td', { class: 'num', 'data-sort': String((drawingsOf(project.number) || {}).total ?? '') },
-            drawingsOf(project.number)
-              ? el('span', { title: `${fmt.int(Math.round(drawingsOf(project.number).done))} done, `
-                  + `${fmt.int(Math.round(drawingsOf(project.number).left))} left` },
-                `${fmt.int(Math.round(drawingsOf(project.number).done))} / ${fmt.int(drawingsOf(project.number).total)}`)
+          el('td', { class: 'num', 'data-sort': String((drawn || {}).total ?? '') },
+            drawn
+              ? el('span', { title: `${fmt.int(Math.round(drawn.done))} done, `
+                  + `${fmt.int(Math.round(drawn.left))} left` },
+                `${fmt.int(Math.round(drawn.done))} / ${fmt.int(drawn.total)}`)
               : el('span', { class: 'muted' }, '—')),
           el('td', {}, el('span', { class: 'chevron' }, '›')));
       })));
@@ -2094,10 +2066,7 @@ async function openProject(number) {
     project: { ...state.detail.project },
     deliverables: state.detail.deliverables.map((d) => ({ ...d })),
   };
-  renderDetail();
-  $('#projects-list').hidden = true;
-  $('#project-detail').hidden = false;
-  window.scrollTo(0, 0);
+  showProjectDetail();
 }
 
 function newProject() {
@@ -2111,6 +2080,11 @@ function newProject() {
       deliverables: [],
     },
   };
+  showProjectDetail();
+}
+
+/** Swap the register for the project in state.detail. */
+function showProjectDetail() {
   renderDetail();
   $('#projects-list').hidden = true;
   $('#project-detail').hidden = false;
@@ -2128,36 +2102,37 @@ function weightTotal() {
     (sum, d) => sum + (Number(d.phase_weight) || 0), 0);
 }
 
+/** What a typed box holds: null when blank, else the fraction a percentage
+ *  stands for, a number, or the trimmed text. */
+function typedValue(input, { percent = false, number = false } = {}) {
+  const raw = input.value.trim() === '' ? null : input.value.trim();
+  if (percent) return fromPercent(raw);
+  return number && raw !== null ? Number(raw) : raw;
+}
+
 function field(label, name, opts = {}) {
   const draft = state.detail.draft.project;
   const raw = opts.percent ? toPercent(draft[name]) : draft[name];
   const input = el('input', {
-    type: opts.type || 'text', value: raw === null || raw === undefined ? '' : raw,
-    step: opts.step, min: opts.min, max: opts.max, placeholder: opts.placeholder,
-    oninput: (e) => {
-      const value = e.target.value.trim() === '' ? null : e.target.value.trim();
-      draft[name] = opts.percent ? fromPercent(value)
-        : opts.number ? (value === null ? null : Number(value)) : value;
-      if (opts.rerender) renderDetail();
-    },
+    type: opts.type || 'text', value: raw ?? '',
+    step: opts.step, min: opts.min, max: opts.max,
+    oninput: (e) => { draft[name] = typedValue(e.target, opts); },
   });
-  return el('label', { class: `field ${opts.full ? 'full' : ''}` },
+  return el('label', { class: 'field' },
     el('span', {}, label, opts.hint ? el('span', { class: 'hint' }, ` — ${opts.hint}`) : null),
     input);
 }
 
-function selectField(label, name, options, opts = {}) {
+function selectField(label, name, options) {
   const draft = state.detail.draft.project;
   const select = el('select', {
     onchange: (e) => { draft[name] = e.target.value || null; },
   }, options.map((o) => {
-    const value = typeof o === 'string' ? o : o.value;
-    const text = typeof o === 'string' ? o : o.label;
+    const [value, text] = optionParts(o);
     return el('option', { value }, text);
   }));
   select.value = draft[name] ?? '';
-  return el('label', { class: `field ${opts.full ? 'full' : ''}` },
-    el('span', {}, label), select);
+  return el('label', { class: 'field' }, el('span', {}, label), select);
 }
 
 function renderDetail() {
@@ -2185,10 +2160,7 @@ function renderDetail() {
       ['Actual MM', fmt.mm(figures.actual_mm), `${fmt.hours(figures.actual_hours)} hours booked`],
       ['Earned MM', fmt.mm(figures.earned_mm), 'budget × progress'],
       ['CPI', fmt.ratio(figures.cpi), figures.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
-    ].map(([l, v, s]) => el('div', { class: 'card' },
-      el('div', { class: 'label' }, l),
-      el('div', { class: 'value' }, v),
-      el('div', { class: 'sub' }, s)))) : null,
+    ].map(([l, v, s]) => figureCard(l, v, s))) : null,
 
     el('section', { class: 'panel' },
       el('h3', {}, 'Project'),
@@ -2325,8 +2297,7 @@ function deliverableRow(d, position) {
     type: 'number', step: opts.step || '1', min: '0', max: opts.max,
     value: opts.percent ? toPercent(d[key]) : (d[key] ?? ''),
     oninput: (e) => {
-      const raw = e.target.value.trim() === '' ? null : e.target.value.trim();
-      set(key, opts.percent ? fromPercent(raw) : (raw === null ? null : Number(raw)));
+      set(key, typedValue(e.target, { percent: opts.percent, number: true }));
       refreshTotals();
     },
   });
@@ -2337,8 +2308,7 @@ function deliverableRow(d, position) {
     type: 'number', step: '1', min: '0', max: '100',
     value: toPercent((d.shares || {})[name]),
     oninput: (e) => {
-      const raw = e.target.value.trim() === '' ? null : e.target.value.trim();
-      d.shares = { ...(d.shares || {}), [name]: fromPercent(raw) };
+      d.shares = { ...(d.shares || {}), [name]: typedValue(e.target, { percent: true }) };
       refreshTotals();
     },
   });
@@ -2420,7 +2390,7 @@ async function removeProject(project) {
     closeDetail();
     await refreshAll();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -2452,11 +2422,7 @@ function renderReference() {
     ? el('input', {
         type: opts.type || 'text', step: opts.step, min: opts.min, max: opts.max,
         value: opts.percent ? toPercent(obj[key]) : (obj[key] ?? ''),
-        oninput: (e) => {
-          const raw = e.target.value.trim() === '' ? null : e.target.value.trim();
-          obj[key] = opts.percent ? fromPercent(raw)
-            : opts.number ? (raw === null ? null : Number(raw)) : raw;
-        },
+        oninput: (e) => { obj[key] = typedValue(e.target, opts); },
       })
     : (opts.percent ? fmt.pct0(obj[key]) : (obj[key] ?? '—'));
 
@@ -2608,7 +2574,7 @@ async function saveReference() {
     await refreshAll();
     renderReference();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -2839,7 +2805,7 @@ function table(headers, rows, opts = {}) {
       el('th', { class: numeric.includes(i) ? 'num' : '' }, h)))),
     el('tbody', {}, rows.map((row) => el('tr', { class: row.__class || '' },
       row.cells.map((cell, i) =>
-        el('td', { class: numeric.includes(i) ? 'num' : (cell.wide ? 'wide' : '') },
+        el('td', { class: numeric.includes(i) ? 'num' : (cell && cell.wide ? 'wide' : '') },
           cell && cell.node ? cell.node : cell)))))));
 }
 
@@ -2852,11 +2818,7 @@ function balancedColumns(count) {
 function kpiCards(items) {
   return el('div', {
     class: 'cards cards-balanced', style: `--cols:${balancedColumns(items.length)}`,
-  }, items.map(([label, value, sub, cls]) =>
-    el('div', { class: 'card' },
-      el('div', { class: 'label' }, label),
-      el('div', { class: `value ${cls ? `v-${cls}` : ''}` }, value),
-      el('div', { class: 'sub' }, sub))));
+  }, items.map(([label, value, sub, cls]) => figureCard(label, value, sub, cls)));
 }
 
 async function loadReport() {
@@ -3101,21 +3063,16 @@ function teamValue(data, key) {
   const per = data.per_engineer;
   const names = data.engineers;
   const sum = (k) => names.reduce((a, n) => a + (per[n][k] || 0), 0);
-  if (['utilisation', 'plan_adherence'].includes(key)) {
-    return key === 'utilisation'
-      ? data.team.utilisation : data.team.plan_adherence;
-  }
-  if (key === 'cpi') return data.team.cpi;
+  const projects = () => new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
+  if (['utilisation', 'plan_adherence', 'cpi'].includes(key)) return data.team[key];
   if (key === 'type_weighted_cpi') {
     return sum('actual_mm') ? sum('type_weighted_earned_mm') / sum('actual_mm') : null;
   }
   if (key === 'share_of_team_time') return 1;
-  if (key === 'projects_worked') {
-    return new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
-  }
+  if (key === 'projects_worked') return projects();
   if (key === 'average_mm_per_project') {
-    const projects = new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
-    return projects ? sum('actual_mm') / projects : null;
+    const count = projects();
+    return count ? sum('actual_mm') / count : null;
   }
   // Rates, not totals: adding "0.5 each" across three people is meaningless.
   // A shared submission counts once per person on it, which is what weighting
@@ -3297,7 +3254,7 @@ function renderReview(data) {
       el('h3', {}, 'Register health'),
       issues.length
         ? el('div', {}, issues.map((issue) => el('div', {
-            class: `msg msg-${issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info'}`,
+            class: `msg msg-${issueTone(issue.level)}`,
           }, el('strong', {}, `${issue.where}: `), dayFirstText(issue.message))))
         : el('div', { class: 'msg msg-ok' },
             'Every project accounts for 100% of its scope and every deliverable '
@@ -3519,7 +3476,7 @@ async function revokeAccess(person, granted) {
     toast('Access taken away.', 'ok');
     await loadTeam();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -3623,7 +3580,7 @@ async function removeEngineer(person) {
     await refreshAll();
     await loadTeam();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -3974,7 +3931,7 @@ async function toggleTaskDone(task) {
     markSaved(result.save);
     await loadTasks();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -3993,7 +3950,7 @@ async function deleteTask(task) {
     toast(series ? `${result.deleted} task(s) deleted.` : 'Task deleted.', 'ok');
     await loadTasks();
   } catch (error) {
-    toast((error.errors || [error.message]).join(' '), 'bad');
+    toastError(error);
   }
 }
 
@@ -4062,7 +4019,6 @@ function openSubmissionModal() {
 function openMeetingModal() {
   const data = state.tasks;
   const settings = data.settings;
-  const monday = new Date();
   openModal('Weekly meeting', [
     { name: 'project_number', label: 'For', type: 'select', full: true,
       options: [{ value: '', label: 'The unit as a whole' },
@@ -4092,6 +4048,6 @@ function openMeetingModal() {
     weekday: String(settings.meeting_weekday),
     hours: settings.meeting_hours,
     weeks: settings.meeting_weeks,
-    start: todayLocal(monday),
+    start: todayLocal(),
   });
 }

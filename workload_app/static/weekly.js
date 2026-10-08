@@ -5,18 +5,14 @@
  * (workload_app/weekly.py); nothing here is typed in. Below it, the switch
  * for notifications on this phone (push.js).
  *
- * Built on app.js's helpers (el, api, setChildren, fmt, toast, switchView).
+ * Built on app.js's helpers (el, api, setChildren, fmt, toast, switchView,
+ * downloadBase64), checkins.js's statCard and SIGNAL_TONE, and common.js's dateText.
  */
 'use strict';
 
 const week = { data: null, busy: false };
 
 const WK_TONE_LABEL = { bad: 'First', warn: 'This week', ok: 'When you can' };
-
-function wkDay(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
-  if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
-}
 
 const wkHours = (value) => `${fmt.hours(value)} h`;
 
@@ -41,15 +37,11 @@ function renderWeekly() {
   const r = week.data;
   if (!r) return;
   const last = r.last_week;
-  const card = (label, value, tone, sub) => el('div', { class: 'card' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: `value ${tone ? `v-${tone}` : ''}` }, value),
-    el('div', { class: 'sub' }, sub));
   const late = r.this_week.due.filter((d) => d.late).length;
   const loadTone = last.load === null ? '' : last.load > 1.05 ? 'bad' : last.load < 0.75 ? 'warn' : 'ok';
   setChildren($('#weekly-body'),
     r.stale ? el('div', { class: 'msg msg-warn' },
-      `The newest timesheet is from ${wkDay(r.through)}, so last week's figures are behind. `
+      `The newest timesheet is from ${dateText(r.through)}, so last week's figures are behind. `
       + 'Upload the latest exports to bring the report up to date.') : null,
     el('section', { class: 'panel wk-head' },
       el('div', { class: 'wk-week' }, `${r.unit} · ${r.title}`),
@@ -67,14 +59,14 @@ function renderWeekly() {
       r.more ? el('p', { class: 'muted small' },
         `And ${r.more} more: Check-ins and the Planner list every one.`) : null),
     el('div', { class: 'cards cards-4' },
-      card('Booked last week', last.load === null ? '—' : fmt.pct0(last.load), loadTone,
-        last.week ? `${wkHours(last.hours)} of ${wkHours(last.capacity)}, week of ${wkDay(last.week)}`
+      statCard('Booked last week', last.load === null ? '—' : fmt.pct0(last.load), loadTone,
+        last.week ? `${wkHours(last.hours)} of ${wkHours(last.capacity)}, week of ${dateText(last.week)}`
           : 'no timesheets yet'),
-      card('Overtime last week', wkHours(last.overtime), last.overtime > 0 ? 'warn' : 'ok',
+      statCard('Overtime last week', wkHours(last.overtime), last.overtime > 0 ? 'warn' : 'ok',
         last.overtime > 0 ? 'hours past people\'s day' : 'nobody stayed late'),
-      card('Due this week', String(r.this_week.due.length), late ? 'bad' : r.this_week.due.length ? 'warn' : 'ok',
+      statCard('Due this week', String(r.this_week.due.length), late ? 'bad' : r.this_week.due.length ? 'warn' : 'ok',
         late ? `${late} already late` : 'submissions'),
-      card('Free this week', wkHours(r.this_week.free_week), r.this_week.free_week ? 'ok' : 'warn',
+      statCard('Free this week', wkHours(r.this_week.free_week), r.this_week.free_week ? 'ok' : 'warn',
         r.this_week.room.length ? `room: ${r.this_week.room.slice(0, 3).map((p) => p.name).join(', ')}`
           : 'everyone is full')),
     lastWeekPanel(r),
@@ -94,18 +86,17 @@ function lastWeekPanel(r) {
   const last = r.last_week;
   if (!last.week) return null;
   const most = Math.max(1.3, ...last.people.map((p) => p.load || 0));
-  const toneOf = { rest: 'bad', busy: 'warn', fresh: 'ok', steady: 'info' };
   const projectMax = Math.max(1, ...last.projects.map((p) => p.hours));
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' }, el('div', {},
       el('h3', {}, `Last week, person by person`),
-      el('p', { class: 'muted' }, `Week of ${wkDay(last.week)}. Each bar is the hours a person booked `
+      el('p', { class: 'muted' }, `Week of ${dateText(last.week)}. Each bar is the hours a person booked `
         + 'against the hours they had; past the line is overtime. Red has been over for weeks and '
         + 'needs a lighter week, green has room for more.'))),
     el('div', { class: 'wk-bars' }, last.people.map((p) => el('div', { class: 'wk-bar-row' },
       el('span', { class: 'wk-bar-name' }, p.name),
       el('span', { class: 'wk-bar-track' },
-        el('span', { class: `wk-bar wk-bar-${toneOf[p.signal] || 'info'}`,
+        el('span', { class: `wk-bar wk-bar-${SIGNAL_TONE[p.signal] || 'info'}`,
           style: `width:${Math.min(100, ((p.load || 0) / most) * 100)}%` }),
         el('span', { class: 'wk-bar-line', style: `left:${(1 / most) * 100}%` })),
       el('span', { class: 'wk-bar-value' }, `${fmt.pct0(p.load)} · ${wkHours(p.hours)}`),
@@ -137,8 +128,8 @@ function thisWeekPanel(r) {
       el('thead', {}, el('tr', {}, el('th', {}, 'Due'), el('th', {}, 'Submission'),
         el('th', {}, 'Project'), el('th', { class: 'num' }, 'Done'), el('th', {}, 'Who'))),
       el('tbody', {}, t.due.map((d) => el('tr', {},
-        el('td', {}, d.late ? el('b', { class: 'v-bad' }, `Late (was ${wkDay(d.was_due, { day: 'numeric', month: 'short' })})`)
-          : wkDay(d.date)),
+        el('td', {}, d.late ? el('b', { class: 'v-bad' }, `Late (was ${dateText(d.was_due, { day: 'numeric', month: 'short' })})`)
+          : dateText(d.date)),
         el('td', {}, d.name),
         el('td', { title: d.project_name }, d.project),
         el('td', { class: 'num' }, d.progress === null || d.progress === undefined ? '—' : fmt.pct0(d.progress)),
@@ -150,14 +141,8 @@ function thisWeekPanel(r) {
 
 async function downloadWeekly() {
   try {
-    const result = await api('/api/weekly/download');
-    const bytes = Uint8Array.from(atob(result.content_base64), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'text/html' }));
-    const link = el('a', { href: url, download: result.filename });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    const file = await api('/api/weekly/download');
+    downloadBase64(file.content_base64, file.filename, 'text/html');
   } catch (error) {
     toast(error.message, 'bad');
   }

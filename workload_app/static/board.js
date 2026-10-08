@@ -20,7 +20,7 @@
   const MAX_COLUMNS = 10;
   const SHARES = [[0.25, '¼'], [0.5, '½'], [0.75, '¾'], [1, 'All']];
 
-  const pct = (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
+  const pct = fmt.pct0;
 
   function shown(data) {
     return data.people.filter((p) => plan.team === 'all' || (p.team_id || '__none__') === plan.team);
@@ -68,6 +68,12 @@
       role: target ? 'button' : null,
       tabindex: target ? '0' : null,
       onclick: target ? () => hand(board.picked.person, board.picked.item, p.name) : null,
+      // A target says it is a button, so a keyboard has to be able to press it.
+      onkeydown: target ? (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        hand(board.picked.person, board.picked.item, p.name);
+      } : null,
     },
     el('span', { class: `bd-ring t-${loadTone(after)}`, style: `--fill:${(fill * 360).toFixed(0)}deg` },
       avatar(p.name, 40)),
@@ -100,7 +106,7 @@
     return node;
   }
 
-  function columns(data, people) {
+  function columns(people) {
     const byKey = new Map();
     for (const person of people) {
       for (const item of person.items) {
@@ -113,8 +119,7 @@
         byKey.set(key, col);
       }
     }
-    const cols = [...byKey.values()].sort((a, b) => b.hours - a.hours);
-    return cols.slice(0, MAX_COLUMNS).map((c) => ({
+    return [...byKey.values()].sort((a, b) => b.hours - a.hours).slice(0, MAX_COLUMNS).map((c) => ({
       ...c, sits: c.sits.sort((a, b) => b.item.hours_after - a.item.hours_after),
     }));
   }
@@ -142,7 +147,7 @@
   function render(data) {
     if (!data || !data.people) return null;
     const people = shown(data);
-    const cols = columns(data, people);
+    const cols = columns(people);
     const maxHours = Math.max(1, ...cols.flatMap((c) => c.sits.map((s) => Math.max(s.item.hours_after, s.item.hours_before))));
     const s = data.summary;
     const trying = plan.moves.length > 0;

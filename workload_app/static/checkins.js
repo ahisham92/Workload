@@ -5,7 +5,7 @@
  * calendar (workload_app/checkins.py); nothing here is typed in.
  *
  * Built on app.js's helpers (el, api, setChildren, engineerColor, fmt) and
- * charts.js's svgEl, hoverable and escape.
+ * charts.js's svgEl, hoverable and escape; dates go through common.js's dateText.
  */
 'use strict';
 
@@ -18,11 +18,6 @@ const checkin = {
 const SIGNAL_TONE = { rest: 'bad', busy: 'warn', fresh: 'ok', steady: 'info' };
 const LEVEL_TONE = { now: 'bad', soon: 'warn', note: 'info' };
 const LEVEL_LABEL = { now: 'Ask now', soon: 'This week', note: 'Good to know' };
-
-function ciDay(iso, opts = { weekday: 'short', day: 'numeric' }) {
-  if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
-}
 
 function ciHours(value) {
   return `${fmt.hours(value)} h`;
@@ -66,6 +61,8 @@ function togetherPanel() {
   const t = checkin.together;
   if (!t || t.totals.units < 2) return null;
   const tone = (u) => (u.rest ? 'bad' : u.busy ? 'warn' : 'ok');
+  const figures = (x) => [String(x.people), ciHours(x.free_week), String(x.rest), String(x.busy),
+    String(x.fresh), String(x.urgent)].map((text) => el('td', { class: 'num' }, text));
   return el('section', { class: 'panel ci-together' },
     el('div', { class: 'panel-head' },
       el('div', {},
@@ -84,21 +81,10 @@ function togetherPanel() {
         el('tr', { class: `ci-unit-row ${u.id === t.current ? 'is-current' : ''}` },
           el('td', {}, el('span', { class: `dot dot-${tone(u)}` }), el('b', {}, u.name),
             u.id === t.current ? el('span', { class: 'muted small' }, ' · open now') : null,
-            u.stale ? el('span', { class: 'muted small' }, ` · timesheets to ${ciDay(u.through, { day: 'numeric', month: 'short' })}`) : null),
-          el('td', { class: 'num' }, String(u.people)),
-          el('td', { class: 'num' }, ciHours(u.free_week)),
-          el('td', { class: 'num' }, String(u.rest)),
-          el('td', { class: 'num' }, String(u.busy)),
-          el('td', { class: 'num' }, String(u.fresh)),
-          el('td', { class: 'num' }, String(u.urgent))),
+            u.stale ? el('span', { class: 'muted small' }, ` · timesheets to ${dateText(u.through, { day: 'numeric', month: 'short' })}`) : null),
+          ...figures(u)),
         ...(u.teams.length > 1 ? u.teams.map((team) => el('tr', { class: 'ci-team-row' },
-          el('td', {}, team.name),
-          el('td', { class: 'num' }, String(team.people)),
-          el('td', { class: 'num' }, ciHours(team.free_week)),
-          el('td', { class: 'num' }, String(team.rest)),
-          el('td', { class: 'num' }, String(team.busy)),
-          el('td', { class: 'num' }, String(team.fresh)),
-          el('td', { class: 'num' }, String(team.urgent)))) : []),
+          el('td', {}, team.name), ...figures(team))) : []),
       ])))),
     t.leaders.length ? el('ul', { class: 'ci-together-notes' }, t.leaders.map((l) => el('li', {},
       el('b', {}, l.name), ` leads in ${l.units.map((u) => `${u.unit} (${u.people})`).join(', ')}: `,
@@ -132,7 +118,7 @@ function renderCheckins() {
   }
   setChildren(body,
     data.stale ? el('div', { class: 'msg msg-warn' },
-      `The newest timesheet is from ${ciDay(data.through, { day: 'numeric', month: 'short' })}, `
+      `The newest timesheet is from ${dateText(data.through, { day: 'numeric', month: 'short' })}, `
       + 'so how loaded people are reads from then. Import the latest exports to bring it up to date.')
       : null,
     checkinStats(people),
@@ -154,7 +140,7 @@ function renderCheckins() {
           el('h3', {}, 'Each person'),
           el('p', { class: 'muted' },
             `Hours booked each week against the hours they had, over the last `
-            + `${data.weeks.length} weeks up to ${ciDay(data.through, { day: 'numeric', month: 'short' })}. `
+            + `${data.weeks.length} weeks up to ${dateText(data.through, { day: 'numeric', month: 'short' })}. `
             + 'Weeks well over the line wear people down; a light spell or leave '
             + 'means they are fresh and can take more.'))),
       el('div', { class: 'ci-grid' }, ...people.map((p) => personCard(p, data)))),
@@ -180,24 +166,29 @@ function renderCheckinTeams() {
   select.value = checkin.team;
 }
 
+/** A figure card: what it is, the figure (toned v-ok, v-warn, v-bad) and a line
+    under it. Weekly, Growth and Budgets use it too; they load after this file. */
+function statCard(label, value, toneName, sub) {
+  return el('div', { class: 'card' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: `value ${toneName ? `v-${toneName}` : ''}` }, value),
+    el('div', { class: 'sub' }, sub));
+}
+
 function checkinStats(people) {
   const count = (key) => people.filter((p) => p.signal.key === key).length;
   const free = people.reduce((sum, p) => sum + p.free_week, 0);
   const points = people.reduce((sum, p) => sum + p.checkpoints.length, 0);
   const urgent = people.reduce((sum, p) => sum + p.checkpoints
     .filter((c) => c.level === 'now').length, 0);
-  const card = (label, value, toneName, sub) => el('div', { class: 'card' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: `value ${toneName ? `v-${toneName}` : ''}` }, value),
-    el('div', { class: 'sub' }, sub));
   const names = (key) => people.filter((p) => p.signal.key === key)
     .map((p) => p.name).join(', ') || 'nobody';
   return el('div', { class: 'cards cards-4' },
-    card('Need to ease off', count('rest'), count('rest') ? 'bad' : 'ok', names('rest')),
-    card('Fresh, can take more', count('fresh'), count('fresh') ? 'ok' : '', names('fresh')),
-    card('Free hours this week', ciHours(free), free ? 'ok' : 'warn',
+    statCard('Need to ease off', count('rest'), count('rest') ? 'bad' : 'ok', names('rest')),
+    statCard('Fresh, can take more', count('fresh'), count('fresh') ? 'ok' : '', names('fresh')),
+    statCard('Free hours this week', ciHours(free), free ? 'ok' : 'warn',
       free ? 'across the people shown' : 'everyone is full this week'),
-    card('Things to ask', points, urgent ? 'bad' : '',
+    statCard('Things to ask', points, urgent ? 'bad' : '',
       urgent ? `${urgent} need asking now` : 'nothing urgent'));
 }
 
@@ -208,8 +199,8 @@ function freeGrid(people, data) {
   const head = el('tr', {},
     el('th', {}, 'Person'),
     ...data.days.map((d) => el('th', { class: 'num' },
-      el('span', { class: 'ci-dayhead' }, ciDay(d, { weekday: 'short' }),
-        el('b', {}, ciDay(d, { day: 'numeric' }))))),
+      el('span', { class: 'ci-dayhead' }, dateText(d, { weekday: 'short' }),
+        el('b', {}, dateText(d, { day: 'numeric' }))))),
     el('th', { class: 'num' }, 'This week'),
     el('th', { class: 'num' }, 'Two weeks'));
   const rows = people.map((p) => el('tr', {},
@@ -225,7 +216,7 @@ function freeGrid(people, data) {
         style: `--free:${share.toFixed(2)}`,
         'data-sort': day.free,
       }, day.free >= 0.5 ? fmt.hours(day.free) : day.over > 0 ? `+${fmt.hours(day.over)}` : '·');
-      hoverable(cell, `<b>${charts.escape(p.name)}, ${ciDay(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}</b>`
+      hoverable(cell, `<b>${charts.escape(p.name)}, ${dateText(day.date, { weekday: 'long', day: 'numeric', month: 'short' })}</b>`
         + `<br>${fmt.hours(day.free)} h free · ${fmt.hours(day.booked)} h planned`
         + (day.over > 0 ? `<br>${fmt.hours(day.over)} h more than fits the day` : ''));
       return cell;
@@ -257,7 +248,7 @@ function canTake(people) {
     el('span', { class: 'muted' }, 'Give the next job to'),
     ...ready.slice(0, 5).map((p) => el('span', { class: `pill pill-${p.signal.key === 'fresh' ? 'ok' : 'info'}` },
       `${p.name} · ${fmt.hours(p.free_week)} h this week`
-      + (p.next_free ? ` · from ${ciDay(p.next_free)}` : ''))));
+      + (p.next_free ? ` · from ${dateText(p.next_free, { weekday: 'short', day: 'numeric' })}` : ''))));
 }
 
 /* --------------------------------------------------------- per person */
@@ -277,7 +268,7 @@ function loadBars(weeks) {
       x: i * step + pad, y: top, width: step - pad * 2, height: Math.max(3, h - top),
       rx: 2, class: `ci-bar ci-bar-${kind}`,
     });
-    hoverable(bar, `<b>Week of ${ciDay(week.week, { day: 'numeric', month: 'short' })}</b><br>`
+    hoverable(bar, `<b>Week of ${dateText(week.week, { day: 'numeric', month: 'short' })}</b><br>`
       + (load === null ? 'away all week'
         : `${fmt.hours(week.hours)} h of ${fmt.hours(week.capacity)} h · ${Math.round(load * 100)}%`
         + (week.overtime ? `<br>${fmt.hours(week.overtime)} h overtime` : '')
@@ -316,7 +307,7 @@ function leadingPanel(data) {
         ? el('ol', { class: 'ci-meetings' }, l.meetings.map((m) => el('li', {},
           el('details', {},
             el('summary', {},
-              el('span', { class: 'ci-meet-when' }, `${ciDay(m.date)} ${m.start}–${m.end}`),
+              el('span', { class: 'ci-meet-when' }, `${dateText(m.date, { weekday: 'short', day: 'numeric' })} ${m.start}–${m.end}`),
               el('b', {}, m.title),
               m.kind === 'team' ? el('span', { class: 'muted small' }, ` · ${m.with.join(', ')}`) : null),
             el('ul', { class: 'ci-agenda' }, m.agenda.map((line) => el('li', {}, line)))))))
@@ -329,7 +320,7 @@ function personCard(p, data) {
   const facts = [
     s.load !== null ? `${Math.round(s.load * 100)}% over 4 weeks` : null,
     s.overtime ? `${fmt.hours(s.overtime)} h overtime` : null,
-    p.last_day_off ? `last day off ${ciDay(p.last_day_off, { day: 'numeric', month: 'short' })}` : null,
+    p.last_day_off ? `last day off ${dateText(p.last_day_off, { day: 'numeric', month: 'short' })}` : null,
   ].filter(Boolean);
   return el('article', { class: `ci-card ci-${s.key}` },
     el('div', { class: 'ci-head' },
@@ -343,9 +334,9 @@ function personCard(p, data) {
     el('div', { class: 'ci-chart' },
       loadBars(p.weeks),
       el('div', { class: 'eng-trend-labels' },
-        el('span', {}, ciDay(data.weeks[0], { day: 'numeric', month: 'short' })),
+        el('span', {}, dateText(data.weeks[0], { day: 'numeric', month: 'short' })),
         el('span', {}, 'line = their hours'),
-        el('span', {}, ciDay(data.weeks[data.weeks.length - 1], { day: 'numeric', month: 'short' })))),
+        el('span', {}, dateText(data.weeks[data.weeks.length - 1], { day: 'numeric', month: 'short' })))),
     el('p', { class: 'ci-facts' }, facts.join(' · ')),
     el('p', { class: 'ci-free-line' },
       p.free_week >= 0.5
@@ -375,7 +366,7 @@ function checkpointTable(people) {
           el('span', { class: `pill pill-${LEVEL_TONE[c.level]}` }, LEVEL_LABEL[c.level])),
         el('td', {}, el('span', { class: 'who-chip' },
           el('span', { class: 'swatch', style: `background:${engineerColor(c.name)}` }), c.name)),
-        el('td', { class: 'ci-ask' }, c.text, seenButton(c)))))));
+        el('td', { class: 'ci-ask' }, dayFirstText(c.text), seenButton(c)))))));
 }
 
 /* What somebody said from their My day stays until the lead says they have
@@ -425,7 +416,7 @@ function renderCheckinSummary() {
       item('ok', take.length ? take.map((p) => `${p.name} ${fmt.hours(p.free_week)} h`).join(', ') : 'No free hours',
         take.length ? 'free this week: give the next job here' : 'everyone is full this week'),
       item(urgent.length ? 'warn' : 'info', urgent.length ? `${urgent.length} to ask now` : 'Nothing else urgent',
-        urgent.length ? urgent.slice(0, 2).map((c) => `${c.name}: ${c.text.split('. ')[0]}`).join(' · ')
+        urgent.length ? urgent.slice(0, 2).map((c) => `${c.name}: ${dayFirstText(c.text).split('. ')[0]}`).join(' · ')
           : 'nothing late or blocked')));
 }
 

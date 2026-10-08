@@ -39,13 +39,7 @@
   }
 
   function teamColours(teams) {
-    const palette = ['--series-1', '--series-2', '--series-3', '--series-4',
-      '--series-5', '--series-6'];
-    const out = {};
-    teams.forEach((team, index) => {
-      out[team.id] = `var(${palette[index % palette.length]})`;
-    });
-    return out;
+    return Object.fromEntries(teams.map((team, index) => [team.id, `var(--series-${(index % 6) + 1})`]));
   }
 
   /* ---------------------------------------------------------- simulation */
@@ -55,6 +49,10 @@
       ...data.projects.map((p) => p.remaining_mm || 0), 0.0001);
     const nodes = [];
     const byKey = new Map();
+    const add = (node) => {
+      node.px = node.x; node.py = node.y;
+      nodes.push(node); byKey.set(node.key, node);
+    };
 
     // Phyllotaxis: the golden angle with radius growing as the square root of
     // the index puts equal area between successive points, so the circles
@@ -66,31 +64,27 @@
     data.projects.forEach((project, index) => {
       const angle = index * 2.399963;               // the golden angle
       const distance = reach * Math.sqrt((index + 0.5) / count);
-      const node = {
+      add({
         kind: 'project',
         key: `p:${project.number}`,
         data: project,
         r: radiusFor(project.remaining_mm || 0, biggest),
         x: width / 2 + Math.cos(angle) * distance,
         y: height / 2 + Math.sin(angle) * distance,
-      };
-      node.px = node.x; node.py = node.y;
-      nodes.push(node); byKey.set(node.key, node);
+      });
     });
 
     data.people.forEach((person, index) => {
       if (!person.projects.length) return;          // nobody charging: no thread
       const angle = index * 2.399963 + 0.7;
-      const node = {
+      add({
         kind: 'person',
         key: `u:${person.name}`,
         data: person,
         r: PERSON_R,
         x: width / 2 + Math.cos(angle) * 40,
         y: height / 2 + Math.sin(angle) * 40,
-      };
-      node.px = node.x; node.py = node.y;
-      nodes.push(node); byKey.set(node.key, node);
+      });
     });
 
     // How many people two projects have in common: what pulls them together,
@@ -194,26 +188,13 @@
     }
   }
 
-  /* ------------------------------------------------------------- drawing */
-
-  function svgEl(tag, attrs = {}, ...children) {
-    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [key, value] of Object.entries(attrs)) {
-      if (value !== null && value !== undefined) node.setAttribute(key, value);
-    }
-    for (const child of children) {
-      if (child === null || child === undefined) continue;
-      node.appendChild(typeof child === 'string'
-        ? document.createTextNode(child) : child);
-    }
-    return node;
-  }
+  /* ------------------------------------------------- drawing (charts.js's svgEl) */
 
   function shortName(name) {
     return name.length <= 11 ? name : `${name.slice(0, 10)}…`;
   }
 
-  function draw(sim, data, colours, onPick) {
+  function draw(sim, colours, onPick) {
     const { width, height } = sim;
     const svg = svgEl('svg', {
       class: 'portfolio-map', viewBox: `0 0 ${width} ${height}`,
@@ -384,7 +365,7 @@
     const height = Math.max(380, Math.min(560, 240 + data.projects.length * 11));
     const colours = teamColours(data.teams || []);
     const sim = build(data, width, height);
-    const svg = draw(sim, data, colours, onPick);
+    const svg = draw(sim, colours, onPick);
 
     host.replaceChildren(svg);
     draggable(svg, sim);
@@ -407,7 +388,6 @@
     };
     requestAnimationFrame(tick);
     host.__mapStop = () => { running = false; };
-    return { colours };
   }
 
   window.portfolioMap = { render, STATE_WORD, teamColours };

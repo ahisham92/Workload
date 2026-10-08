@@ -76,6 +76,164 @@ export function blockGeometry() {
   return geo;
 }
 
+/** The stage both 3D views draw on, put in ``host``: its HTML labels, the tip
+ *  and the reset button. */
+export function makeStage(host) {
+  const stage = document.createElement('div');
+  stage.className = 'scape3d';
+  const labels = document.createElement('div');
+  labels.className = 'scape3d-labels';
+  const tip = document.createElement('div');
+  tip.className = 'scape-tip'; tip.hidden = true;
+  const reset = document.createElement('button');
+  reset.type = 'button'; reset.className = 'scape-btn scape3d-reset';
+  reset.title = 'Back to the start'; reset.setAttribute('aria-label', 'Back to the start');
+  reset.textContent = '⌂';
+  host.replaceChildren(stage);
+  return { stage, labels, tip, reset };
+}
+
+/** A renderer set up the way both views draw, or null when there is no WebGL. */
+export function makeRenderer() {
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
+  } catch (error) {
+    return null;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  return renderer;
+}
+
+/** Sky, a sun at ``sunAt`` (times ``span``) casting soft shadows, and a fill
+ *  light, over a model ``span`` across. Returns the sun. */
+export function addLights(scene, p, span, sunAt, mapSize) {
+  scene.add(new THREE.HemisphereLight(0xffffff, p.dark ? 0x202631 : 0xd9dee6, p.dark ? 0.9 : 1.05));
+  const sun = new THREE.DirectionalLight(0xffffff, p.dark ? 2.0 : 2.4);
+  sun.position.set(span * sunAt[0], span * sunAt[1], span * sunAt[2]);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(mapSize, mapSize);
+  Object.assign(sun.shadow.camera, { left: -span, right: span, top: span, bottom: -span, near: 0.5, far: span * 4 });
+  sun.shadow.bias = -0.0008;
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+  fill.position.set(span, span * 0.4, -span);
+  scene.add(fill);
+  return sun;
+}
+
+/** The plate the model stands on, ``w`` by ``d``, with its edge drawn. */
+export function addPlate(scene, p, w, d) {
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(w, 0.16, d),
+    new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.85 }));
+  plate.position.y = -0.08;
+  plate.receiveShadow = true;
+  scene.add(plate);
+  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(plate.geometry), new THREE.LineBasicMaterial({ color: p.line }));
+  edge.position.copy(plate.position);
+  scene.add(edge);
+}
+
+/** The sheet of glass at a full load (height ``y``), ``w`` by ``d``, and its rim. */
+export function addGlass(scene, p, w, d, y, rimOpacity) {
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, d),
+    new THREE.MeshPhysicalMaterial({ color: p.glass, transparent: true, opacity: p.dark ? 0.16 : 0.12,
+      roughness: 0.15, side: THREE.DoubleSide, depthWrite: false }));
+  glass.rotation.x = -Math.PI / 2;
+  glass.position.y = y;
+  glass.renderOrder = 2;
+  scene.add(glass);
+  const rim = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, 0.001, d)),
+    new THREE.LineBasicMaterial({ color: p.glass, transparent: true, opacity: rimOpacity }));
+  rim.position.y = y;
+  scene.add(rim);
+}
+
+/**
+ * What both views do once built: size the canvas to the stage (``size(shift)``
+ * keeps the sideways shift that centres the model), draw only while something
+ * moves (``draw``, ``wake``), turn a tap into ``pick(mesh, x, y)`` on one of
+ * ``meshes`` (``onTap``), follow the stage's width (``watch``) and let it all
+ * go (``dispose``). ``anchors`` are the HTML labels, kept over their points.
+ */
+export function viewer({ host, stage, renderer, scene, camera, controls, anchors, W, H }) {
+  let shift = [0, 0];
+  let frame = 0; let busyUntil = 0; let observer = null;
+  const v3 = new THREE.Vector3();
+  function size(to = shift) {
+    shift = to;
+    const w = W(); const h = H();
+    renderer.setSize(w, h, false);
+    renderer.domElement.style.width = `${w}px`;
+    renderer.domElement.style.height = `${h}px`;
+    stage.style.height = `${h}px`;
+    camera.aspect = w / h;
+    camera.setViewOffset(w, h, (shift[0] * w) / 2, (-shift[1] * h) / 2, w, h);
+  }
+  function placeLabels() {
+    const w = W(); const h = H();
+    for (const a of anchors) {
+      v3.copy(a.pos).project(camera);
+      a.node.style.transform = `translate(${((v3.x + 1) / 2) * w}px, ${((1 - v3.y) / 2) * h}px) ${a.shift}`;
+      a.node.style.visibility = v3.z > 1 ? 'hidden' : '';
+    }
+  }
+  function draw() { renderer.render(scene, camera); placeLabels(); }
+  function loop(now) {
+    frame = 0;
+    const moving = controls.update();
+    draw();
+    if (moving || now < busyUntil) frame = requestAnimationFrame(loop);
+  }
+  function wake(ms = 0) {
+    busyUntil = Math.max(busyUntil, performance.now() + ms);
+    if (!frame) frame = requestAnimationFrame(loop);
+  }
+  controls.addEventListener('change', () => wake(120));
+  function onTap(meshes, pick) {
+    const ray = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let down = null;
+    renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener('pointerup', (e) => {
+      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
+      down = null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+      pointer.set((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
+      ray.setFromCamera(pointer, camera);
+      const hit = ray.intersectObjects(meshes, false)[0];
+      pick(hit ? hit.object : null, x, y);
+    });
+  }
+  function watch() {
+    if (!window.ResizeObserver) return;
+    let last = W();
+    observer = new ResizeObserver(() => {
+      if (W() === last) return;
+      last = W(); size(); wake();
+    });
+    observer.observe(stage);
+  }
+  function dispose() {
+    cancelAnimationFrame(frame);
+    if (observer) observer.disconnect();
+    controls.dispose();
+    scene.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    renderer.dispose();
+    renderer.forceContextLoss();
+    host.__scape = null;
+  }
+  return { size, draw, wake, onTap, watch, dispose };
+}
+
 /** On a phone, keep the latest weeks so the blocks stay big enough to read and tap. */
 function trimmed(model, keep) {
   const off = Math.max(0, model.cols.length - keep);
@@ -100,33 +258,13 @@ export function render(host, fullModel) {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // ---- stage
-  const stage = document.createElement('div');
-  stage.className = 'scape3d';
-  const labels = document.createElement('div');
-  labels.className = 'scape3d-labels';
-  const tip = document.createElement('div');
-  tip.className = 'scape-tip'; tip.hidden = true;
-  const reset = document.createElement('button');
-  reset.type = 'button'; reset.className = 'scape-btn scape3d-reset';
-  reset.title = 'Back to the start'; reset.setAttribute('aria-label', 'Back to the start');
-  reset.textContent = '⌂';
+  const { stage, labels, tip, reset } = makeStage(host);
   const hint = document.createElement('div');
   hint.className = 'scape3d-hint';
   hint.textContent = narrow ? 'Drag to turn · pinch to zoom · tap a block' : 'Drag to turn · scroll to zoom · click a block';
-  host.replaceChildren(stage);
 
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
-  } catch (error) {
-    return null;   // no WebGL: the caller falls back to the flat drawing
-  }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.0;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const renderer = makeRenderer();
+  if (!renderer) return null;   // no WebGL: the caller falls back to the flat drawing
   stage.append(renderer.domElement, labels, tip, reset, hint);
   renderer.domElement.setAttribute('role', 'img');
   renderer.domElement.setAttribute('aria-label', model.summary || 'Load landscape');
@@ -137,32 +275,12 @@ export function render(host, fullModel) {
   const camera = new THREE.PerspectiveCamera(narrow ? 42 : 34, W() / H(), 0.1, 200);
 
   // ---- light
-  scene.add(new THREE.HemisphereLight(0xffffff, p.dark ? 0x202631 : 0xd9dee6, p.dark ? 0.9 : 1.05));
-  const sun = new THREE.DirectionalLight(0xffffff, p.dark ? 2.0 : 2.4);
   const span = Math.max(C, R * ZS);
-  sun.position.set(-span * 0.45, span * 0.9, span * 0.6);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(narrow ? 1024 : 2048, narrow ? 1024 : 2048);
-  const sc = sun.shadow.camera;
-  sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 0.5; sc.far = span * 4;
-  sun.shadow.bias = -0.0008;
-  sun.shadow.radius = 4;
-  scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-  fill.position.set(span, span * 0.4, -span);
-  scene.add(fill);
+  addLights(scene, p, span, [-0.45, 0.9, 0.6], narrow ? 1024 : 2048).shadow.radius = 4;
 
   // ---- the plate and its grid
   const plateW = C + 1.2; const plateD = R * ZS + 1.2;
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(plateW, 0.16, plateD),
-    new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.85, metalness: 0 }));
-  plate.position.y = -0.08;
-  plate.receiveShadow = true;
-  scene.add(plate);
-  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(plate.geometry),
-    new THREE.LineBasicMaterial({ color: p.line }));
-  edge.position.copy(plate.position);
-  scene.add(edge);
+  addPlate(scene, p, plateW, plateD);
   const gridPts = [];
   for (let c = 0; c <= C; c += 1) {
     const x = c - C / 2;
@@ -208,17 +326,7 @@ export function render(host, fullModel) {
   }
 
   // ---- the glass at a full load
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(C + 0.4, R * ZS + 0.4),
-    new THREE.MeshPhysicalMaterial({ color: p.glass, transparent: true, opacity: p.dark ? 0.16 : 0.12,
-      roughness: 0.15, metalness: 0, side: THREE.DoubleSide, depthWrite: false }));
-  glass.rotation.x = -Math.PI / 2;
-  glass.position.y = UNIT;
-  glass.renderOrder = 2;
-  scene.add(glass);
-  const rim = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(C + 0.4, 0.001, R * ZS + 0.4)),
-    new THREE.LineBasicMaterial({ color: p.glass, transparent: true, opacity: 0.55 }));
-  rim.position.y = UNIT;
-  scene.add(rim);
+  addGlass(scene, p, C + 0.4, R * ZS + 0.4, UNIT, 0.55);
 
   // ---- labels, in HTML so they stay crisp
   const anchors = [];
@@ -255,6 +363,8 @@ export function render(host, fullModel) {
   controls.maxPolarAngle = 1.32;
   controls.rotateSpeed = narrow ? 0.7 : 0.6;
   controls.zoomSpeed = 0.7;
+  const view = viewer({ host, stage, renderer, scene, camera, controls, anchors, W, H });
+  const { draw, wake } = view;
   const radius = Math.hypot(C, R * ZS, UNIT * 2) / 2;
   const top = Math.max(UNIT, ...blocks.map((b) => b.userData.h));
   // the corners of everything that must stay in view, and the row labels
@@ -320,20 +430,10 @@ export function render(host, fullModel) {
       shift: [(bb.x0 + bb.x1) / 2, (bb.y0 + bb.y1) / 2 + 0.03],
     };
   };
-  let shift = [0, 0];
 
-  function size() {
-    const w = W(); const h = H();
-    renderer.setSize(w, h, false);
-    renderer.domElement.style.width = `${w}px`;
-    renderer.domElement.style.height = `${h}px`;
-    stage.style.height = `${h}px`;
-    camera.aspect = w / h;
-    camera.setViewOffset(w, h, (shift[0] * w) / 2, (-shift[1] * h) / 2, w, h);
-  }
-  size();
+  view.size();
   const start = home();
-  shift = start.shift; size();
+  view.size(start.shift);
   controls.target.copy(start.target);
   camera.position.copy(start.pos);
   {
@@ -342,34 +442,6 @@ export function render(host, fullModel) {
     controls.maxDistance = Math.max(radius * 5, d * 2);
   }
   camera.lookAt(controls.target);
-
-  // ---- drawing, only while something moves
-  const v3 = new THREE.Vector3();
-  function placeLabels() {
-    const w = W(); const h = H();
-    for (const a of anchors) {
-      v3.copy(a.pos).project(camera);
-      const hidden = v3.z > 1;
-      a.node.style.transform = `translate(${((v3.x + 1) / 2) * w}px, ${((1 - v3.y) / 2) * h}px) ${a.shift}`;
-      a.node.style.visibility = hidden ? 'hidden' : '';
-    }
-  }
-  let frame = 0; let busyUntil = 0;
-  function draw() {
-    renderer.render(scene, camera);
-    placeLabels();
-  }
-  function loop(now) {
-    frame = 0;
-    const moving = controls.update();
-    draw();
-    if (moving || now < busyUntil) frame = requestAnimationFrame(loop);
-  }
-  function wake(ms = 0) {
-    busyUntil = Math.max(busyUntil, performance.now() + ms);
-    if (!frame) frame = requestAnimationFrame(loop);
-  }
-  controls.addEventListener('change', () => wake(120));
 
   // the blocks rise, and the view swings in
   if (!reduced) {
@@ -399,10 +471,7 @@ export function render(host, fullModel) {
   }
 
   // ---- reading a block
-  const ray = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
   let picked = null;
-  let down = null;
   function pick(mesh, x, y) {
     if (picked) picked.material.emissive.setHex(0x000000);
     picked = mesh;
@@ -419,17 +488,7 @@ export function render(host, fullModel) {
     if (model.onPick) model.onPick(r, c);
     wake();
   }
-  renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
-  renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
-    down = null;
-    const rect = renderer.domElement.getBoundingClientRect();
-    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
-    pointer.set((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
-    ray.setFromCamera(pointer, camera);
-    const hit = ray.intersectObjects(blocks, false)[0];
-    pick(hit ? hit.object : null, x, y);
-  });
+  view.onTap(blocks, pick);
   controls.addEventListener('start', () => { tip.hidden = true; hint.classList.add('is-gone'); });
 
   reset.addEventListener('click', () => {
@@ -448,30 +507,8 @@ export function render(host, fullModel) {
     requestAnimationFrame(go);
   });
 
-  let observer = null;
-  if (window.ResizeObserver) {
-    let last = W();
-    observer = new ResizeObserver(() => {
-      if (W() === last) return;
-      last = W(); size(); wake();
-    });
-    observer.observe(stage);
-  }
-
-  const instance = {
-    dispose() {
-      cancelAnimationFrame(frame);
-      if (observer) observer.disconnect();
-      controls.dispose();
-      scene.traverse((o) => {
-        if (o.geometry) o.geometry.dispose();
-        if (o.material) o.material.dispose();
-      });
-      renderer.dispose();
-      renderer.forceContextLoss();
-      host.__scape = null;
-    },
-  };
+  view.watch();
+  const instance = { dispose: view.dispose };
   host.__scape = instance;
   return instance;
 }

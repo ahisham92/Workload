@@ -5,12 +5,14 @@
  * settle to where the planner's suggested handovers would leave them, with an
  * arc from the person handing work over to the person taking it.
  *
- * Loaded on demand by showcase.js; shares its palette and block shape with
- * load3d.js. Draws only while something moves.
+ * Loaded on demand by showcase.js; shares its palette, block shape, stage,
+ * lights and drawing loop with load3d.js. Draws only while something moves.
  */
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { palette, loadColor, blockGeometry } from './load3d.js';
+import {
+  palette, loadColor, blockGeometry, makeStage, makeRenderer, addLights, addPlate, addGlass, viewer,
+} from './load3d.js';
 
 const UNIT = 1.4;     // height of a full load
 const CAP = 2.0;      // loads above this are drawn at this
@@ -27,29 +29,9 @@ export function render(host, model) {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // ---- stage
-  const stage = document.createElement('div');
-  stage.className = 'scape3d';
-  const labels = document.createElement('div');
-  labels.className = 'scape3d-labels';
-  const tip = document.createElement('div');
-  tip.className = 'scape-tip'; tip.hidden = true;
-  const reset = document.createElement('button');
-  reset.type = 'button'; reset.className = 'scape-btn scape3d-reset';
-  reset.title = 'Back to the start'; reset.setAttribute('aria-label', 'Back to the start');
-  reset.textContent = '⌂';
-  host.replaceChildren(stage);
-
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
-  } catch (error) {
-    return null;
-  }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const { stage, labels, tip, reset } = makeStage(host);
+  const renderer = makeRenderer();
+  if (!renderer) return null;
   stage.append(renderer.domElement, labels, tip, reset);
   renderer.domElement.setAttribute('role', 'img');
   renderer.domElement.setAttribute('aria-label', model.summary || 'The team\'s next two weeks');
@@ -61,31 +43,14 @@ export function render(host, model) {
 
   // ---- light
   const span = N * GAP;
-  scene.add(new THREE.HemisphereLight(0xffffff, p.dark ? 0x202631 : 0xd9dee6, p.dark ? 0.9 : 1.05));
-  const sun = new THREE.DirectionalLight(0xffffff, p.dark ? 2.0 : 2.4);
-  sun.position.set(-span * 0.4, span * 0.9, span * 0.7);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  Object.assign(sun.shadow.camera, { left: -span, right: span, top: span, bottom: -span, near: 0.5, far: span * 4 });
-  sun.shadow.bias = -0.0008;
-  scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-  fill.position.set(span, span * 0.4, -span);
-  scene.add(fill);
+  addLights(scene, p, span, [-0.4, 0.9, 0.7], 1024);
 
   // ---- the floor: one row of towers, or rows of three on a phone
   const COLS = narrow ? Math.min(3, N) : N;
   const ROWS = Math.ceil(N / COLS);
   const ZG = 2.5;
   const floorW = COLS * GAP + 0.6; const floorD = ROWS === 1 ? 2.6 : ROWS * ZG + 0.3;
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(floorW, 0.16, floorD),
-    new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.85 }));
-  floor.position.y = -0.08;
-  floor.receiveShadow = true;
-  scene.add(floor);
-  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(floor.geometry), new THREE.LineBasicMaterial({ color: p.line }));
-  edge.position.copy(floor.position);
-  scene.add(edge);
+  addPlate(scene, p, floorW, floorD);
 
   // ---- the towers
   const geo = blockGeometry();
@@ -103,17 +68,7 @@ export function render(host, model) {
   });
 
   // ---- the glass at a full load
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(floorW, floorD),
-    new THREE.MeshPhysicalMaterial({ color: p.glass, transparent: true, opacity: p.dark ? 0.16 : 0.12,
-      roughness: 0.15, side: THREE.DoubleSide, depthWrite: false }));
-  glass.rotation.x = -Math.PI / 2;
-  glass.position.y = UNIT;
-  glass.renderOrder = 2;
-  scene.add(glass);
-  const rim = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(floorW, 0.001, floorD)),
-    new THREE.LineBasicMaterial({ color: p.glass, transparent: true, opacity: 0.6 }));
-  rim.position.y = UNIT;
-  scene.add(rim);
+  addGlass(scene, p, floorW, floorD, UNIT, 0.6);
 
   // ---- the moves: an arc from the giver's tower to the taker's
   const arcs = new THREE.Group();
@@ -157,11 +112,8 @@ export function render(host, model) {
     const a = label(person.name, new THREE.Vector3(xOf(i), 0, ROWS === 1 ? floorD / 2 + 0.05 : zOf(i) + 0.95), 'scape3d-name', 'translate(-50%, 4px)');
     a.node.style.setProperty('--dot', person.color || 'var(--muted)');
   });
-  const pcts = model.people.map((person, i) => {
-    const a = label(`${Math.round(person.now * 100)}%`, new THREE.Vector3(xOf(i), heightOf(person.now), zOf(i) + 0.55),
-      'scape3d-pct', 'translate(-50%, calc(-100% - 6px))');
-    return a;
-  });
+  const pcts = model.people.map((person, i) => label(`${Math.round(person.now * 100)}%`,
+    new THREE.Vector3(xOf(i), heightOf(person.now), zOf(i) + 0.55), 'scape3d-pct', 'translate(-50%, calc(-100% - 6px))'));
   label('full load', new THREE.Vector3(floorW / 2 - 0.1, UNIT, -floorD / 2), 'scape3d-glass', 'translate(-100%, -130%)');
   const arcLabels = arcInfo.map((info) => {
     const a = label(info.label, info.mid, 'scape3d-move', 'translate(-50%, -50%)');
@@ -177,6 +129,8 @@ export function render(host, model) {
   controls.minPolarAngle = 0.35;
   controls.maxPolarAngle = 1.4;
   controls.rotateSpeed = 0.6;
+  const view = viewer({ host, stage, renderer, scene, camera, controls, anchors, W, H });
+  const { draw } = view;
   const top = Math.max(UNIT, ...model.people.map((x) => heightOf(Math.max(x.now, x.after))));
   const hull = [];
   for (const x of [-floorW / 2, floorW / 2]) for (const z of [-floorD / 2, floorD / 2 + 0.5]) hull.push(new THREE.Vector3(x, -0.16, z));
@@ -185,7 +139,6 @@ export function render(host, model) {
   const probe = new THREE.PerspectiveCamera();
   const tilt = ROWS > 1 ? 0.95 : 1.12;
   const dir = new THREE.Vector3(Math.sin(0.1) * Math.sin(tilt), Math.cos(tilt), Math.cos(0.1) * Math.sin(tilt));
-  let shift = [0, 0];
   const home = () => {
     const target = new THREE.Vector3(0, top * 0.4, 0);
     probe.fov = camera.fov; probe.aspect = W() / H(); probe.near = 0.1; probe.far = 400;
@@ -210,48 +163,15 @@ export function render(host, model) {
     const bb = box(hi);
     return { target, pos: target.clone().addScaledVector(dir, hi), shift: [(bb.x0 + bb.x1) / 2, (bb.y0 + bb.y1) / 2] };
   };
-  function size() {
-    const w = W(); const h = H();
-    renderer.setSize(w, h, false);
-    renderer.domElement.style.width = `${w}px`;
-    renderer.domElement.style.height = `${h}px`;
-    stage.style.height = `${h}px`;
-    camera.aspect = w / h;
-    camera.setViewOffset(w, h, (shift[0] * w) / 2, (-shift[1] * h) / 2, w, h);
-  }
-  size();
+  view.size();
   const start = home();
-  shift = start.shift; size();
+  view.size(start.shift);
   controls.target.copy(start.target);
   camera.position.copy(start.pos);
   const dist = camera.position.distanceTo(controls.target);
   controls.minDistance = dist * 0.45;
   controls.maxDistance = dist * 2.2;
   camera.lookAt(controls.target);
-
-  // ---- drawing, only while something moves
-  const v3 = new THREE.Vector3();
-  function placeLabels() {
-    const w = W(); const h = H();
-    for (const a of anchors) {
-      v3.copy(a.pos).project(camera);
-      a.node.style.transform = `translate(${((v3.x + 1) / 2) * w}px, ${((1 - v3.y) / 2) * h}px) ${a.shift}`;
-      a.node.style.visibility = v3.z > 1 ? 'hidden' : '';
-    }
-  }
-  function draw() { renderer.render(scene, camera); placeLabels(); }
-  let frame = 0; let busyUntil = 0;
-  function loop(now) {
-    frame = 0;
-    const moving = controls.update();
-    draw();
-    if (moving || now < busyUntil) frame = requestAnimationFrame(loop);
-  }
-  function wake(ms = 0) {
-    busyUntil = Math.max(busyUntil, performance.now() + ms);
-    if (!frame) frame = requestAnimationFrame(loop);
-  }
-  controls.addEventListener('change', () => wake(120));
 
   /** Move every tower (and its % label) to the given loads, over a moment. */
   function settle(key, ms) {
@@ -325,9 +245,7 @@ export function render(host, model) {
   }
 
   // ---- reading a tower
-  const ray = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
-  let picked = null; let down = null;
+  let picked = null;
   let showing = 'now';
   function pick(mesh, x, y) {
     if (picked) picked.material.emissive.setHex(0x000000);
@@ -344,17 +262,7 @@ export function render(host, model) {
     tip.style.top = `${Math.min(Math.max(4, y - 60), H() - 80)}px`;
     draw();
   }
-  renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
-  renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
-    down = null;
-    const rect = renderer.domElement.getBoundingClientRect();
-    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
-    pointer.set((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
-    ray.setFromCamera(pointer, camera);
-    const hit = ray.intersectObjects(towers, false)[0];
-    pick(hit ? hit.object : null, x, y);
-  });
+  view.onTap(towers, pick);
   controls.addEventListener('start', () => { tip.hidden = true; });
 
   reset.addEventListener('click', () => {
@@ -369,16 +277,7 @@ export function render(host, model) {
     requestAnimationFrame(go);
   });
 
-  let observer = null;
-  if (window.ResizeObserver) {
-    let last = W();
-    observer = new ResizeObserver(() => {
-      if (W() === last) return;
-      last = W(); size(); wake();
-    });
-    observer.observe(stage);
-  }
-
+  view.watch();
   const instance = {
     /** 'after' shows where the suggested moves would leave everyone. */
     show(which) {
@@ -387,18 +286,7 @@ export function render(host, model) {
       settle(showing, 900);
       showArcs(showing === 'after');
     },
-    dispose() {
-      cancelAnimationFrame(frame);
-      if (observer) observer.disconnect();
-      controls.dispose();
-      scene.traverse((o) => {
-        if (o.geometry) o.geometry.dispose();
-        if (o.material) o.material.dispose();
-      });
-      renderer.dispose();
-      renderer.forceContextLoss();
-      host.__scape = null;
-    },
+    dispose: view.dispose,
   };
   host.__scape = instance;
   return instance;

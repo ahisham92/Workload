@@ -19,7 +19,6 @@
     return node;
   };
   const toneVar = (t) => (t === 'ok' ? 'var(--ok)' : t === 'warn' ? 'var(--warn)' : t === 'bad' ? 'var(--bad)' : 'var(--accent)');
-  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   const DAY = 86400000;
   const day = (iso) => new Date(`${iso}T00:00:00`).getTime();
   const todayMs = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -35,7 +34,7 @@
       const [x0, y0] = pt(a0, r); const [x1, y1] = pt(a1, r);
       return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 0 1 ${x1.toFixed(2)},${y1.toFixed(2)}`;
     };
-    const known = value !== null && value !== undefined && Number.isFinite(value);
+    const known = Number.isFinite(value);
     const arcLen = Math.PI * R;
     const fill = known ? (clamp(value, min, max) - min) / (max - min) : 0;
     const colour = toneVar(toneName);
@@ -96,7 +95,7 @@
       const cpiTone = m.cpi === null || m.cpi === undefined ? '' : tone.cpi(m.cpi);
       const size = Math.sqrt(p.budget_mm / biggest);
       const closed = /final|closed|complete/i.test(p.status || '');
-      const tile = el('button', {
+      return el('button', {
         type: 'button', class: `pm-tile pm-${cpiTone || 'plain'} ${closed ? 'is-closed' : ''}`,
         style: `flex-grow:${(size * 10).toFixed(2)};flex-basis:${Math.round(110 + size * 170)}px;--fill:${(progress * 100).toFixed(1)}%;`
           + `min-height:${Math.round(86 + size * 64)}px`,
@@ -113,7 +112,6 @@
         el('b', {}, fmt.pct(progress)),
         el('span', {}, ` along · ${fmt.mm(p.budget_mm)} MM`),
         m.cpi ? el('span', { class: `pm-cpi v-${cpiTone}` }, fmt.ratio(m.cpi)) : null));
-      return tile;
     });
     return el('section', { class: 'panel pm-panel' },
       el('div', { class: 'panel-head' },
@@ -166,7 +164,7 @@
           class: `tl-bar tl-${state_}`,
           style: `left:${x(s)}%;width:${Math.max(1.2, x(e) - x(s))}%;top:${lane * 26 + 4}px;`
             + `--p:${(clamp(t.progress || 0, 0, 1) * 100).toFixed(0)}%`,
-          title: `${t.name}\n${t.project_number} ${projectName.get(t.project_number) || ''}\n`
+          title: `${t.name}\n${t.project_number || 'No project'} ${projectName.get(t.project_number) || ''}\n`
             + `${t.status} · due ${fmt.date(t.due)}${overdue ? ' (overdue)' : ''} · ${fmt.hours(hours)} h`,
         }, el('span', { class: 'tl-text' }, t.name));
       });
@@ -292,6 +290,4 @@
   wrapGlobal('renderTimesheets', () => {
     if (state.overview) place('ts-heat', $('#ts-cards'), heatMap(state.overview));
   });
-
-  window.tabs = { dial, pulse, projectMap, taskTimeline, heatMap };
 })();

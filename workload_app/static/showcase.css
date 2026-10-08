@@ -6,7 +6,6 @@
 .t-ok { background: var(--ok); }
 .t-bad { background: var(--bad); }
 .t-warn { background: var(--accent); }
-.small { font-size: 12px; }
 .more-block { margin: 14px 0; }
 .more-block > summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 8px 2px;
   list-style: none; }
@@ -66,15 +65,12 @@
 .pc-stat-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .pc-stat-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--pc); }
 .pc-stat-value { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-.pc-next { display: grid; gap: 3px; font-size: 12px; }
-.pc-next-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px;
+.pc-next { display: grid; gap: 3px; font-size: 12px; min-width: 0; }
+.pc-next-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px;
   text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
-.pc-next-head b { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.pc-next-head b { text-transform: none; letter-spacing: 0; font-size: 12px; white-space: nowrap; }
 .pc > * { min-width: 0; }
-.pc-next { min-width: 0; }
 .pc-job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.pc-next-head { gap: 8px; }
-.pc-next-head b { white-space: nowrap; }
 .pc-job-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono);
   font-size: 11.5px; }
 .pc-job-name .muted { font-family: system-ui, sans-serif; font-size: 11.5px; }

@@ -14,6 +14,19 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)',
   'var(--series-4)', 'var(--series-5)', 'var(--series-6)'];
 
+/** An HTML element with a class (none when empty) and children. */
+function htmlNode(tag, className, ...children) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.append(...children);
+  return node;
+}
+
+/** Each series keeps its own colour, or takes the next of SERIES. */
+function seriesColor(series, i) {
+  return series.color || SERIES[i % SERIES.length];
+}
+
 function svgEl(tag, attrs = {}, ...children) {
   const node = document.createElementNS(SVG_NS, tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -76,36 +89,43 @@ function hoverable(node, html) {
 /* -------------------------------------------------------------- legend */
 
 function legend(items) {
-  const box = document.createElement('div');
-  box.className = 'legend';
-  for (const item of items) {
-    const entry = document.createElement('span');
-    entry.className = 'legend-item';
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = item.color;
-    entry.append(swatch, document.createTextNode(item.label));
-    box.append(entry);
-  }
-  return box;
+  return htmlNode('div', 'legend', ...items.map((item) => legendItem(item.label, 'swatch', item.color)));
+}
+
+/** One legend entry; a swatch with no colour is drawn by its class. */
+function legendItem(label, swatchClass, color) {
+  const swatch = htmlNode('span', swatchClass);
+  if (color) swatch.style.background = color;
+  return htmlNode('span', 'legend-item', swatch, label);
 }
 
 function figure(title, note, ...body) {
-  const fig = document.createElement('figure');
-  fig.className = 'figure';
+  const fig = htmlNode('figure', 'figure');
   if (title) {
-    const caption = document.createElement('figcaption');
-    caption.append(Object.assign(document.createElement('b'), { textContent: title }));
-    if (note) {
-      const small = document.createElement('span');
-      small.className = 'muted';
-      small.textContent = note;
-      caption.append(small);
-    }
-    fig.append(caption);
+    fig.append(htmlNode('figcaption', '', htmlNode('b', '', title), ...(note ? [htmlNode('span', 'muted', note)] : [])));
   }
   fig.append(...body.filter(Boolean));
   return fig;
+}
+
+/** A bar chart's frame: the svg, capped at its natural width (a chart with few
+ *  bars stretched to fill a panel blows the labels up out of all proportion to
+ *  the rest of the page), and its plot with four gridlines up to ``peak``. */
+function axisFrame(width, height, padLeft, padTop, plotW, plotH, peak) {
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${width} ${height}`, class: 'chart', role: 'img',
+    preserveAspectRatio: 'xMinYMin meet',
+    style: `width:100%;max-width:${width}px`,
+  });
+  const plot = svgEl('g', { transform: `translate(${padLeft},${padTop})` });
+  for (let i = 0; i <= 4; i += 1) {
+    const y = (plotH / 4) * i;
+    plot.append(svgEl('line', { x1: 0, x2: plotW, y1: y, y2: y, class: 'gridline' }));
+    plot.append(svgEl('text', {
+      x: -8, y: y + 4, 'text-anchor': 'end', class: 'axis-label',
+    }, tick(peak * (1 - i / 4))));
+  }
+  return { svg, plot };
 }
 
 /* ---------------------------------------------------------------- donut */
@@ -136,7 +156,7 @@ function donut(data, { title, note, unit = 'MM', size = 190, digits = 2 } = {}) 
 
   // Colour follows the entity, never its position: a status missing from one
   // chart must not repaint the ones that remain in the other.
-  const colorOf = (row, i) => row.color || SERIES[i % SERIES.length];
+  const colorOf = seriesColor;
 
   let angle = -Math.PI / 2;
   const gap = total ? (2 / radius) : 0;      // a 2px gap between neighbours
@@ -169,14 +189,7 @@ function donut(data, { title, note, unit = 'MM', size = 190, digits = 2 } = {}) 
     color: colorOf(row, i),
     label: `${row.label} — ${row.value.toFixed(digits)} (${((row.value / total) * 100 || 0).toFixed(0)}%)`,
   }));
-  return figure(title, note, wrap('donut-wrap', svg, legend(items)));
-}
-
-function wrap(className, ...nodes) {
-  const box = document.createElement('div');
-  box.className = className;
-  box.append(...nodes);
-  return box;
+  return figure(title, note, htmlNode('div', 'donut-wrap', svg, legend(items)));
 }
 
 function arc(cx, cy, outer, inner, from, to) {
@@ -203,25 +216,7 @@ function groupedBars(categories, series, { title, note, unit = 'MM',
   const peak = niceMax(Math.max(
     ...series.flatMap((s) => s.values.map((v) => v || 0)), target || 0));
   const scale = (v) => plotH - (v / peak) * plotH;
-
-  // Capped at its natural width: a chart with few bars stretched to fill a
-  // panel blows the labels up out of all proportion to the rest of the page.
-  const svg = svgEl('svg', {
-    viewBox: `0 0 ${width} ${height}`, class: 'chart', role: 'img',
-    preserveAspectRatio: 'xMinYMin meet',
-    style: `width:100%;max-width:${width}px`,
-  });
-  const plot = svgEl('g', { transform: `translate(${padLeft},${padTop})` });
-
-  for (let i = 0; i <= 4; i += 1) {
-    const y = (plotH / 4) * i;
-    plot.append(svgEl('line', {
-      x1: 0, x2: plotW, y1: y, y2: y, class: 'gridline',
-    }));
-    plot.append(svgEl('text', {
-      x: -8, y: y + 4, 'text-anchor': 'end', class: 'axis-label',
-    }, tick(peak * (1 - i / 4))));
-  }
+  const { svg, plot } = axisFrame(width, height, padLeft, padTop, plotW, plotH, peak);
 
   const groupW = plotW / categories.length;
   const barW = Math.min(30, (groupW - 14) / series.length - 2);
@@ -233,7 +228,7 @@ function groupedBars(categories, series, { title, note, unit = 'MM',
       const x = base + si * (barW + 2);      // 2px surface gap between bars
       const bar = svgEl('rect', {
         x, y, width: barW, height: Math.max(1, plotH - y),
-        rx: 4, fill: s.color || SERIES[si % SERIES.length], class: 'bar',
+        rx: 4, fill: seriesColor(s, si), class: 'bar',
       });
       hoverable(bar, `<b>${chartEscape(category)}</b><br>${chartEscape(s.label)}: `
         + `${value.toFixed(2)} ${unit}`);
@@ -256,11 +251,8 @@ function groupedBars(categories, series, { title, note, unit = 'MM',
   }
 
   svg.append(plot);
-  return figure(title, note, wrap('chart-scroll', svg),
-    series.length > 1
-      ? legend(series.map((s, i) => ({
-          color: s.color || SERIES[i % SERIES.length], label: s.label })))
-      : null);
+  return figure(title, note, htmlNode('div', 'chart-scroll', svg),
+    series.length > 1 ? legend(series.map((s, i) => ({ color: seriesColor(s, i), label: s.label }))) : null);
 }
 
 /* ------------------------------------------------------ stacked columns */
@@ -278,20 +270,7 @@ function stackedColumns(labels, series, { title, note, unit = 'MM',
     series.reduce((sum, s) => sum + (s.values[i] || 0), 0));
   const targets = Array.isArray(target) ? target : labels.map(() => target);
   const peak = niceMax(Math.max(...totals, ...targets.map((t) => t || 0)));
-
-  const svg = svgEl('svg', {
-    viewBox: `0 0 ${width} ${height}`, class: 'chart', role: 'img',
-    preserveAspectRatio: 'xMinYMin meet',
-    style: `width:100%;max-width:${width}px`,
-  });
-  const plot = svgEl('g', { transform: `translate(${padLeft},${padTop})` });
-  for (let i = 0; i <= 4; i += 1) {
-    const y = (plotH / 4) * i;
-    plot.append(svgEl('line', { x1: 0, x2: plotW, y1: y, y2: y, class: 'gridline' }));
-    plot.append(svgEl('text', {
-      x: -8, y: y + 4, 'text-anchor': 'end', class: 'axis-label',
-    }, tick(peak * (1 - i / 4))));
-  }
+  const { svg, plot } = axisFrame(width, height, padLeft, padTop, plotW, plotH, peak);
 
   const slot = plotW / labels.length;
   const barW = Math.min(wide ? 48 : 28, slot - 10);
@@ -305,7 +284,7 @@ function stackedColumns(labels, series, { title, note, unit = 'MM',
       const rect = svgEl('rect', {
         x: i * slot + (slot - barW) / 2, y, width: barW,
         height: Math.max(1, barH - 2),      // 2px gap between segments
-        rx: 2, fill: s.color || SERIES[si % SERIES.length], class: 'bar',
+        rx: 2, fill: seriesColor(s, si), class: 'bar',
       });
       hoverable(rect, `<b>${chartEscape(label)}</b><br>${chartEscape(s.label)}: `
         + `${value.toFixed(2)} ${unit}`);
@@ -331,18 +310,9 @@ function stackedColumns(labels, series, { title, note, unit = 'MM',
     plot.append(svgEl('path', { d, class: 'target-line', fill: 'none' }));
   }
   svg.append(plot);
-  const items = series.map((s, i) => ({
-    color: s.color || SERIES[i % SERIES.length], label: s.label }));
-  const box = legend(items);
-  if (targets.some((t) => t)) {
-    const entry = document.createElement('span');
-    entry.className = 'legend-item';
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch swatch-line';
-    entry.append(swatch, document.createTextNode(targetLabel));
-    box.append(entry);
-  }
-  return figure(title, note, wrap('chart-scroll', svg), box);
+  const box = legend(series.map((s, i) => ({ color: seriesColor(s, i), label: s.label })));
+  if (targets.some((t) => t)) box.append(legendItem(targetLabel, 'swatch swatch-line'));
+  return figure(title, note, htmlNode('div', 'chart-scroll', svg), box);
 }
 
 /* ------------------------------------------------------------ sparkline */
@@ -540,7 +510,7 @@ function formation(rows, { groups = [], onPick = null } = {}) {
     people.append(g);
   });
   svg.append(people);
-  return wrap('formation-wrap', wrap('chart-scroll', svg));
+  return htmlNode('div', 'formation-wrap', htmlNode('div', 'chart-scroll', svg));
 }
 
 /* --------------------------------------------------------- budget bars */
@@ -549,51 +519,33 @@ function formation(rows, { groups = [], onPick = null } = {}) {
  *  bar what has been booked, the tick what has been earned. A bar past its
  *  tick is costing more than it earns. */
 function budgetBars(rows, { title, note, unit = 'MM' } = {}) {
-  const box = document.createElement('div');
-  box.className = 'budget-bars';
+  const box = htmlNode('div', 'budget-bars');
   const peak = Math.max(1, ...rows.map((r) => Math.max(r.budget || 0, r.actual || 0)));
   for (const row of rows) {
-    const line = document.createElement('div');
-    line.className = 'budget-row';
-    const name = document.createElement('span');
-    name.className = 'budget-name';
-    name.textContent = row.label;
+    const name = htmlNode('span', 'budget-name', row.label);
     name.title = row.title || row.label;
-    const track = document.createElement('span');
-    track.className = 'budget-track';
-    const budget = document.createElement('span');
-    budget.className = 'budget-budget';
+    const budget = htmlNode('span', 'budget-budget');
     budget.style.width = `${((row.budget || 0) / peak) * 100}%`;
-    const actual = document.createElement('span');
     const over = (row.actual || 0) > (row.earned || 0) + 0.005;
-    actual.className = `budget-actual${over ? ' over' : ''}`;
+    const actual = htmlNode('span', `budget-actual${over ? ' over' : ''}`);
     actual.style.width = `${Math.max(0.5, ((row.actual || 0) / peak) * 100)}%`;
-    const earned = document.createElement('span');
-    earned.className = 'budget-earned';
+    const earned = htmlNode('span', 'budget-earned');
     earned.style.left = `${((row.earned || 0) / peak) * 100}%`;
-    track.append(budget, actual, earned);
+    const track = htmlNode('span', 'budget-track', budget, actual, earned);
     hoverable(track, `<b>${chartEscape(row.title || row.label)}</b><br>`
       + `Budget ${(row.budget || 0).toFixed(2)} ${unit}<br>`
       + `Booked ${(row.actual || 0).toFixed(2)} ${unit}<br>`
       + `Earned ${(row.earned || 0).toFixed(2)} ${unit}`);
-    const value = document.createElement('span');
-    value.className = 'budget-value';
-    value.textContent = row.budget
-      ? `${Math.round(((row.actual || 0) / row.budget) * 100)}% spent` : '—';
-    line.append(name, track, value);
-    box.append(line);
+    const value = htmlNode('span', 'budget-value', row.budget
+      ? `${Math.round(((row.actual || 0) / row.budget) * 100)}% spent` : '—');
+    box.append(htmlNode('div', 'budget-row', name, track, value));
   }
   const key = legend([
     { color: 'var(--surface-2)', label: 'budget' },
     { color: 'var(--series-1)', label: 'booked, at or under earned' },
     { color: 'var(--series-2)', label: 'booked, past earned' },
   ]);
-  const tick = document.createElement('span');
-  tick.className = 'legend-item';
-  const mark = document.createElement('span');
-  mark.className = 'swatch swatch-tick';
-  tick.append(mark, document.createTextNode('earned'));
-  key.append(tick);
+  key.append(legendItem('earned', 'swatch swatch-tick'));
   return figure(title, note, box, key);
 }
 
@@ -601,26 +553,15 @@ function budgetBars(rows, { title, note, unit = 'MM' } = {}) {
 
 /** One measure across a few people: emphasis, not eight hues. */
 function scoreBars(rows, { title, note, max = 100, suffix = '' } = {}) {
-  const box = document.createElement('div');
-  box.className = 'score-bars';
+  const box = htmlNode('div', 'score-bars');
   const peak = Math.max(max, ...rows.map((r) => r.value || 0));
   for (const row of rows) {
-    const line = document.createElement('div');
-    line.className = 'score-row';
-    const name = document.createElement('span');
-    name.className = 'score-name';
-    name.textContent = row.label;
-    const track = document.createElement('span');
-    track.className = 'score-track';
     const fill = document.createElement('span');
     fill.style.width = `${Math.max(1, ((row.value || 0) / peak) * 100)}%`;
     fill.style.background = row.color || 'var(--series-1)';
-    track.append(fill);
-    const value = document.createElement('span');
-    value.className = 'score-value';
-    value.textContent = `${(row.value || 0).toFixed(1)}${suffix}`;
-    line.append(name, track, value);
-    box.append(line);
+    box.append(htmlNode('div', 'score-row', htmlNode('span', 'score-name', row.label),
+      htmlNode('span', 'score-track', fill),
+      htmlNode('span', 'score-value', `${(row.value || 0).toFixed(1)}${suffix}`)));
   }
   return figure(title, note, box);
 }

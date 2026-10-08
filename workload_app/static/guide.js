@@ -8,6 +8,7 @@
  *
  * The diagrams are drawn for the width they have: one column on a phone, up
  * to four side by side on a wide screen. Nothing here reads or writes data.
+ * Elements are made with common.js's make.
  */
 (function () {
   'use strict';
@@ -99,19 +100,6 @@
   /* -- small helpers ------------------------------------------------------ */
 
   const SVG = 'http://www.w3.org/2000/svg';
-
-  function make(tag, attrs, ...children) {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(attrs || {})) {
-      if (value === null || value === undefined || value === false) continue;
-      if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-      else node.setAttribute(key, value === true ? '' : value);
-    }
-    for (const child of children) {
-      if (child !== null && child !== undefined) node.append(child);
-    }
-    return node;
-  }
 
   function svg(tag, attrs, ...children) {
     const node = document.createElementNS(SVG, tag);
