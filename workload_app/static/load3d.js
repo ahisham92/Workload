@@ -32,7 +32,7 @@ function tokenColor(name, fallback) {
   return new THREE.Color(rgb.startsWith('rgb') ? rgb : fallback);
 }
 
-function palette() {
+export function palette() {
   return {
     room: tokenColor('--series-1', '#2a78d6'),
     right: tokenColor('--series-3', '#1baf7a'),
@@ -48,7 +48,7 @@ function palette() {
 }
 
 /** Load as a colour: room, about right, heavy, over. */
-function loadColor(v, p) {
+export function loadColor(v, p) {
   if (v === null || v === undefined) return p.line.clone();
   const stops = [[0.5, p.room], [0.8, p.room], [0.95, p.right], [1.05, p.right],
     [1.18, p.heavy], [1.32, p.over]];
@@ -62,7 +62,7 @@ function loadColor(v, p) {
 }
 
 /** A rounded square prism, base at 0, height 1, so scale.y sets the height. */
-function blockGeometry() {
+export function blockGeometry() {
   const s = FOOT / 2; const r = 0.13;
   const shape = new THREE.Shape();
   shape.moveTo(-s + r, -s);

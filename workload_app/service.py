@@ -1009,7 +1009,7 @@ class WorkloadService:
             rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
             config=inputs["config"], project_names=inputs["project_names"],
             drawings_left=drawings_module.left_by_project(inputs["drawings"]),
-            saved=self.store.plan_moves(), days=days,
+            saved=self.store.plan_moves(), days=days, today=_today(),
             management=inputs["management"].hours_a_day())
         suggested: List[Dict[str, Any]] = []
         if suggest:
