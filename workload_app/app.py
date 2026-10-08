@@ -380,7 +380,9 @@ class WorkloadApp:
             # A manager changed the unit: whatever that makes new reaches the
             # phones now, not at the next scheduled run.
             after = self._unit_version(ctx)
-            if after is not None and after[0] == before[0] and after[1] != before[1]:
+            if (after is not None and after[0] == before[0] and after[1] != before[1]
+                    and self.accounts.has_push_devices(
+                        notify.people_of_unit(self, ctx.user["id"], before[0]))):
                 self._tell(ctx.user["id"], before[0])
         return Response.json(HTTPStatus.OK, result)
 
@@ -1286,10 +1288,8 @@ class WorkloadApp:
 
     def _tell(self, owner_id: int, unit_id: str) -> None:
         """Send whatever a change to this unit makes new, to the phones of
-        everybody on it.  Nobody with a phone on it: nothing to do."""
+        everybody on it."""
         people = notify.people_of_unit(self, owner_id, unit_id)
-        if not self.accounts.has_push_devices(people):
-            return
 
         def run() -> None:
             try:
