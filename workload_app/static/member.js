@@ -1,8 +1,9 @@
-/* A team member's page: their own figures, and no way to change anything.
+/* A team member's page: their own day and their own figures.
  *
  * Deliberately its own small script rather than the manager's app with parts
- * hidden. There is one endpoint behind it, /api/me, which returns only this
- * person's data -- so there is nothing here to hide in the first place.
+ * hidden. The figures come from one endpoint, /api/me, which returns only this
+ * person's data -- so there is nothing here to hide in the first place. My day
+ * (myday.js) is the only part that writes, and only for this person.
  */
 
 const state = { data: null, unit: null, year: null, me: null, chosen: false };
@@ -123,11 +124,14 @@ async function load() {
     state.chosen = true;
   }
   render();
+  if (window.myDay && dataKnown(state.data)) window.myDay.load(state.data.unit && state.data.unit.id);
   if (window.selecaoPush && !state.pushShown) {
     state.pushShown = true;
     window.selecaoPush.show($('#member-push'));
   }
 }
+
+function dataKnown(data) { return Boolean(data && data.known); }
 
 function render() {
   const data = state.data;

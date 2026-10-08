@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Selecao+">
-<title>My workload — Selecao+</title>
+<title>My day — Selecao+</title>
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="brand/selecao-apple-touch-180.png">
 <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
@@ -46,11 +46,14 @@
   <div class="view-head">
     <div>
       <h2 id="member-title">My workload</h2>
-      <p class="muted" id="member-sub">Your own figures for the year chosen on the right. Nothing here can be changed from this account.</p>
+      <p class="muted" id="member-sub">Your day first, then your own figures for the year chosen on the right.</p>
     </div>
   </div>
 
   <div id="member-message"></div>
+  <section class="panel md-panel" id="myday" hidden></section>
+  <section class="panel md-panel" id="mytimesheet" hidden></section>
+  <section class="panel md-panel" id="myoff" hidden></section>
   <div id="member-cards" class="cards"></div>
 
   <section class="panel">
@@ -105,6 +108,7 @@
 <div id="toasts" class="toasts"></div>
 
 <script src="member.js"></script>
+<script src="myday.js"></script>
 <script src="push.js"></script>
 <script src="tables.js"></script>
 <script src="pocket.js"></script>

@@ -44,11 +44,12 @@ URL_MINE = "./"
 FALLBACK_CONTACT = "https://github.com/ahisham92/Workload"
 #: What each kind of account is told about, as the app says it.
 ABOUT_MANAGER = ("Your phone is told when the weekly report is ready, and when something "
-                 "needs you: someone who needs to ease off, a late submission or one due "
-                 "tomorrow, people to ask for, timesheets that stopped coming in.")
+                 "needs you: someone stuck or asking for help, someone who needs to ease off, "
+                 "a late submission or one due tomorrow, people to ask for, timesheets "
+                 "that stopped coming in.")
 ABOUT_MEMBER = ("Your phone is told about your week at its start, and when a submission "
                 "of yours is late or due tomorrow. If you lead people, you also hear who "
-                "in your team needs to ease off and what of theirs is due.")
+                "in your team is stuck, needs help or needs to ease off, and what of theirs is due.")
 #: A phone whose push service keeps refusing is given up on after this many.
 GIVE_UP_AFTER = 10
 
@@ -75,6 +76,7 @@ def alerts(report: Dict[str, Any], checkins: Dict[str, Any], *, today: _dt.date,
                     "Upload this week's so the figures catch up.",
             "url": URL_TIMESHEETS,
         })
+    out += said_alerts(checkins.get("people") or [], prefix=prefix, url=URL_CHECKINS)
     for person in checkins.get("people") or []:
         if person["signal"]["key"] != "rest":
             continue
@@ -97,6 +99,33 @@ def alerts(report: Dict[str, Any], checkins: Dict[str, Any], *, today: _dt.date,
             "body": ask.get("detail", ""),
             "url": URL_RESOURCING,
         })
+    return out
+
+
+def said_alerts(people: Sequence[Dict[str, Any]], *, prefix: str,
+                url: str) -> List[Dict[str, Any]]:
+    """What people said from their My day: stuck, help needed, days off."""
+    out = []
+    for person in people:
+        name = person["name"]
+        for ask in person.get("asks") or []:
+            what = ask["task"] or ""
+            out.append({
+                "key": f"ask:{ask['id']}",
+                "title": (f"{prefix}{name} is stuck" if ask["kind"] == "stuck"
+                          else f"{prefix}{name} needs help"),
+                "body": "; ".join(filter(None, [what, ask["note"]])) or "Ask them what they need.",
+                "url": url,
+            })
+        for off in person.get("off_news") or []:
+            first, last = _day(off["start"]), _day(off["end"])
+            when = _short(first) if first == last else f"{_short(first)} to {_short(last)}"
+            out.append({
+                "key": f"off:{off['id']}",
+                "title": f"{prefix}{name} is off {when}",
+                "body": off["note"] or "Entered from their My day. The plan leaves them out.",
+                "url": url,
+            })
     return out
 
 
@@ -173,6 +202,8 @@ def member_alerts(report: Dict[str, Any], checkins: Dict[str, Any], engineer: st
                     + "Agree with them what can wait, and tell your manager.",
             "url": URL_MINE,
         })
+    out += said_alerts([people[n] for n in led if n in people and n != engineer],
+                       prefix=prefix, url=URL_MINE)
     out += _due_alerts(mine + theirs, _next_working_day(today, checkins),
                        prefix=prefix, url=URL_MINE)
     return out

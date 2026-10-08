@@ -208,6 +208,23 @@ CREATE TABLE IF NOT EXISTS inbox (
     UNIQUE (user_id, message_key)
 );
 CREATE INDEX IF NOT EXISTS inbox_user ON inbox(user_id, status);
+
+-- What a team member said from their own My day: a task done, stuck, help
+-- needed, or days off.  Only ever written for the person signed in; the lead
+-- sees the open ones in Check-ins and marks them seen.
+CREATE TABLE IF NOT EXISTS member_marks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    person      TEXT NOT NULL,
+    kind        TEXT NOT NULL,          -- done | stuck | help | off
+    task_id     INTEGER,
+    absence_id  INTEGER,
+    note        TEXT NOT NULL DEFAULT '',
+    before      TEXT NOT NULL DEFAULT '',  -- the task's status before, to undo
+    created_at  TEXT NOT NULL,
+    cleared_at  TEXT,
+    cleared_by  TEXT NOT NULL DEFAULT ''   -- undone | lead | done
+);
+CREATE INDEX IF NOT EXISTS member_marks_person ON member_marks(person, cleared_at);
 """ + "".join(f"""
 -- Counts the writes to the timesheet rows alone, whoever makes them, so the
 -- rows read before can be kept through every other kind of change.
@@ -508,6 +525,8 @@ class TimesheetStore:
                        "WHERE to_person = ?", (new, old))
             db.execute("UPDATE absences SET person = ? WHERE person = ?",
                        (new, old))
+            db.execute("UPDATE member_marks SET person = ? WHERE person = ?",
+                       (new, old))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
                        "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
@@ -619,6 +638,42 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM absences WHERE id = ?",
                               (int(absence_id),)).rowcount
+
+    # -- what team members said from My day -----------------------------------
+    def marks(self, *, person: Optional[str] = None, open_only: bool = False,
+              since: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql, args = "SELECT * FROM member_marks WHERE 1 = 1", []
+        if person is not None:
+            sql += " AND person = ?"
+            args.append(person)
+        if open_only:
+            sql += " AND cleared_at IS NULL"
+        if since is not None:
+            sql += " AND created_at >= ?"
+            args.append(since)
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(sql + " ORDER BY id", args)]
+
+    def mark(self, mark_id: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM member_marks WHERE id = ?",
+                             (int(mark_id),)).fetchone()
+            return dict(row) if row else None
+
+    def add_mark(self, person: str, kind: str, *, task_id: Optional[int] = None,
+                 absence_id: Optional[int] = None, note: str = "",
+                 before: str = "") -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO member_marks (person, kind, task_id, absence_id, note, "
+                "before, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (person, kind, task_id, absence_id, note, before, now())).lastrowid
+
+    def clear_mark(self, mark_id: int, by: str) -> int:
+        with self._connect() as db:
+            return db.execute(
+                "UPDATE member_marks SET cleared_at = ?, cleared_by = ? "
+                "WHERE id = ? AND cleared_at IS NULL", (now(), by, int(mark_id))).rowcount
 
     # -- the drawing list ------------------------------------------------------
     def drawing_list(self) -> Dict[int, Dict[str, Any]]:

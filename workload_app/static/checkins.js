@@ -356,7 +356,7 @@ function personCard(p, data) {
     p.checkpoints.length
       ? el('ul', { class: 'ci-points' }, ...p.checkpoints.map((c) => el('li', { class: `ci-point ci-${c.level}` },
         el('span', { class: `pill pill-${LEVEL_TONE[c.level]}` }, LEVEL_LABEL[c.level]),
-        el('span', {}, c.text))))
+        el('span', {}, c.text), seenButton(c))))
       : el('p', { class: 'muted ci-none' }, 'Nothing to raise. A quick hello will do.'));
 }
 
@@ -374,7 +374,27 @@ function checkpointTable(people) {
           el('span', { class: `pill pill-${LEVEL_TONE[c.level]}` }, LEVEL_LABEL[c.level])),
         el('td', {}, el('span', { class: 'who-chip' },
           el('span', { class: 'swatch', style: `background:${engineerColor(c.name)}` }), c.name)),
-        el('td', { class: 'ci-ask' }, c.text))))));
+        el('td', { class: 'ci-ask' }, c.text, seenButton(c)))))));
+}
+
+/* What somebody said from their My day stays until the lead says they have
+   picked it up. */
+function seenButton(point) {
+  if (!point.mark_id) return null;
+  return el('button', {
+    class: 'btn btn-sm ci-seen', type: 'button',
+    title: 'You have picked this up: it leaves the list, and they see you have.',
+    onclick: async (event) => {
+      event.target.disabled = true;
+      try {
+        await api(`/api/marks/${point.mark_id}/seen`, { method: 'POST' });
+        await loadCheckins(true);
+      } catch (error) {
+        event.target.disabled = false;
+        toast(error.message, 'bad');
+      }
+    },
+  }, 'Seen');
 }
 
 function escapeHtml(text) {

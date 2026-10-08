@@ -359,10 +359,12 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
           project_names: Mapping[str, str], saved: Sequence[Dict[str, Any]] = (),
           slots: Optional[Mapping[int, Dict[str, Any]]] = None,
           today: Optional[_dt.date] = None,
-          management: Optional[Any] = None) -> Dict[str, Any]:
+          management: Optional[Any] = None,
+          marks: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """The whole Check-ins page. ``management`` (a ``management.Plan``) puts
     the time leaders give their people into the free hours, and gives each
-    leader their meetings with the agenda for each."""
+    leader their meetings with the agenda for each. ``marks`` are what people
+    said from their own My day: stuck, help needed, days off."""
     today = today or _dt.date.today()
     active = [p for p in roster if p.get("active", True)]
     names = [p["name"] for p in active]
@@ -395,6 +397,15 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         mine = sorted(((h, p) for (n, p), h in rates.items() if n == name), reverse=True)
         top = project_names.get(mine[0][1]) or mine[0][1] if mine else ""
         week = days[:5]
+        asks, off_news = _said(name, marks, tasks, today)
+        points = checkpoints(
+            name, tasks=tasks, today=today, config=config, load=load,
+            last_row=past["last_row"].get(name), team_last=through,
+            ahead=days, top_work=top)
+        stuck_tasks = {a["task_id"] for a in asks if a["kind"] == "stuck"}
+        points = [_ask_point(a) for a in asks] + [
+            p for p in points
+            if not (p["kind"] == "blocked" and p.get("task_id") in stuck_tasks)]
         people.append({
             "name": name,
             "grade_label": people_module.grade_label(
@@ -411,10 +422,9 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             "free_week": round(sum(d["free"] for d in week), 1),
             "free_total": round(sum(d["free"] for d in days), 1),
             "next_free": next((d["date"] for d in days if d["free"] >= 1), None),
-            "checkpoints": checkpoints(
-                name, tasks=tasks, today=today, config=config, load=load,
-                last_row=past["last_row"].get(name), team_last=through,
-                ahead=days, top_work=top),
+            "checkpoints": points,
+            "asks": asks,
+            "off_news": off_news,
             "leads": len(led.get(name, ())),
             "is_manager": person.get("grade") == "manager",
             "leading_hours": leading_hours.get(name, 0.0),
@@ -459,6 +469,51 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         "thresholds": {"rest_load": REST_LOAD, "busy_load": BUSY_LOAD,
                        "quiet_load": QUIET_LOAD, "over_line": OVER_LINE},
     }
+
+
+#: How long a lead hears of somebody's newly entered time off.
+OFF_NEWS_DAYS = 7
+
+
+def _said(name: str, marks: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
+          today: _dt.date) -> tuple:
+    """What this person said from My day that is still open: asks for help or
+    stuck tasks (not once the task is done), and time off entered lately."""
+    by_id = {t.id: t for t in tasks}
+    since = (today - _dt.timedelta(days=OFF_NEWS_DAYS)).isoformat()
+    asks, off = [], []
+    for mark in marks:
+        if mark["person"] != name or mark.get("cleared_at"):
+            continue
+        task = by_id.get(mark["task_id"]) if mark.get("task_id") else None
+        if mark["kind"] in ("stuck", "help"):
+            if mark.get("task_id") and (task is None or task.done
+                                        or name not in task.assignees):
+                continue
+            label = ""
+            if task is not None:
+                label = task.name or f"Task {task.id}"
+                if task.project_number:
+                    label = f"{label} ({task.project_number})"
+            asks.append({"id": mark["id"], "kind": mark["kind"], "note": mark["note"],
+                         "task_id": mark.get("task_id"), "task": label,
+                         "at": mark["created_at"]})
+        elif mark["kind"] == "off" and (mark["created_at"] or "") >= since \
+                and mark.get("absence"):
+            off.append({"id": mark["id"], "start": mark["absence"]["start"],
+                        "end": mark["absence"]["end"], "note": mark["note"]})
+    return asks, off
+
+
+def _ask_point(ask: Dict[str, Any]) -> Dict[str, Any]:
+    said = f": \u201c{ask['note']}\u201d" if ask["note"] else ""
+    if ask["kind"] == "stuck":
+        text = f"Stuck on {ask['task']}{said}. What do they need to get it moving?"
+    elif ask["task"]:
+        text = f"Asked for help with {ask['task']}{said}."
+    else:
+        text = f"Asked for help{said}."
+    return _point("now", ask["kind"], text, task_id=ask["task_id"], mark_id=ask["id"])
 
 
 def _leading(management: Any, people: Sequence[Dict[str, Any]], *,
