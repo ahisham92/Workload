@@ -57,7 +57,9 @@ class Handler(BaseHTTPRequestHandler):
             query=parse_qs(parsed.query),
             body=body,
             cookies=parse_cookies(self.headers.get("Cookie")),
-            secure=self.headers.get("X-Forwarded-Proto", "").lower() == "https",
+            # The first hop is the browser's, as on a host (see wsgi).
+            secure=(self.headers.get("X-Forwarded-Proto") or "").split(",")[0]
+            .strip().lower() == "https",
             accept_encoding=self.headers.get("Accept-Encoding") or "",
             if_none_match=self.headers.get("If-None-Match") or "",
         )

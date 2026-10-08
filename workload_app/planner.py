@@ -36,7 +36,7 @@ from . import config as cfg
 from . import derive
 from . import people as people_module
 from . import tasks as task_sheet
-from .model import ValidationError
+from .model import ValidationError, today as _today
 
 #: Working days of bookings a pace is read from.
 LOOKBACK_DAYS = 10
@@ -149,6 +149,8 @@ def _parse_share(value: Any) -> Optional[float]:
     try:
         share = float(value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(share):
         return None
     if share > 1.0 + 1e-9:          # typed as a percentage
         share /= 100.0
@@ -368,7 +370,7 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     (``management.Plan.taken_a_day``).
     """
     management = management or {}
-    today = today or _dt.date.today()
+    today = today or _today()
     window = days_ahead(today, days, config)
     end = window[-1] if window else today
     a_day = task_sheet.hours_per_day(config)
@@ -576,6 +578,9 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     first.  Nobody is filled past ``FILL_TO`` to relieve somebody else.
     """
     plan = list(moves)
+    # Somebody who has left keeps a pace until their last timesheets age out
+    # of it, but no work is handed to them.
+    gone = {p["name"] for p in roster if not p.get("active", True)}
     history: Dict[str, set] = defaultdict(set)
     for row in rows:
         if row.get("job_number"):
@@ -608,7 +613,7 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
             movable = pace_hours - min(pace_hours, item["task_hours"])
             if movable < 1:
                 continue
-            target = _best_target(view, person, item["project"], history)
+            target = _best_target(view, person, item["project"], history, gone)
             if target is None:
                 continue
             room = target["capacity"] * FILL_TO - target["after"]["hours"]
@@ -629,10 +634,13 @@ def suggest(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
 
 
 def _best_target(view: Dict[str, Any], person: Dict[str, Any], project: str,
-                 history: Mapping[str, set]) -> Optional[Dict[str, Any]]:
+                 history: Mapping[str, set], gone: Iterable[str] = ()
+                 ) -> Optional[Dict[str, Any]]:
+    gone = set(gone)
     candidates = [
         p for p in view["people"]
         if p["name"] != person["name"] and p["role"] == person["role"]
+        and p["name"] not in gone
         and p["after"]["hours"] < p["capacity"] * FILL_TO - 1
     ]
     knows = history.get(project, set())

@@ -691,7 +691,12 @@ def busy_times(text: str, *, start: _dt.date, end: _dt.date,
                     except ValueError:
                         pass
         oof = is_oof(lines_)
-        for local in _repeats(begin.local, _rule(_first(lines_, "RRULE")[2]), horizon,
+        rule = _rule(_first(lines_, "RRULE")[2])
+        if not begin.utc and begin.tzid and rule.get("UNTIL", "").endswith("Z"):
+            # Outlook gives the end of a series in UTC (the last meeting's
+            # start); the meetings are walked in their own wall clock.
+            rule["UNTIL"] = _wall_clock(rule["UNTIL"], begin.tzid, zones)
+        for local in _repeats(begin.local, rule, horizon,
                               since=window_start - _dt.timedelta(days=2)):
             if begin.all_day:
                 if oof and local not in skipped:
@@ -703,6 +708,20 @@ def busy_times(text: str, *, start: _dt.date, end: _dt.date,
                 continue
             add(first, first + length)
     return join(out)
+
+
+def _wall_clock(until: str, tzid: str, zones: _Zones) -> str:
+    """A UTC ``UNTIL`` as the wall-clock time in ``tzid``; as it was when
+    it cannot be read or the zone is not known."""
+    try:
+        moment = _parse_local(until)
+    except ValueError:
+        return until
+    offset = zones.offset(tzid, moment)
+    if offset is None:
+        return until
+    offset = zones.offset(tzid, moment + offset) or offset
+    return (moment + offset).strftime("%Y%m%dT%H%M%S")
 
 
 def _clock(hhmm: str) -> _dt.time:

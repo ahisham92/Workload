@@ -161,17 +161,23 @@ def _due_alerts(items: Sequence[Dict[str, Any]], tomorrow: Optional[str], *,
 
 
 def member_alerts(report: Dict[str, Any], checkins: Dict[str, Any], engineer: str, *,
-                  today: _dt.date, prefix: str = "") -> List[Dict[str, Any]]:
+                  today: _dt.date, prefix: str = "",
+                  led: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     """What a team member is told: their own deadlines, and -- when they lead
     people -- their team's: who needs to ease off, what is late or due.
 
-    Nobody outside their own team is named, and none of the manager's other
-    figures are in it.
+    ``led`` is who they may look at on their own page (the people they lead
+    graded below them); without it, everybody Check-ins says they lead.
+    Nobody outside that is named, and none of the manager's other figures
+    are in it.
     """
     week = report["week_start"]
-    led = next((l["people"] for l in checkins.get("leading") or []
-                if l["name"] == engineer), [])
+    if led is None:
+        led = next((l["people"] for l in checkins.get("leading") or []
+                    if l["name"] == engineer), [])
+    led = list(led)
     team = set(led)
+    allowed = team | {engineer}
     people = {p["name"]: p for p in checkins.get("people") or []}
     mine = [d for d in report["this_week"]["due"] if engineer in d["people"]]
     theirs = [d for d in report["this_week"]["due"]
@@ -203,7 +209,11 @@ def member_alerts(report: Dict[str, Any], checkins: Dict[str, Any], engineer: st
             for name in ease]
     out += said_alerts([people[n] for n in led if n in people and n != engineer],
                        prefix=prefix, url=URL_MINE)
-    out += _due_alerts(mine + theirs, _next_working_day(today, checkins),
+    # Who else is on a submission is only said when they are somebody this
+    # person may see anyway.
+    shown = [{**d, "people": [p for p in d["people"] if p in allowed]}
+             for d in mine + theirs]
+    out += _due_alerts(shown, _next_working_day(today, checkins),
                        prefix=prefix, url=URL_MINE)
     return out
 
@@ -294,7 +304,12 @@ class _Views:
                     service.lock_week_if_due()
                 except Exception:          # pragma: no cover - never stops a run
                     traceback.print_exc()
-                self._seen[unit_id] = (service.weekly(), service.checkins())
+                view = service.checkins()
+                # Who each leader may hear about: the same people the app
+                # lets them look at, graded below them.
+                led = {lead["name"]: self.app._led_by(service, lead["name"])
+                       for lead in view.get("leading") or []}
+                self._seen[unit_id] = (service.weekly(), view, led)
             finally:
                 service.close()
         return self._seen[unit_id]
@@ -314,7 +329,7 @@ def _new_for(app, views: _Views, user: Dict[str, Any], unit_ids, today, errors, 
         if unit_ids is not None and unit_id not in unit_ids:
             continue
         try:
-            report, view = views.of(owner_id, unit_id)
+            report, view, led = views.of(owner_id, unit_id)
         except Exception as error:             # one bad unit never stops the rest
             errors.append(f"{name}: {error}")
             if log:
@@ -324,7 +339,8 @@ def _new_for(app, views: _Views, user: Dict[str, Any], unit_ids, today, errors, 
         fresh += app.accounts.new_push_messages(
             user_id, unit_id,
             alerts(report, view, today=today, prefix=prefix) if manager
-            else member_alerts(report, view, engineer, today=today, prefix=prefix))
+            else member_alerts(report, view, engineer, today=today, prefix=prefix,
+                               led=led.get(engineer, [])))
     return fresh
 
 

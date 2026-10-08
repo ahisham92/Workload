@@ -12,10 +12,12 @@ import base64
 import datetime as _dt
 import functools
 import hashlib
+import io
 import json
 import threading
 import traceback
 import uuid
+import zipfile
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
@@ -51,6 +53,9 @@ HOLIDAYS_AHEAD_DAYS = 400
 HOLIDAY_SETTING = "holiday_calendar"
 #: What-ifs kept per unit, at most.
 WHAT_IF_LIMIT = 12
+#: Uploads read but not yet written, kept per open unit; an older one is let
+#: go, so previews nobody went on with do not pile up in memory.
+STAGED_LIMIT = 6
 
 
 #: Which person in the unit the signed-in manager is ("this is me"), one per
@@ -302,7 +307,14 @@ class WorkloadService:
 
     def update_engineer(self, engineer: str, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            return self._saved(self.workbook.update_engineer(engineer, body))
+            result = self.workbook.update_engineer(engineer, body)
+            if result.get("renamed"):
+                # A team's lead is kept by name: it follows the rename, or
+                # they would stop leading the team they still lead.
+                for team in self.store.teams():
+                    if team.get("lead") == engineer:
+                        self.store.update_team(team["id"], lead=result["engineer"])
+            return self._saved(result)
 
     def remove_engineer(self, engineer: str) -> Dict[str, Any]:
         with self._lock:
@@ -451,15 +463,31 @@ class WorkloadService:
                 registered_only=registered_only,
                 keep_job_types=cfg.PROPOSAL_JOB_TYPES,
             )
+            # A wildcard such as "*Ahmed*" also fits "Kirolos Ahmed": rows
+            # whose full name is already another engineer's are theirs.
+            seen = self.store.names_by_full_name()
+            theirs = sorted({f"{full} ({seen[full]})" for full in (
+                r["full_name"] for r in parsed.records())
+                if seen.get(full) in engineers and seen[full] != engineer})
+            if theirs:
+                parsed.errors.append(
+                    f"This export holds rows for {', '.join(theirs)}, whose hours "
+                    f"are already another engineer's. Upload it under them, or "
+                    f"choose {engineer}'s own export.")
             existing = self.store.rows_for(engineer)
             duplicates = _duplicates(existing, parsed.records()) if parsed.rows else 0
             token = uuid.uuid4().hex
-            self._staged[token] = parsed
+            self._keep_staged(token, parsed)
             payload = parsed.to_dict()
             payload["token"] = token
             payload["existing_rows"] = len(existing)
             payload["duplicate_rows_if_appended"] = duplicates
             return payload
+
+    def _keep_staged(self, token: str, staged: Any) -> None:
+        while len(self._staged) >= STAGED_LIMIT:
+            self._staged.pop(next(iter(self._staged)))
+        self._staged[token] = staged
 
     def apply_timesheet(self, token: str, mode: str) -> Dict[str, Any]:
         with self._lock:
@@ -537,6 +565,14 @@ class WorkloadService:
                 parsed.append(result)
 
             records = _without_repeats([p.records() for p in parsed if p.ok])
+            # A row with no name (a totals line, a blank cell) is nobody's: it
+            # cannot become a person, so it is left out and said so.
+            nameless = [r for r in records if not r["full_name"].strip()]
+            if nameless:
+                records = [r for r in records if r["full_name"].strip()]
+                warnings.append(
+                    f"{len(nameless):,} row(s) have no FullName, so they are "
+                    f"left out ({round(sum(r['hours'] for r in nameless), 2):g} h).")
             if not records and not errors:
                 errors.append("None of the files held any timesheet rows.")
             people = self._people_in(records)
@@ -548,8 +584,8 @@ class WorkloadService:
             if outside:
                 warnings.append(outside_message(outside))
             token = uuid.uuid4().hex
-            self._staged[token] = {"records": records, "people": people,
-                                   "files": [p.source_name for p in parsed]}
+            self._keep_staged(token, {"records": records, "people": people,
+                                      "files": [p.source_name for p in parsed]})
             dates = [r["date"] for r in records if r.get("date")]
             return {
                 "token": token,
@@ -651,17 +687,32 @@ class WorkloadService:
         """
         wb = self.workbook
         engineers = wb.engineers()
-        matchers = [(e.short_name, pattern_to_regex(e.pattern))
-                    for e in engineers if e.pattern]
+        # The most exact pattern first: "Kirolos Ahmed" is Kirolos's own
+        # pattern before it is one of the many names "*Ahmed*" also fits.
+        matchers = [(e.short_name, "*" not in e.pattern, pattern_to_regex(e.pattern))
+                    for e in sorted(engineers, key=lambda e: (
+                        "*" in e.pattern, -len(e.pattern.replace("*", ""))))
+                    if e.pattern]
         established = set(self.store.people_with_rows()) | {
             p["name"] for p in self.store.people()}
         # Somebody with rows but no place on the team has no pattern to
         # match, so the rows they already have say who they are.
         seen = self.store.names_by_full_name()
+        # Whose rows already carry which full names: a wildcard does not make
+        # somebody already known under one full name a second person too.
+        held: Dict[str, set] = {}
+        for full_name, person in seen.items():
+            held.setdefault(person, set()).add(full_name)
+        placed = {e.short_name for e in engineers}
         out: Dict[str, Dict[str, Any]] = {}
         unknown: List[str] = []
         for full in dict.fromkeys(r["full_name"] for r in records):
-            hit = next((short for short, rx in matchers if rx.match(full)), None)
+            hit = seen.get(full) if seen.get(full) in placed else None
+            if hit is None:
+                hit = next((short for short, exact, rx in matchers
+                            if rx.match(full) and (
+                                exact or not held.get(short)
+                                or full in held[short])), None)
             if hit is None:
                 hit = seen.get(full) or (full if full in established else None)
             if hit is None:
@@ -1003,6 +1054,12 @@ class WorkloadService:
             absences=absences, leave=leave, own_holidays=public["own"])
         return config, absences, leave, public, choice
 
+    def _work_calendar(self, wb) -> Dict[str, Any]:
+        """The working-day settings less the unit's holidays and leave."""
+        roster = self._roster(wb)
+        return self._calendar(wb, self.store.all_rows(),
+                              roster["people"], roster["teams"])[0]
+
     def _leave(self, wb, rows) -> Dict[str, Any]:
         """Days off booked on the timesheets, read once per revision."""
         codes = calendar_.leave_codes(wb)
@@ -1127,6 +1184,7 @@ class WorkloadService:
                         f"be given to them. Add them on Team, or hand them a "
                         f"share of the project instead."])
             saved_projects, saved_tasks = 0, 0
+            changed: Dict[int, Dict[str, Any]] = {}
             for move in moves:
                 if move["kind"] == "project":
                     self.store.add_plan_move(
@@ -1135,12 +1193,18 @@ class WorkloadService:
                         start=start, end=end)
                     saved_projects += 1
                 else:
-                    task = tasks_by_id[move["task_id"]].to_dict()
+                    # Two moves on one task build on each other, not on the
+                    # task as it was before the first.
+                    task = changed.get(move["task_id"]) or \
+                        tasks_by_id[move["task_id"]].to_dict()
                     task["assignees"] = list(dict.fromkeys(
                         move["to"] if n == move["from"] else n
                         for n in task["assignees"]))
-                    wb.save_task(task, task_id=move["task_id"])
+                    changed[move["task_id"]] = task
                     saved_tasks += 1
+            for task_id, task in changed.items():
+                # A request's booked time goes to whoever has it now.
+                self._follow_slot(wb.save_task(task, task_id=task_id))
             result: Dict[str, Any] = {"projects_moved": saved_projects,
                                       "tasks_moved": saved_tasks}
             if saved_tasks:
@@ -1673,7 +1737,11 @@ class WorkloadService:
                 return False
             inputs = self._planning(self.workbook)
             days = weekplan.current_week(_today(), inputs["config"], daily.week_of)
-            if not days or self.store.week_plan(days[0].isoformat()):
+            # Only once the week has begun: over the weekend the coming week
+            # is shown, but copied on its first working day, with whatever
+            # was changed before then.
+            if not days or days[0] > _today() \
+                    or self.store.week_plan(days[0].isoformat()):
                 return False
             return bool(self._keep_week(inputs, days))
 
@@ -1926,12 +1994,17 @@ class WorkloadService:
             mark = self._my_mark(engineer, mark_id)
             if mark["kind"] == myday.OFF:
                 raise myday.MyDayError(["Take time off back from the list of days off."])
-            if mark["task_id"] is not None and mark["kind"] in myday.STATUS_FOR:
+            if mark["task_id"] is not None and mark["kind"] in myday.TASK_MARKS:
                 wb = self.workbook
                 task = next((t for t in wb.task_records()
                              if t.id == mark["task_id"]
                              and engineer in t.assignees), None)
-                if task is not None and task.status == myday.STATUS_FOR[mark["kind"]] \
+                set_by = myday.STATUS_FOR.get(mark["kind"])
+                if set_by is None and mark["before"] != myday.STATUS_FOR[myday.STUCK]:
+                    # Help said after Stuck took its place and kept the task
+                    # blocked; taking the help back unblocks it too.
+                    set_by = myday.STATUS_FOR[myday.STUCK]
+                if task is not None and task.status == set_by \
                         and mark["before"] in cfg.TASK_STATUSES:
                     data = task.to_dict()
                     data["status"] = mark["before"]
@@ -2326,7 +2399,7 @@ class WorkloadService:
             return {
                 "tasks": wb.tasks(),
                 "settings": wb.task_settings(),
-                "load": wb.task_load(),
+                "load": wb.task_load(config=self._work_calendar(wb)),
                 "engineers": wb.engineer_names(),
                 "projects": [{"number": p.number, "name": p.name}
                              for p in wb.projects()],
@@ -2354,7 +2427,21 @@ class WorkloadService:
     def update_task(self, task_id: int, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             task = self.workbook.save_task(body, task_id=task_id)
+            self._follow_slot(task)
             return {"task": task, "save": self._commit()}
+
+    def _follow_slot(self, task: Dict[str, Any]) -> None:
+        """A request's booked time goes with it: handed to somebody else, it
+        moves onto their day; no longer a request, or nobody's, it is let go
+        (or it would stay on the old person's day, and the new one's not)."""
+        slot = self.store.slots().get(task["id"])
+        if slot is None:
+            return
+        assignees = list(task.get("assignees") or [])
+        if task.get("kind") != cfg.TASK_REQUEST_KIND or not assignees:
+            self.store.remove_slot(task["id"])
+        elif slot["person"] not in assignees:
+            self.store.set_slot(task["id"], assignees[0], slot["start"], slot["end"])
 
     def delete_task(self, task_id: int) -> Dict[str, Any]:
         with self._lock:
@@ -2373,9 +2460,14 @@ class WorkloadService:
     def generate_submission_tasks(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             row = body.get("deliverable_row")
-            return self._saved(self.workbook.generate_submission_tasks(
-                only_row=int(row) if row not in (None, "") else None,
-                include_past=bool(body.get("include_past"))))
+            try:
+                only_row = int(row) if row not in (None, "") else None
+            except (TypeError, ValueError):
+                raise ValidationError(["The deliverable could not be identified."])
+            wb = self.workbook
+            return self._saved(wb.generate_submission_tasks(
+                only_row=only_row, include_past=bool(body.get("include_past")),
+                config=self._work_calendar(wb)))
 
     def generate_weekly_meetings(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -2551,7 +2643,27 @@ def _decode(content: Any) -> bytes:
             HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
             f"That file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
         )
+    if data[:2] == b"PK" and _unpacks_too_large(data):
+        raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                       "That file unpacks to far more than any workbook; "
+                       "it was not opened.")
     return data
+
+
+#: A workbook is a zip: a small file can unpack to many gigabytes and take
+#: the whole site down with it. Real workbooks stay far below these.
+MAX_UNPACKED_BYTES = 256 * 1024 * 1024
+MAX_ZIP_ENTRIES = 10000
+
+
+def _unpacks_too_large(data: bytes) -> bool:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+    except (zipfile.BadZipFile, ValueError):
+        return False                # not a zip after all: the reader says so
+    return (len(entries) > MAX_ZIP_ENTRIES
+            or sum(e.file_size for e in entries) > MAX_UNPACKED_BYTES)
 
 
 def _stage(service: WorkloadService, body: Dict[str, Any]) -> Dict[str, Any]:

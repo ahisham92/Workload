@@ -899,8 +899,12 @@ class Accounts:
 # --------------------------------------------------------------------------
 
 def _hash(password: str, salt: bytes, iterations: int) -> bytes:
+    # surrogatepass: text no keyboard makes (a lone surrogate, sent as JSON)
+    # is a wrong password at sign-in, never a crash.  Every real password
+    # encodes exactly as before.
     return hashlib.pbkdf2_hmac(
-        "sha256", unicodedata.normalize("NFKC", password).encode("utf-8"),
+        "sha256", unicodedata.normalize("NFKC", password).encode(
+            "utf-8", "surrogatepass"),
         salt, iterations)
 
 
@@ -910,7 +914,7 @@ def _check_role(role: str) -> None:
 
 
 def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
@@ -965,6 +969,10 @@ def check_password(password: str, username: str = "") -> None:
         raise AccountError("The password cannot be the username.")
     if password.strip() == "":
         raise AccountError("The password cannot be only spaces.")
+    try:
+        password.encode("utf-8")
+    except UnicodeEncodeError:
+        raise AccountError("The password has characters that cannot be typed.")
 
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")

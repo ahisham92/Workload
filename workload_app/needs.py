@@ -49,6 +49,7 @@ from . import people as people_module
 from . import planner
 from . import tasks as task_sheet
 from .tasks import week_start
+from .model import today as _today
 
 #: How far ahead the forecast looks, in weeks.
 HORIZON_WEEKS = 12
@@ -110,7 +111,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
              planned: Sequence[Dict[str, Any]] = (),
              team_names: Optional[Mapping[str, str]] = None,
              management: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
-    today = today or _dt.date.today()
+    today = today or _today()
     # Leading people takes part of a leader's day; that part does no project work.
     management = management or {}
     hours_per_mm = float(hours_per_mm or 0) or 185.0
@@ -132,7 +133,10 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                 people_module.role_of(person.get("grade")))
 
     # -- who does each project's work: recent hours by team and kind -------
-    dated = [r for r in rows if r.get("date") and r.get("job_number")]
+    # Leave booked ahead is on the timesheets too; it is no part of who has
+    # been doing what, nor of how recent the data is.
+    dated = [r for r in rows if r.get("date") and r.get("job_number")
+             and r["date"] <= today]
     last_day = max((r["date"] for r in dated), default=None)
     since = last_day - _dt.timedelta(weeks=SPLIT_WEEKS) if last_day else None
     split: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(lambda: defaultdict(float))

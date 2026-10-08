@@ -52,10 +52,17 @@ def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
         return 0.0
     each = task.hours_each()
     if task.due < today:                       # overdue: it is today's
-        return each if day == today else 0.0
+        # (or the next working day's, when today is a weekend or a holiday)
+        return each if day == _first_working(today, config) else 0.0
     first = min(max(task.start or today, today), task.due)
-    days = task_sheet.working_days(first, task.due, config) or [task.due]
+    days = (task_sheet.working_days(first, task.due, config)
+            or [_first_working(first, config)])
     return each / len(days) if day in days else 0.0
+
+
+def _first_working(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
+    """``day`` when it is a working day, else the next one."""
+    return (planner.days_ahead(day, 1, config) or [day])[0]
 
 
 def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]],

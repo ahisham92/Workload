@@ -185,11 +185,21 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
     recent = months[-WINDOW:]
     # The month we are in counts only as far as today: capacity to date.
     done = {month: month_done(month, today, work_days) for month in months}
+    # Nor does anybody have capacity in the months before they joined: a
+    # month nobody could have booked is not a month they sat idle.
+    joined = {name: min(booked) for name, booked in hours.items() if booked}
+
+    def own_done(name: str) -> Dict[str, float]:
+        first = joined.get(name)
+        return {month: (value if first is not None and month >= first else 0.0)
+                for month, value in done.items()}
 
     member_rows = []
+    member_done: Dict[str, Dict[str, float]] = {}
     for name, person in people.items():
         booked = hours.get(name, {})
         capacity = float(person.get("capacity_hours") or monthly_capacity)
+        member_done[name] = own_done(name)
         member_rows.append({
             "name": name,
             "grade": person["grade"],
@@ -203,8 +213,9 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
             "projects": len(person_projects.get(name, ())),
             "by_month": {month: round(booked.get(month, 0.0), 1)
                          for month in months},
-            "recent_utilisation": _utilisation(booked, recent, capacity, done),
-            "utilisation": _utilisation(booked, months, capacity, done),
+            "recent_utilisation": _utilisation(booked, recent, capacity,
+                                               member_done[name]),
+            "utilisation": _utilisation(booked, months, capacity, member_done[name]),
         })
 
     team_rows = []
@@ -218,6 +229,11 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
         for member in members:
             for month, value in member["by_month"].items():
                 booked[month] += value
+        # Each month's capacity is the people who were there that month, as
+        # a share of the team's full capacity.
+        team_done = {month: (sum(m["monthly_capacity"] * member_done[m["name"]][month]
+                                 for m in members) / capacity if capacity else 0.0)
+                     for month in months}
         team_rows.append({
             "id": team_id,
             "name": teams[team_id]["name"] if team_id in teams else NO_TEAM,
@@ -232,9 +248,9 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
             "members": [m["name"] for m in members],
             "by_month": {month: round(booked.get(month, 0.0), 1)
                          for month in months},
-            "recent_utilisation": _utilisation(booked, recent, capacity, done),
-            "utilisation": _utilisation(booked, months, capacity, done),
-            "over_since": _over_since(booked, months, capacity, done),
+            "recent_utilisation": _utilisation(booked, recent, capacity, team_done),
+            "utilisation": _utilisation(booked, months, capacity, team_done),
+            "over_since": _over_since(booked, months, capacity, team_done),
         })
 
     return {
@@ -479,7 +495,8 @@ STARVED = 0.75
 
 
 def portfolio_map(store, projects: Sequence[Dict[str, Any]], *,
-                  year: Optional[int] = None) -> Dict[str, Any]:
+                  year: Optional[int] = None,
+                  today: Optional[_dt.date] = None) -> Dict[str, Any]:
     """Projects as circles, people as the threads between them.
 
     A circle's **size** is the effort still to spend to finish -- the forecast
@@ -498,8 +515,12 @@ def portfolio_map(store, projects: Sequence[Dict[str, Any]], *,
     somebody said so, and a person on several is on all of them -- which is
     what puts them between the circles.
     """
+    # Leave booked ahead is not recent effort, and a month not reached yet
+    # must not push the months actually worked out of the window.
+    today = today or model_today()
     rows = [row for row in store.all_rows()
-            if year is None or (row["date"] and row["date"].year == year)]
+            if (year is None or (row["date"] and row["date"].year == year))
+            and not (row["date"] and row["date"] > today)]
     months = sorted({month_of(row["date"]) for row in rows if row["date"]})
     recent = set(months[-WINDOW:])
 

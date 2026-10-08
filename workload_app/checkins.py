@@ -113,7 +113,8 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
         day, name = row.get("date"), row.get("engineer")
         if not day or not name:
             continue
-        if name not in last_row or day > last_row[name]:
+        # Leave booked ahead is not a timesheet that has come in.
+        if day <= through and (name not in last_row or day > last_row[name]):
             last_row[name] = day
         if name not in first_row or day < first_row[name]:
             first_row[name] = day
@@ -129,9 +130,12 @@ def history(rows: Iterable[Dict[str, Any]], names: Sequence[str],
         # Somebody who joined in the window had no hours to give before their
         # first timesheet day: a new joiner's first week is not a quiet one.
         joined = first_row.get(name)
+        # Nor are the days after their newest timesheet quiet ones: those
+        # hours have not come in yet (the check-in asks for them).
+        seen = last_row.get(name)
         series = []
         for start in starts:
-            end = min(start + _dt.timedelta(days=6), through)
+            end = min(start + _dt.timedelta(days=6), through, seen or through)
             days = [d for d in task_sheet.working_days(start, end, config)
                     if joined is None or d >= joined]
             off = sum(1 for d in days if d.isoformat() in own)

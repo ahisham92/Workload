@@ -71,7 +71,10 @@ def unit_workbook(unit: Unit, name: str = "") -> bytes:
           ([p.number, p.name, p.status, p.budget_mm, p.start, p.end,
             *[(figures.get(p.number) or {}).get(key) for key in (
                 "progress", "actual_mm", "earned_mm", "profit_mm", "cpi",
-                "remaining_mm", "first_charge", "last_charge")],
+                "remaining_mm")],
+            # The figures keep these as ISO text; written as dates.
+            *[stored_date((figures.get(p.number) or {}).get(key))
+              for key in ("first_charge", "last_charge")],
             p.notes] for p in unit.projects()),
           {1: 16, 2: 48, 15: 40})
 

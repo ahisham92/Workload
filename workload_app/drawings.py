@@ -19,6 +19,7 @@ The counts live in the unit's database beside the timesheet rows.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
@@ -45,6 +46,8 @@ def clean_count(value: Any) -> Optional[int]:
     try:
         number = float(str(value).strip().replace(",", ""))
     except ValueError:
+        raise DrawingsError(f"{value!r} is not a number of drawings.")
+    if not math.isfinite(number):
         raise DrawingsError(f"{value!r} is not a number of drawings.")
     if number < 0 or number != int(number):
         raise DrawingsError("A number of drawings is a whole number, 0 or more.")

@@ -5,7 +5,8 @@ revision, when it went to the client and the code it came back with.  It is
 the honest source of the numbers the app wants, so rather than having
 somebody count drawings and type a total, the list is uploaded:
 
-* **how many drawings** each deliverable has is the number of rows for it;
+* **how many drawings** each deliverable has is how many it lists (a
+  drawing listed once per revision counts once);
 * **how many are done** is how many have gone to the client;
 * **what came back** -- codes A, B and C (or 1 to 4) -- says whether a
   deliverable is approved, approved with comments, or to be revised.
@@ -30,7 +31,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .model import ValidationError
-from .timesheets import month_first as _month_first
+from .timesheets import _from_serial, month_first as _month_first
 
 #: The template's columns, in order, and what each may be headed in a list
 #: somebody already keeps.
@@ -79,24 +80,53 @@ def _job(text: Any) -> str:
     return re.sub(r"\s+", "", str(text or "")).upper()
 
 
+#: A time of day after a date ("9/3/2026 12:00:00 AM", "2026-03-09T00:00").
+_TIME = re.compile(r"[T\s]+\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*([AP]M)?$", re.IGNORECASE)
+#: Serials from 1950 on: a small number in a date column is not a date.
+_FIRST_SERIAL = 18264
+
+
 def _as_date(value: Any, month_first: bool = False) -> Optional[_dt.date]:
     if isinstance(value, _dt.datetime):
         return value.date()
     if isinstance(value, _dt.date):
         return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # A date cell the list's own tool wrote as a plain number.
+        return _from_serial(value) if value >= _FIRST_SERIAL else None
     text = str(value or "").strip()
     if not text:
         return None
+    if re.fullmatch(r"\d{5}(\.\d+)?", text):
+        return _as_date(float(text))
+    text = _TIME.sub("", text)
     # Day first, unless the list is month first; a date that cannot be read
     # the first way (12/31/2026) is read the other way round.
     slashed = ("%m/%d/%Y", "%d/%m/%Y") if month_first else ("%d/%m/%Y", "%m/%d/%Y")
     for fmt in ("%Y-%m-%d", *slashed, "%d-%m-%Y", "%d.%m.%Y", "%d %b %Y",
-                "%d-%b-%Y", "%d-%b-%y", "%d/%m/%y"):
-        try:
-            return _dt.datetime.strptime(text[:11].strip(), fmt).date()
-        except ValueError:
-            continue
+                "%d %B %Y", "%d-%b-%Y", "%d-%b-%y", "%d/%m/%y"):
+        for candidate in (text, text[:11].strip()):
+            try:
+                return _dt.datetime.strptime(candidate, fmt).date()
+            except ValueError:
+                continue
     return None
+
+
+#: A return code: "B", "Code 2", "Code B - approved with comments".
+_CODE = re.compile(r"(?:CODE\s*[:.\-]?\s*)?([A-D1-4])(?![A-Z])")
+#: A code written out in words, most telling first.
+_CODE_WORDS = (("COMMENT", "B"), ("AS NOTED", "B"), ("REJECT", "C"), ("REVISE", "C"),
+               ("RESUBMIT", "C"), ("APPROV", "A"), ("ACCEPT", "A"),
+               ("NO OBJECTION", "A"))
+
+
+def _code(raw: str) -> Optional[str]:
+    """``A``, ``B`` or ``C`` from what a list writes in its code column."""
+    found = _CODE.match(raw)
+    if found:
+        return CODES[found.group(1)]
+    return next((code for word, code in _CODE_WORDS if word in raw), None)
 
 
 # --------------------------------------------------------------------------
@@ -221,7 +251,7 @@ def _rows(rows: Iterable[Sequence[Any]], columns: Mapping[str, int]) -> List[Dic
         superseded = "supersed" in status.lower()
         issued = _as_date(get(cells, "issued"), month_first)
         code_raw = str(get(cells, "code") or "").strip().upper()
-        code = CODES.get(code_raw[-1:] if code_raw.startswith("CODE") else code_raw[:1])
+        code = _code(code_raw)
         out.append({
             "job_number": job,
             "deliverable": get(cells, "deliverable"),
@@ -286,9 +316,7 @@ def match(drawings: Sequence[Dict[str, Any]], deliverables: Sequence[Any]
         by_project[_job(d.project_number)].append(d)
     per: Dict[int, Dict[str, Any]] = {}
     unmatched: Dict[Tuple[str, str], int] = defaultdict(int)
-    for drawing in drawings:
-        if drawing["superseded"]:
-            continue
+    for drawing in _latest_revisions(drawings):
         candidates = by_project.get(drawing["job_number"], [])
         target = _match_one(drawing["deliverable"], candidates) if candidates else None
         if target is None:
@@ -313,6 +341,21 @@ def match(drawings: Sequence[Dict[str, Any]], deliverables: Sequence[Any]
         "drawings": sum(e["total"] for e in per.values()),
         "projects": sorted({_job(e["project_number"]) for e in per.values()}),
     }
+
+
+def _latest_revisions(drawings: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row a drawing: a list that keeps a row per revision (or the same
+    list uploaded twice) names a drawing number more than once, and only its
+    last row says where it stands. Superseded rows never count."""
+    latest: Dict[Any, Dict[str, Any]] = {}
+    for at, drawing in enumerate(drawings):
+        if drawing["superseded"]:
+            continue
+        key = ((drawing["job_number"], _norm(drawing["deliverable"]),
+                drawing["number"].upper()) if drawing["number"] else at)
+        latest.pop(key, None)
+        latest[key] = drawing
+    return list(latest.values())
 
 
 def _latest(entry: Dict[str, Any], key: str, day: Optional[_dt.date]) -> None:

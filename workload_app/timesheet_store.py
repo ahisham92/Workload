@@ -639,6 +639,8 @@ class TimesheetStore:
             db.execute("UPDATE OR REPLACE people SET name = ? WHERE name = ?",
                        (new, old))
             db.execute("UPDATE rows SET person = ? WHERE person = ?", (new, old))
+            # A team's lead is named the same way.
+            db.execute("UPDATE teams SET lead = ? WHERE lead = ?", (new, old))
             db.execute("UPDATE plan_moves SET from_person = ? "
                        "WHERE from_person = ?", (new, old))
             db.execute("UPDATE plan_moves SET to_person = ? "
@@ -666,6 +668,25 @@ class TimesheetStore:
                                (json.dumps(names),
                                 new if row["added_by"] == old else row["added_by"],
                                 row["id"]))
+            # Saved what-ifs name who work moves from and to.
+            for row in db.execute("SELECT id, moves FROM what_ifs").fetchall():
+                try:
+                    moves = json.loads(row["moves"] or "[]")
+                except ValueError:
+                    continue
+                if not isinstance(moves, list):
+                    continue
+                changed = False
+                for move in moves:
+                    if not isinstance(move, dict):
+                        continue
+                    for side in ("from", "to"):
+                        if move.get(side) == old:
+                            move[side] = new
+                            changed = True
+                if changed:
+                    db.execute("UPDATE what_ifs SET moves = ? WHERE id = ?",
+                               (json.dumps(moves), row["id"]))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
                        "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
@@ -739,6 +760,14 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM plan_moves WHERE id = ?",
                               (int(move_id),)).rowcount
+
+    def highest_task_id(self) -> int:
+        """The highest task id anything kept here still names."""
+        with self._connect() as db:
+            return int(db.execute(
+                "SELECT MAX(id) FROM (SELECT MAX(task_id) AS id FROM slots "
+                "UNION ALL SELECT MAX(task_id) FROM member_marks "
+                "UNION ALL SELECT MAX(task_id) FROM week_plans)").fetchone()[0] or 0)
 
     # -- time slots for requests -------------------------------------------
     def slots(self) -> Dict[int, Dict[str, Any]]:

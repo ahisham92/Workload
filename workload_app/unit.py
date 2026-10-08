@@ -449,7 +449,7 @@ class Unit:
         if "availability_years" in data:
             try:
                 years = sorted({int(y) for y in data["availability_years"] or []})
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 years = []
                 errors.append("Availability years must be years.")
             changes["availability_years"] = json.dumps(years) if years else None
@@ -1634,10 +1634,11 @@ class Unit:
         return task_list.save_settings(self, data)
 
     def task_load(self, *, weeks: Optional[int] = None,
-                  today: Optional[_dt.date] = None) -> Dict[str, Any]:
+                  today: Optional[_dt.date] = None,
+                  config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return task_list.load(
             task_list.read(self), self.engineer_names(),
-            self.task_settings(), today=today, weeks=weeks)
+            config or self.task_settings(), today=today, weeks=weeks)
 
     def save_task(self, data: Dict[str, Any],
                   task_id: Optional[int] = None) -> Dict[str, Any]:
@@ -1654,7 +1655,9 @@ class Unit:
 
     def generate_submission_tasks(self, *, only_row: Optional[int] = None,
                                   today: Optional[_dt.date] = None,
-                                  include_past: bool = False) -> Dict[str, Any]:
+                                  include_past: bool = False,
+                                  config: Optional[Dict[str, Any]] = None
+                                  ) -> Dict[str, Any]:
         """Fill in the run-up to every dated deliverable."""
         deliverables = []
         for source in self.deliverables():
@@ -1663,7 +1666,8 @@ class Unit:
             deliverables.append(item)
         return task_list.generate_submissions(
             self, deliverables, engineers=self.engineer_names(),
-            only_row=only_row, today=today, include_past=include_past)
+            only_row=only_row, today=today, include_past=include_past,
+            config=config)
 
     def generate_weekly_meetings(self, data: Dict[str, Any]) -> Dict[str, Any]:
         number = str(data.get("project_number") or "").strip()

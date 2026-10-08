@@ -8,6 +8,7 @@ a unit made before the database can be brought across.
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -36,25 +37,32 @@ class ValidationError(ValueError):
 def as_text(value: Any) -> str:
     if value is None:
         return ""
-    if isinstance(value, float) and value == int(value):
+    if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
 
 
 def as_number(value: Any) -> Optional[float]:
+    """A number, or None; "inf", "nan" and 1e999 are not numbers anybody means."""
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)):            # bool included
-        return float(value)
-    text = str(value).strip().replace(",", "")
-    if text.endswith("%"):
+        number = float(value)
+    else:
+        text = str(value).strip().replace(",", "")
         try:
-            return float(text[:-1]) / 100.0
-        except ValueError:
+            number = (float(text[:-1]) / 100.0 if text.endswith("%")
+                      else float(text))
+        except (ValueError, OverflowError):
             return None
+    return number if math.isfinite(number) else None
+
+
+def _serial_date(serial: float) -> Optional[_dt.date]:
+    """An Excel serial as a date; None for one past any calendar (9999)."""
     try:
-        return float(text)
-    except ValueError:
+        return from_serial(serial)
+    except (OverflowError, ValueError):
         return None
 
 
@@ -69,7 +77,7 @@ def stored_date(value: Any) -> Optional[_dt.date]:
     if isinstance(value, _dt.date):
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return from_serial(float(value)) if value > 0 else None
+        return _serial_date(float(value)) if value > 0 else None
     if isinstance(value, str) and value:
         try:
             return _dt.date.fromisoformat(value[:10])
@@ -87,7 +95,7 @@ def as_date(value: Any) -> Optional[_dt.date]:
     if isinstance(value, _dt.date):
         return value
     if isinstance(value, (int, float)):
-        return from_serial(float(value)) if value > 0 else None
+        return _serial_date(float(value)) if value > 0 else None
     text = str(value).strip()
     if not text:
         return None
@@ -107,7 +115,7 @@ def as_date(value: Any) -> Optional[_dt.date]:
             pass
     number = as_number(text)
     if number is not None and number > 0:
-        return from_serial(number)
+        return _serial_date(number)
     return None
 
 

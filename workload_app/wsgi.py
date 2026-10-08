@@ -50,6 +50,12 @@ def application(environ: Dict[str, Any],
 def _request_from(environ: Dict[str, Any]) -> Request:
     method = environ.get("REQUEST_METHOD", "GET").upper()
     path = environ.get("PATH_INFO", "/") or "/"
+    try:
+        # PEP 3333 hands the URL's bytes over one byte to one character; the
+        # browser sent UTF-8, so "José" arrives as "JosÃ©" until read again.
+        path = path.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass                    # already text, from a door that decoded it
     query = parse_qs(environ.get("QUERY_STRING", ""))
 
     body: Dict[str, Any] = {}

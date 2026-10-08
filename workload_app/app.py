@@ -110,19 +110,31 @@ class _Asset:
         self.version = hashlib.sha256(self.body).hexdigest()[:12]
         self.etag = f'"{self.version}"'
         self._page: Optional[bytes] = None
+        #: The files the page names, as they were when it was versioned.
+        self._refs: List[Tuple[Path, Optional[Tuple[int, int]]]] = []
 
     def versioned_page(self) -> bytes:
         """The HTML, with ``?v=<version>`` on each script and style it names,
         so a browser keeps them until they change."""
+        # A browser keeps a script for a year and never asks for it again, so
+        # the page must notice the change itself, not wait for that request.
+        if self._page is not None and any(_stamp_or_none(ref) != stamp
+                                          for ref, stamp in self._refs):
+            self._page = None
         if self._page is None:
+            refs: List[Tuple[Path, Optional[Tuple[int, int]]]] = []
+
             def versioned(match: "re.Match") -> str:
-                ref = (STATIC_DIR / match.group(2)).resolve()
-                if not str(ref).startswith(str(STATIC_DIR.resolve())) or not ref.is_file():
+                ref = _static_file(match.group(2))
+                if ref is None:
                     return match.group(0)
+                asset = _static(ref)
+                refs.append((ref, asset.stamp))
                 return (f"{match.group(1)}{match.group(2)}"
-                        f"?v={_static(ref).version}{match.group(3)}")
-            self._page = _ASSET_REF.sub(
+                        f"?v={asset.version}{match.group(3)}")
+            page = _ASSET_REF.sub(
                 versioned, self.body.decode("utf-8")).encode("utf-8")
+            self._page, self._refs = page, refs
         return self._page
 
 
@@ -133,6 +145,26 @@ _assets_lock = threading.Lock()
 def _stamp(path: Path) -> Tuple[int, int]:
     stat = path.stat()
     return stat.st_mtime_ns, stat.st_size
+
+
+def _stamp_or_none(path: Path) -> Optional[Tuple[int, int]]:
+    try:
+        return _stamp(path)
+    except OSError:
+        return None
+
+
+def _static_file(name: str) -> Optional[Path]:
+    """The file ``name`` inside the static folder, or None: nothing outside
+    it (not even a folder next to it whose name starts the same way), and
+    nothing a path cannot even name."""
+    root = STATIC_DIR.resolve()
+    try:
+        target = (root / name).resolve()
+        target.relative_to(root)
+        return target if target.is_file() else None
+    except (ValueError, OSError):
+        return None
 
 
 def _static(path: Path) -> _Asset:
@@ -334,6 +366,10 @@ class WorkloadApp:
             ctx.service = self.service_for(ctx.user["id"])
             if ctx.user["role"] == ROLE_MANAGER:
                 self._follow_open_unit(ctx)
+            if ctx.service.path is not None and not ctx.service.path.is_file():
+                # Deleted in another request (a member's unit, by its
+                # manager): reading it again would leave an empty file there.
+                ctx.service.close()
             ctx.service.refresh()
         return Response.json(HTTPStatus.OK,
                              handler(ctx, request.query, request.body, *captured))
@@ -359,8 +395,8 @@ class WorkloadApp:
         if name == "login.html" and ctx.user is not None:
             return Response(HTTPStatus.SEE_OTHER, b"",
                             "text/plain; charset=utf-8", [("Location", home)])
-        target = (STATIC_DIR / name).resolve()
-        if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.is_file():
+        target = _static_file(name)
+        if target is None:
             return Response(HTTPStatus.NOT_FOUND, b"Not found",
                             "text/plain; charset=utf-8")
         content_type, _ = mimetypes.guess_type(str(target))
@@ -441,6 +477,11 @@ class WorkloadApp:
         # a member, and a member reaches none of what they run.
         if email and not user["is_admin"] and not _site_admin(site):
             user = self._link_by_email(user, email)
+        if _site_admin(site) and user["role"] == ROLE_MEMBER:
+            # A manager picked the site's administrator on Team > Access. The
+            # administrator keeps every unit's view instead.
+            for row in self.accounts.memberships(user["id"]):
+                self.accounts.revoke(user_id=user["id"], unit_id=row["unit_id"])
         if user["role"] == ROLE_MEMBER and not self.accounts.memberships(user["id"]):
             # Every unit they were shown has been taken away again. Rather
             # than leave them at a page with nothing on it for good, they are
@@ -623,6 +664,10 @@ class WorkloadApp:
         password, generated = _password_in(body)
         self.accounts.set_password(target, password)
         self._forget_service(target)
+        if target == ctx.user["id"] and ctx.site is None:
+            # That ended every session of theirs, this one too: as on the
+            # change-password route, the administrator is not thrown out.
+            ctx.set_cookie = self.accounts.start_session(target)
         return {"user_id": target, "password": password if generated else None}
 
     def set_admin(self, ctx: Context, query, body, user_id) -> Dict[str, Any]:
@@ -853,7 +898,13 @@ class WorkloadApp:
                     else:
                         self._open(service, user_id, unit["id"])
                     view = service.checkins()
-                except ApiError:
+                except Exception as error:
+                    # One unit that cannot be read (damaged, or an old
+                    # workbook that will not come across) is named as
+                    # missing; it never takes every other unit's figures
+                    # down with it.
+                    if not isinstance(error, ApiError):
+                        traceback.print_exc()
                     missing.append(name)
                     continue
                 finally:
@@ -1530,8 +1581,11 @@ class WorkloadApp:
             late = body.get("late") or []
             result = nightly.run(service, body.get("files") or [],
                                  late if isinstance(late, list) else [late])
-        except (ApiError, ImportError_) as error:
-            message = error.message if isinstance(error, ApiError) else str(error)
+        except Exception as error:
+            # Whatever stopped it, the morning's Timesheets tab must not go on
+            # showing the last night that worked.
+            message = (error.message if isinstance(error, ApiError)
+                       else str(error) or type(error).__name__)
             errors = error.errors if isinstance(error, ApiError) else [message]
             self.accounts.record_import(unit["id"], {
                 "ok": False, "error": message, "errors": errors})
@@ -1838,7 +1892,7 @@ class WorkloadApp:
              lambda ctx, q, b: _stage(ctx.service, b), "manager"),
             ("POST", "/api/timesheets/apply",
              lambda ctx, q, b: ctx.service.apply_timesheet(
-                 b.get("token", ""), b.get("mode", "replace")), "manager"),
+                 str(b.get("token") or ""), b.get("mode", "replace")), "manager"),
             ("GET", "/api/import-key", self.import_key_status, "manager"),
             ("POST", "/api/import-key", self.make_import_key, "manager"),
             ("DELETE", "/api/import-key", self.revoke_import_key, "manager"),
@@ -1850,10 +1904,10 @@ class WorkloadApp:
              "manager"),
             ("POST", "/api/timesheets/exports/apply",
              lambda ctx, q, b: ctx.service.apply_exports(
-                 b.get("token", ""), b.get("mode", "replace")), "manager"),
+                 str(b.get("token") or ""), b.get("mode", "replace")), "manager"),
             ("POST", "/api/projects/from-timesheets", s("sync_projects"), "manager"),
             ("POST", "/api/timesheets/discard",
-             lambda ctx, q, b: ctx.service.discard_timesheet(b.get("token", "")),
+             lambda ctx, q, b: ctx.service.discard_timesheet(str(b.get("token") or "")),
              "manager"),
             ("POST", "/api/save", s("save"), "manager"),
             ("POST", "/api/reload", s("reload"), "manager"),

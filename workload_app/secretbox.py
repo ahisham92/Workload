@@ -38,12 +38,23 @@ def key_file(data_dir: Path) -> Path:
     path = Path(data_dir) / KEY_NAME
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Written 0600 from the start: never briefly world-readable.
-        handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # Written whole under a name of its own, then put in place in one
+        # step: a failed write never leaves an empty key behind, and a worker
+        # starting at the same moment reads a whole key or none.  0600 from
+        # the start: never briefly world-readable.
+        tmp = path.with_name(f".{KEY_NAME}.{os.getpid()}.{secrets.token_hex(4)}")
+        handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(handle, secrets.token_bytes(KEY_BYTES))
+            try:
+                os.write(handle, secrets.token_bytes(KEY_BYTES))
+            finally:
+                os.close(handle)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                pass                    # another worker's key is the key
         finally:
-            os.close(handle)
+            tmp.unlink(missing_ok=True)
     return path
 
 

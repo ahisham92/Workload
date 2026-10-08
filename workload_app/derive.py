@@ -45,6 +45,8 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .model import today as _today
+
 
 #: The job type of real project work. Proposals, leave, idle time and the rest
 #: are charge codes, not projects.
@@ -218,7 +220,11 @@ def plan_projects(rows: Sequence[Dict[str, Any]], *,
     oldest history that waits rather than this month's work.
     """
     have = {str(n).strip() for n in existing}
-    newest = max((r["date"] for r in rows if r.get("date")), default=None)
+    # The newest day worked: leave booked ahead is on the timesheets too, and
+    # a day off in January must not make this year's work look finished.
+    as_at = _today()
+    days = [r["date"] for r in rows if r.get("date")]
+    newest = max((d for d in days if d <= as_at), default=max(days, default=None))
 
     jobs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for row in rows:

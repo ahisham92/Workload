@@ -189,7 +189,13 @@ def _read_delimited(data: bytes) -> List[List[Any]]:
         try:
             dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         except csv.Error:
-            dialect = csv.excel
+            # A title line above the headings puts the sniffer off; the
+            # delimiter is then the one the busiest line uses most.
+            lines = sample.splitlines()
+            delimiter = max(",;\t|", key=lambda d: max(
+                (line.count(d) for line in lines), default=0))
+            return [list(row) for row in
+                    csv.reader(io.StringIO(text), csv.excel, delimiter=delimiter)]
         return [list(row) for row in csv.reader(io.StringIO(text), dialect)]
     raise ImportError_("Could not decode the file as text.")
 
@@ -290,8 +296,10 @@ def _coerce_date(value: Any, month_first: bool = False) -> Optional[_dt.date]:
     # Day first: 9/3/2026 is 9 March, with or without a time, unless the file
     # is month first (see month_first). Either way, a date the first reading
     # cannot be (12/31/2026) is read the other way round.
-    day_first = ("%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %I:%M:%S %p")
-    month_first_ = ("%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p")
+    day_first = ("%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %I:%M:%S %p",
+                 "%d/%m/%y")
+    month_first_ = ("%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p",
+                    "%m/%d/%y")
     slashed = month_first_ + day_first if month_first else day_first + month_first_
     for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", *slashed,
                 "%d-%b-%Y", "%d-%b-%y", "%d.%m.%Y"):
@@ -323,6 +331,10 @@ def _coerce_number(value: Any) -> Optional[float]:
 # --------------------------------------------------------------------------
 # the import itself
 # --------------------------------------------------------------------------
+
+#: A job number cell on a total line: empty, or saying it is the total.
+_TOTAL = re.compile(r"\s*((grand\s*)?totals?:?)?\s*", re.IGNORECASE)
+
 
 def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
           *, name_pattern: Optional[str] = None,
@@ -386,7 +398,10 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
     month_first_file = month_first(
         source_row[i] for source_row in grid[header_index + 1:]
         for i in date_columns if i < len(source_row))
+    col_job = ts_headers.index(cfg.TS_KEY_FIELDS["job_number"])
+    col_date = ts_headers.index(cfg.TS_KEY_FIELDS["date"])
     rows: List[List[CellValue]] = []
+    totals = 0
     for source_row in grid[header_index + 1:]:
         if not any(cell not in (None, "") for cell in source_row):
             continue
@@ -396,8 +411,15 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
                 continue
             row[target] = _coerce(source_row[source_index], ts_headers[target],
                                   month_first_file)
+        if row[col_date] is None and _TOTAL.fullmatch(str(row[col_job] or "")):
+            # A total line under the table: no job, no day, everybody's
+            # hours added up. Kept, it would count them all twice.
+            totals += 1
+            continue
         rows.append(row)
     result.rows = rows
+    if totals:
+        result.warnings.append(f"{totals:,} total line(s) under the table were left out.")
 
     if not rows:
         result.errors.append("No data rows found below the header row.")
