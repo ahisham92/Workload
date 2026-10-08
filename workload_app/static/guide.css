@@ -1,0 +1,39 @@
+/* Selecao+ — How to use: the setup and routine diagrams, and "Where do I find". */
+
+.hg-intro { margin: 0 0 12px; font-size: 15px; }
+.hg-panel { overflow: hidden; }
+.hg-head h3 { margin: 0 0 2px; }
+.hg-head p { margin: 0 0 12px; }
+.hg-diagram { width: 100%; }
+.hg-flow { display: block; max-width: 100%; height: auto; overflow: visible; }
+
+.hg-box { fill: var(--surface-2); stroke: var(--border); stroke-width: 1; }
+.hg-num { fill: var(--accent); }
+.hg-num-text { fill: var(--surface); font-weight: 700; font-size: 13px; }
+.hg-title { fill: var(--text); font-weight: 650; font-size: 14px; }
+.hg-do { fill: var(--muted); font-size: 12.5px; }
+.hg-where { fill: var(--accent); font-size: 12px; font-weight: 600; }
+.hg-link { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.hg-arrowhead { fill: var(--muted); }
+
+.hg-can-go { cursor: pointer; }
+.hg-can-go:hover .hg-box,
+.hg-can-go:focus .hg-box { fill: var(--accent-soft); stroke: var(--accent); }
+.hg-can-go:focus { outline: none; }
+.hg-can-go:focus-visible .hg-box { stroke-width: 2.5; }
+
+.hg-lane + .hg-lane { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border); }
+.hg-lane-name { margin-bottom: 8px; font-size: 14px; }
+
+.hg-find { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+.hg-find li { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border-radius: 6px; background: var(--surface-2); }
+.hg-find-where { display: block; font-size: 12px; }
+
+.hg-holder > summary { cursor: pointer; }
+.hg-holder[open] > summary { margin-bottom: 10px; }
+.hg-holder .panel { box-shadow: none; border: 0; padding: 0; margin: 0 0 14px; background: transparent; }
+
+@keyframes hg-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
+.hg-flash { animation: hg-flash 1.6s ease-out; }
