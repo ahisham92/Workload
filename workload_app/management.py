@@ -15,6 +15,9 @@ So it is reserved, from what the app already knows about who leads whom:
   of the day, longer for a bigger team;
 * **a one-to-one with each person** -- every second week, short, at the end of
   a day, spread over the fortnight so no day is all one-to-ones;
+* **Outlook meetings** -- for anybody whose calendar link is in (see
+  ``busy_calendar``), the times Outlook says they are busy, less any time the
+  meetings above already hold, so nothing is counted twice;
 * **development time for everybody** -- not every day but every week, one
   block at the end of the last working day of the week, longer for a junior,
   with the person's goals for the quarter as what to work on (see ``growth``).
@@ -30,6 +33,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from . import busy_calendar
 from . import calendar_
 from . import tasks as task_sheet
 
@@ -118,6 +122,9 @@ DEVELOPMENT_HOURS = {
 }
 #: For somebody with no grade yet.
 DEVELOPMENT_HOURS_DEFAULT = 2.0
+#: Outlook meetings are averaged over this many coming working days when a
+#: plan wants hours a day rather than the days themselves.
+OUTLOOK_AVERAGE_DAYS = 10
 
 
 def development_hours(grade: Optional[str]) -> float:
@@ -130,7 +137,9 @@ class Plan:
 
     def __init__(self, roster: Sequence[Dict[str, Any]],
                  teams: Sequence[Dict[str, Any]], config: Dict[str, Any],
-                 goals: Optional[Mapping[str, Sequence[str]]] = None):
+                 goals: Optional[Mapping[str, Sequence[str]]] = None,
+                 outlook: Optional[Mapping[str, Sequence[tuple]]] = None,
+                 today: Optional[_dt.date] = None):
         self.config = config
         self.led = leaders(roster, teams)
         self.support = {name: support_hours(led, config)
@@ -140,6 +149,10 @@ class Plan:
                             for p in roster if p.get("active", True)}
         #: What each person works on in it: their goals for the quarter.
         self.goals = dict(goals or {})
+        #: When each person's Outlook calendar says they are busy.
+        self.outlook = {name: [(_moment(a), _moment(b)) for a, b in spans]
+                        for name, spans in (outlook or {}).items() if spans}
+        self.today = today
 
     def hours_a_day(self) -> Dict[str, float]:
         """What leading people takes from each leader's day, on average:
@@ -161,7 +174,65 @@ class Plan:
         out = dict(self.hours_a_day())
         for name, hours in self.development.items():
             out[name] = round(min(a_day, out.get(name, 0.0) + hours / days), 2)
+        for name, hours in self.outlook_a_day().items():
+            out[name] = round(min(a_day, out.get(name, 0.0) + hours), 2)
         return out
+
+    def outlook_a_day(self) -> Dict[str, float]:
+        """Each person's Outlook meetings, on average a working day over the
+        coming days, beyond what the meetings above already hold."""
+        if not self.outlook or self.today is None:
+            return {}
+        days = []
+        day = self.today
+        for _ in range(OUTLOOK_AVERAGE_DAYS * 3):
+            if len(days) >= OUTLOOK_AVERAGE_DAYS:
+                break
+            if task_sheet.is_working_day(day, self.config):
+                days.append(day)
+            day += _dt.timedelta(days=1)
+        if not days:
+            return {}
+        total: Dict[str, float] = {}
+        for day in days:
+            for block in self.day_blocks(day)[2]:
+                hours = (block["end"] - block["start"]).total_seconds() / 3600
+                total[block["leader"]] = total.get(block["leader"], 0.0) + hours
+        return {name: round(hours / len(days), 2) for name, hours in total.items()}
+
+    def outlook_on(self, day: _dt.date, taken: Sequence[Dict[str, Any]] = ()
+                   ) -> List[Dict[str, Any]]:
+        """Each person's Outlook meetings on ``day``, inside the working day,
+        less the time ``taken`` (meetings already in the plan) holds."""
+        config = self.config
+        if not self.outlook or not task_sheet.is_working_day(day, config):
+            return []
+        start = _dt.datetime.combine(day, _clock(config["day_start"]))
+        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        out = []
+        for name in sorted(self.outlook, key=str.lower):
+            if calendar_.is_away(config, name, day):
+                continue
+            spans = [(max(a, start), min(b, close)) for a, b in self.outlook[name]
+                     if a < close and b > start]
+            held = [(m["start"], m["end"]) for m in taken
+                    if name == m["leader"] or name in m["with"]]
+            for first, last in busy_calendar.minus(spans, held):
+                if last > first:
+                    out.append({"kind": "outlook", "leader": name, "with": [],
+                                "start": first, "end": last,
+                                "title": "In a meeting (Outlook)"})
+        return out
+
+    def day_blocks(self, day: _dt.date) -> tuple:
+        """The day's meetings, development times and Outlook meetings, each
+        placed around the ones before it."""
+        meetings = self.meetings_on(day)
+        raw = [{"leader": name, "with": [], "start": a, "end": b}
+               for name, spans in self.outlook.items() for a, b in spans
+               if a.date() <= day <= b.date()]
+        development = self.development_on(day, meetings + raw)
+        return meetings, development, self.outlook_on(day, meetings + development)
 
     def development_day(self, name: str, day: _dt.date) -> Optional[_dt.date]:
         """The day of ``day``'s week that holds ``name``'s development time:
@@ -270,11 +341,11 @@ class Plan:
     def for_day(self, day: _dt.date, agendas: Optional[Any] = None) -> Dict[str, Any]:
         """What ``daily.plan_day`` takes for ``day``. ``agendas``, when given,
         is called with each meeting and returns its agenda."""
-        meetings = self.meetings_on(day)
+        meetings, development, outlook = self.day_blocks(day)
         if agendas is not None:
             for meeting in meetings:
                 meeting["agenda"] = agendas(meeting, day)
-        meetings = meetings + self.development_on(day, meetings)
+        meetings = meetings + development + outlook
         return {"meetings": meetings, "support": self.support,
                 "led": {name: len(led) for name, led in self.led.items()}}
 
@@ -283,8 +354,7 @@ class Plan:
         requests around them."""
         out = []
         for day in (first + _dt.timedelta(days=i) for i in range(days)):
-            meetings = self.meetings_on(day)
-            for meeting in meetings + self.development_on(day, meetings):
+            for meeting in [m for part in self.day_blocks(day) for m in part]:
                 if name == meeting["leader"] or name in meeting["with"]:
                     out.append((meeting["start"], meeting["end"]))
         return out
@@ -293,6 +363,10 @@ class Plan:
 def _team_meeting_minutes(led: Sequence[Any]) -> int:
     return min(TEAM_MEETING_MAX,
                TEAM_MEETING_MINUTES + TEAM_MEETING_PER_PERSON * len(led))
+
+
+def _moment(value: Any) -> _dt.datetime:
+    return value if isinstance(value, _dt.datetime) else _dt.datetime.fromisoformat(value)
 
 
 def _clock(hhmm: str) -> _dt.time:

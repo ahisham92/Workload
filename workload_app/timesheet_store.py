@@ -306,6 +306,28 @@ CREATE TABLE IF NOT EXISTS what_ifs (
     moves      TEXT NOT NULL,               -- JSON, as /api/planner takes them
     created_at TEXT NOT NULL
 );
+
+-- Each person's Outlook calendar, published "Can view when I'm busy": the
+-- link, sealed (see secretbox), and whether it was last read cleanly.  Added
+-- by the person themselves (self) or by their manager.
+CREATE TABLE IF NOT EXISTS calendar_links (
+    person     TEXT PRIMARY KEY,
+    link_seal  TEXT NOT NULL,
+    added_by   TEXT NOT NULL DEFAULT 'self',   -- self | manager
+    added_at   TEXT NOT NULL,
+    read_at    TEXT,                -- when the busy times below last changed
+    problem    TEXT NOT NULL DEFAULT '',
+    digest     TEXT NOT NULL DEFAULT ''
+);
+
+-- When each of them is busy in the coming weeks, from that calendar: a start
+-- and an end, local to them, and nothing else -- no titles, no attendees.
+CREATE TABLE IF NOT EXISTS calendar_busy (
+    person TEXT NOT NULL,
+    start  TEXT NOT NULL,
+    end    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS calendar_busy_person ON calendar_busy(person, start);
 """ + "".join(f"""
 -- Counts the writes to the timesheet rows alone, whoever makes them, so the
 -- rows read before can be kept through every other kind of change.
@@ -601,6 +623,8 @@ class TimesheetStore:
         """Forget who they were. Their timesheet rows are not theirs to delete."""
         with self._connect() as db:
             db.execute("DELETE FROM people WHERE name = ?", (name,))
+            db.execute("DELETE FROM calendar_busy WHERE person = ?", (name,))
+            db.execute("DELETE FROM calendar_links WHERE person = ?", (name,))
 
     def rename_person_everywhere(self, old: str, new: str) -> None:
         with self._connect() as db:
@@ -616,6 +640,10 @@ class TimesheetStore:
             db.execute("UPDATE member_marks SET person = ? WHERE person = ?",
                        (new, old))
             db.execute("UPDATE development_goals SET person = ? WHERE person = ?",
+                       (new, old))
+            db.execute("UPDATE OR REPLACE calendar_links SET person = ? "
+                       "WHERE person = ?", (new, old))
+            db.execute("UPDATE calendar_busy SET person = ? WHERE person = ?",
                        (new, old))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
@@ -711,6 +739,69 @@ class TimesheetStore:
     def remove_slot(self, task_id: int) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM slots WHERE task_id = ?", (int(task_id),))
+
+    # -- Outlook calendars, busy times only ---------------------------------
+    def calendar_links(self) -> Dict[str, Dict[str, Any]]:
+        with self._connect() as db:
+            return {row["person"]: dict(row) for row in db.execute(
+                "SELECT * FROM calendar_links ORDER BY person")}
+
+    def set_calendar_link(self, person: str, link_seal: str, added_by: str) -> None:
+        """A new link starts clean: the old one's busy times go with it."""
+        with self._connect() as db:
+            db.execute("DELETE FROM calendar_busy WHERE person = ?", (person,))
+            db.execute(
+                "INSERT INTO calendar_links (person, link_seal, added_by, added_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(person) DO UPDATE SET "
+                "link_seal = excluded.link_seal, added_by = excluded.added_by, "
+                "added_at = excluded.added_at, read_at = NULL, problem = '', "
+                "digest = ''", (person, link_seal, added_by, now()))
+
+    def remove_calendar_link(self, person: str) -> int:
+        with self._connect() as db:
+            db.execute("DELETE FROM calendar_busy WHERE person = ?", (person,))
+            return db.execute("DELETE FROM calendar_links WHERE person = ?",
+                              (person,)).rowcount
+
+    def calendar_read(self, person: str, *, digest: str = "",
+                      busy: Optional[Sequence[Tuple[str, str]]] = None,
+                      problem: str = "", keep_from: Optional[str] = None) -> bool:
+        """What reading the calendar gave: new busy times, or a problem.
+        Nothing is written when nothing changed, so the figures worked out
+        from the unit are kept.  Busy times ending before ``keep_from`` go
+        whatever came back.  True when something was written."""
+        with self._connect() as db:
+            if keep_from:
+                db.execute("DELETE FROM calendar_busy WHERE person = ? AND end < ?",
+                           (person, keep_from))
+            row = db.execute("SELECT digest, problem FROM calendar_links "
+                             "WHERE person = ?", (person,)).fetchone()
+            if row is None:
+                return False
+            if problem:
+                if row["problem"] == problem:
+                    return False
+                db.execute("UPDATE calendar_links SET problem = ? WHERE person = ?",
+                           (problem, person))
+                return True
+            if row["digest"] == digest and not row["problem"]:
+                return False
+            db.execute("DELETE FROM calendar_busy WHERE person = ?", (person,))
+            db.executemany(
+                "INSERT INTO calendar_busy (person, start, end) VALUES (?, ?, ?)",
+                [(person, first, last) for first, last in (busy or ())])
+            db.execute("UPDATE calendar_links SET digest = ?, problem = '', "
+                       "read_at = ? WHERE person = ?", (digest, now(), person))
+            return True
+
+    def calendar_busy(self) -> Dict[str, List[Tuple[str, str]]]:
+        with self._connect() as db:
+            out: Dict[str, List[Tuple[str, str]]] = {}
+            for row in db.execute(
+                    "SELECT person, start, end FROM calendar_busy "
+                    "ORDER BY person, start"):
+                out.setdefault(row["person"], []).append((row["start"], row["end"]))
+            return out
 
     # -- time away ---------------------------------------------------------
     def absences(self) -> List[Dict[str, Any]]:

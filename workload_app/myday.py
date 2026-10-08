@@ -107,6 +107,8 @@ def today_page(*, engineer: str, day: Dict[str, Any], tasks: Sequence[task_sheet
         item = {k: block[k] for k in ("start", "end", "hours", "kind", "title",
                                       "project")}
         item["project_name"] = project_names.get(block["project"], "")
+        if block.get("source"):
+            item["source"] = block["source"]
         task = by_id.get(block.get("task_id")) if block.get("task_id") else None
         if task is not None and engineer in task.assignees:
             item["task"] = task_view(task)

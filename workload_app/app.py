@@ -27,6 +27,7 @@ import json
 import mimetypes
 import re
 import threading
+import time
 import traceback
 import uuid
 from collections import OrderedDict
@@ -35,14 +36,15 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import (accounts as accounts_module, budgets, export as export_module,
+from . import (accounts as accounts_module, budgets, busy_calendar,
+               export as export_module,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
 from .service import (ApiError, WorkloadService, _decode, _flag,
-                      _int, _stage, _year)
+                      _int, _stage, _today as service_today, _year)
 from .timesheets import ImportError_
 from .model import ValidationError
 from .xlsx_io import XlsxError
@@ -212,6 +214,9 @@ class WorkloadApp:
         #: can sign in to it, as ``[{"id", "login", "name"}]``.  Access to a
         #: unit is given by picking one of them.
         self.site_people: Optional[Callable[[], List[Dict[str, Any]]]] = None
+        #: (unit file, person) -> when their calendar was last read, so
+        #: opening the plan reads it again only now and then.
+        self._calendar_checked: Dict[Tuple[str, str], float] = {}
         self.routes = self._build_routes()
 
     # -- the services one account at a time ------------------------------
@@ -1002,6 +1007,116 @@ class WorkloadApp:
     #: Set to False by tests: the phones are told on a thread of its own.
     tell_in_background = True
 
+    # ------------------------------------------------------------------
+    # Outlook calendars: busy times only (see busy_calendar)
+    # ------------------------------------------------------------------
+
+    #: How long a calendar read stays fresh before opening the plan reads it
+    #: again.
+    calendar_fresh_seconds = 20 * 60
+    #: The calendars read at once.
+    calendar_workers = 6
+    #: What reads a link; tests give their own.
+    calendar_fetch = staticmethod(busy_calendar.fetch)
+
+    def _read_calendars(self, service, people=None, *, force: bool = False
+                        ) -> Dict[str, Any]:
+        """Read the linked calendars that are due, and keep their busy times.
+        The network is used outside the unit's lock, a few calendars at once."""
+        seals = service.calendar_seals(people)
+        now = time.monotonic()
+        checked = self._calendar_checked
+        due = {name: blob for name, blob in seals.items()
+               if force or now - checked.get((str(service.path), name), -1e9)
+               >= self.calendar_fresh_seconds}
+        if not due:
+            return {"read": 0, "changed": 0, "problems": []}
+        first, last = busy_calendar.window(service_today())
+        day_start, day_end = service.working_hours()
+        zones = service.calendar_zones()
+
+        def read(item):
+            name, blob = item
+            link = self.accounts.unseal(blob)
+            if not link:
+                return name, None, ("The link can no longer be read here; "
+                                    "paste it again.")
+            try:
+                text = self.calendar_fetch(link)
+                return name, busy_calendar.busy_times(
+                    text, start=first, end=last,
+                    day_start=day_start, day_end=day_end,
+                    home=zones.get(name)), ""
+            except busy_calendar.CalendarLinkError as exc:
+                return name, None, " ".join(exc.errors)
+            except Exception as exc:          # a broken file is that person's
+                traceback.print_exc()          # problem, never the page's
+                return name, None, f"That calendar could not be read ({type(exc).__name__})."
+
+        items = sorted(due.items())
+        if len(items) == 1 or self.calendar_workers <= 1:
+            results = [read(item) for item in items]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(self.calendar_workers,
+                                                    len(items))) as pool:
+                results = list(pool.map(read, items))
+        changed = 0
+        problems = []
+        for name, busy, problem in results:
+            checked[(str(service.path), name)] = now
+            if problem:
+                problems.append({"person": name, "problem": problem})
+            changed += bool(service.record_calendar(name, busy=busy, problem=problem))
+        return {"read": len(results), "changed": changed, "problems": problems}
+
+    def _calendar_link(self, body) -> str:
+        return busy_calendar.clean_link((body or {}).get("link"))
+
+    # -- the manager: everybody's
+    def calendars(self, ctx: Context, query, body) -> Dict[str, Any]:
+        return ctx.service.calendars()
+
+    def set_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        person = " ".join(str((body or {}).get("person") or "").split())
+        link = self._calendar_link(body)
+        ctx.service.set_calendar_link(person, self.accounts.seal(link), "manager")
+        result = self._read_calendars(ctx.service, [person], force=True)
+        return {**ctx.service.calendars(), "result": result}
+
+    def remove_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        person = " ".join(str((body or {}).get("person") or "").split())
+        ctx.service.remove_calendar_link(person)
+        return ctx.service.calendars()
+
+    def refresh_calendars(self, ctx: Context, query, body) -> Dict[str, Any]:
+        result = self._read_calendars(ctx.service,
+                                      force=bool((body or {}).get("force")))
+        return {**ctx.service.calendars(), "result": result}
+
+    # -- a member: their own, and nobody else's
+    def my_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        return service.calendars(person=row["engineer"])
+
+    def set_my_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        link = self._calendar_link(body)
+        service.set_calendar_link(row["engineer"], self.accounts.seal(link), "self")
+        result = self._read_calendars(service, [row["engineer"]], force=True)
+        return {**service.calendars(person=row["engineer"]), "result": result}
+
+    def remove_my_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        service.remove_calendar_link(row["engineer"])
+        return service.calendars(person=row["engineer"])
+
+    def refresh_my_calendar(self, ctx: Context, query, body) -> Dict[str, Any]:
+        row, service = self._mine(ctx, query, body)
+        result = self._read_calendars(service, [row["engineer"]],
+                                      force=bool((body or {}).get("force")))
+        return {**service.calendars(person=row["engineer"]), "result": result}
+
     def _tell_leads(self, row: Dict[str, Any]) -> None:
         """Tell the manager's and team leads' phones now, not at 04:00. Each
         hears only what is theirs (see notify), and a tap never waits on it."""
@@ -1390,6 +1505,10 @@ class WorkloadApp:
             ("POST", "/api/me/off/{}/remove", self.remove_my_time_off, "user"),
             ("GET", "/api/me/week", self.my_week, "user"),
             ("POST", "/api/me/week/reason", self.my_slip_reason, "user"),
+            ("GET", "/api/me/calendar", self.my_calendar, "user"),
+            ("PUT", "/api/me/calendar", self.set_my_calendar, "user"),
+            ("POST", "/api/me/calendar/remove", self.remove_my_calendar, "user"),
+            ("POST", "/api/me/calendar/refresh", self.refresh_my_calendar, "user"),
             ("POST", "/api/marks/{}/seen",
              lambda ctx, q, b, mark_id: ctx.service.seen_mark(_int(mark_id)), "manager"),
 
@@ -1510,6 +1629,10 @@ class WorkloadApp:
              lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
              "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
+            ("GET", "/api/calendars", self.calendars, "manager"),
+            ("PUT", "/api/calendars", self.set_calendar, "manager"),
+            ("POST", "/api/calendars/remove", self.remove_calendar, "manager"),
+            ("POST", "/api/calendars/refresh", self.refresh_calendars, "manager"),
             ("POST", "/api/requests",
              lambda ctx, q, b: ctx.service.add_request(b), "manager"),
             ("POST", "/api/requests/preview",

@@ -15,6 +15,8 @@ const plan = {
   date: null,         // the day on show; null is today
   span: 'day',        // day | week
   dayData: null,      // everybody's day (or week), as the server laid it out
+  calendars: null,    // whose Outlook calendar is linked (busy times only)
+  calendarsOpen: false,
   submissions: null,  // the drafted submissions plan
   chosen: new Set(),  // submissions ticked to confirm
   edits: {},          // row -> a date somebody changed
@@ -754,7 +756,90 @@ async function loadDay({ quiet = false } = {}) {
     renderDay();
   } catch (error) {
     if (!quiet) toast((error.errors || [error.message]).join(' '), 'bad');
+    return;
   }
+  if (!plan.calendars) refreshCalendars();
+}
+
+/* -- Outlook meetings ------------------------------------------------------ */
+
+/** Read the linked calendars that are due (the server keeps each fresh for a
+    while), and redraw the day when a meeting came or went. */
+async function refreshCalendars(force = false) {
+  try {
+    const result = await api('/api/calendars/refresh', { method: 'POST', body: { force }, quiet: !force });
+    plan.calendars = result;
+    if (result.result && result.result.changed) {
+      plan.needs = null;
+      await loadDay({ quiet: true });
+    } else {
+      renderDay();
+    }
+  } catch (error) {
+    if (force) toast((error.errors || [error.message]).join(' '), 'bad');
+  }
+}
+
+async function saveCalendar(person, link) {
+  try {
+    plan.calendars = await api('/api/calendars', { method: 'PUT', body: { person, link } });
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+    return;
+  }
+  const now = plan.calendars.people.find((p) => p.person === person) || {};
+  toast(now.problem || `${person}'s meetings are in the plan.`, now.problem ? 'bad' : 'ok');
+  plan.needs = null;
+  await loadDay({ quiet: true });
+}
+
+async function unlinkCalendar(person) {
+  try {
+    plan.calendars = await api('/api/calendars/remove', { method: 'POST', body: { person } });
+  } catch (error) {
+    toast((error.errors || [error.message]).join(' '), 'bad');
+    return;
+  }
+  toast(`${person}'s Outlook meetings are off the plan.`, 'ok');
+  plan.needs = null;
+  await loadDay({ quiet: true });
+}
+
+function calendarPanel() {
+  const cal = plan.calendars;
+  if (!cal) return null;
+  const people = cal.people || [];
+  const problems = people.filter((p) => p.linked && p.problem);
+  const hours = people.reduce((sum, p) => sum + (p.linked ? p.hours_next_7_days : 0), 0);
+  return el('section', { class: 'panel cal-panel' },
+    el('div', { class: 'panel-head' },
+      el('div', {},
+        el('h3', {}, 'Outlook meetings'),
+        el('p', { class: 'muted small' },
+          cal.linked
+            ? `${cal.linked} of ${people.length} people linked · ${fmt.hours(hours)} h of meetings in the next 7 days, already off their free time.`
+            : 'Nobody\'s calendar is linked yet, so meetings are not in the plan.',
+          problems.length ? ` ${problems.length} could not be read.` : '')),
+      el('div', { class: 'plan-nav' },
+        cal.linked ? el('button', { class: 'btn btn-sm', type: 'button',
+          onclick: () => refreshCalendars(true) }, 'Read now') : null,
+        el('button', { class: 'btn btn-sm', type: 'button',
+          onclick: () => { plan.calendarsOpen = !plan.calendarsOpen; renderDay(); } },
+        plan.calendarsOpen ? 'Close' : 'Link calendars'))),
+    plan.calendarsOpen ? el('div', {},
+      el('p', { class: 'muted small' }, 'Each person does this once on their own Outlook, then pastes the link in My day, or sends it to you to paste here.'),
+      calendarSteps(),
+      el('p', { class: 'muted small' }, CALENDAR_NOTE),
+      el('ul', { class: 'request-list' }, people.map((p) => el('li', { class: 'request cal-person' },
+        el('span', { class: 'request-what' },
+          el('b', {}, p.person),
+          el('span', { class: `muted small${p.problem ? ' cal-problem' : ''}` },
+            p.linked ? ` · ${calendarRead(p)}${p.added_by === 'self' ? ' · linked by them' : ''}` : ' · not linked')),
+        p.linked
+          ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+            onclick: () => unlinkCalendar(p.person) }, 'Unlink')
+          : calendarPaste((link) => saveCalendar(p.person, link), 'Save')))))
+      : null);
 }
 
 function renderDay() {
@@ -788,6 +873,7 @@ function renderDay() {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => shareDay(true) }, 'Print'))),
     requestList(data),
     plan.span === 'week' ? weekTable(data, shown) : dayCards(data.days[0], shown),
+    calendarPanel(),
     awayPanel(data));
 }
 
