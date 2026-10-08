@@ -43,8 +43,33 @@ def application(environ: Dict[str, Any],
     except ApiError as exc:
         return _reply(start_response, Response.json(
             exc.status, {"error": exc.message, "errors": exc.errors}))
-    response = get_app().handle(request)
-    return _reply(start_response, response, head=request.method == "HEAD")
+    app = get_app()
+    app.tell_after_response = True
+    # A change waiting longer than this was made through a door that never
+    # closed its response; tell its phones now rather than never.
+    app.tell_pending(older_than=STALE_TELL_SECONDS)
+    response = app.handle(request)
+    return _Then(_reply(start_response, response, head=request.method == "HEAD"),
+                 app.tell_pending)
+
+
+#: See application().
+STALE_TELL_SECONDS = 30.0
+
+
+class _Then:
+    """The response body, and something to do once it has been sent: the
+    server calls close() after the last byte (PEP 3333)."""
+
+    def __init__(self, body: List[bytes], then: Callable[[], None]):
+        self._body = body
+        self._then = then
+
+    def __iter__(self):
+        return iter(self._body)
+
+    def close(self) -> None:
+        self._then()
 
 
 def _request_from(environ: Dict[str, Any]) -> Request:

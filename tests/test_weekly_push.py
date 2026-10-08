@@ -17,7 +17,7 @@ import pytest
 
 from workload_app import admin, notify, webpush, weekly
 
-from test_across import app, ask, unit  # noqa: F401  (fixtures)
+from test_across import SITE, app, ask, unit  # noqa: F401  (fixtures)
 from test_checkins import TODAY, booking, export
 
 crypto = pytest.importorskip("cryptography")
@@ -422,3 +422,58 @@ class TestTeamPhones:
         owner = app.accounts.users()[0]["id"]
         unit_id = app.accounts.units(owner)[0]["id"]
         assert amal["id"] in notify.people_of_unit(app, owner, unit_id)
+
+
+# --------------------------------------------------------------------------
+# told when something changes, not only at the scheduled run
+# --------------------------------------------------------------------------
+
+class TestToldOnChange:
+    def test_a_managers_change_reaches_the_phone_at_once(self, app, monkeypatch):  # noqa: F811
+        team(app)
+        phone = Phone()
+        ask("POST", "/api/push/devices", phone.subscription())
+        service = Service([phone])
+        monkeypatch.setattr(webpush, "send", service)
+        app.tell_in_background = False
+        notify.run(app)                           # what is there already
+        seen = len(service.got)
+        # A new task due tomorrow for Amal: a write to the unit.
+        status, _ = ask("POST", "/api/tasks", {
+            "name": "Check deck GA", "assignees": ["Amal"],
+            "due": "2026-10-08", "hours": 4})
+        assert status == 200
+        status, _ = ask("GET", "/api/weekly")      # a read tells nobody
+        assert len(service.got) >= seen
+
+    def test_reads_and_no_phones_do_nothing(self, app, monkeypatch):  # noqa: F811
+        team(app)
+        calls = []
+        monkeypatch.setattr(notify, "run", lambda *a, **k: calls.append(k) or {})
+        app.tell_in_background = False
+        ask("POST", "/api/tasks", {"name": "X", "assignees": ["Amal"], "due": "2026-10-09"})
+        assert calls == []                        # nobody has a phone on
+        ask("POST", "/api/push/devices", Phone().subscription())
+        ask("GET", "/api/weekly")
+        assert calls == []                        # a read is not a change
+        ask("POST", "/api/tasks", {"name": "Y", "assignees": ["Amal"], "due": "2026-10-09"})
+        assert len(calls) == 1 and calls[0]["unit_ids"]
+
+    def test_under_wsgi_it_waits_for_the_response_to_go(self, app, monkeypatch):  # noqa: F811
+        from workload_app import wsgi
+        team(app)
+        ask("POST", "/api/push/devices", Phone().subscription())
+        calls = []
+        monkeypatch.setattr(notify, "run", lambda *a, **k: calls.append(k) or {})
+        app.tell_in_background = True
+        raw = json.dumps({"name": "Z", "assignees": ["Amal"], "due": "2026-10-09"}).encode()
+        import io
+        environ = {"REQUEST_METHOD": "POST", "SCRIPT_NAME": "/workload", "PATH_INFO": "/api/tasks",
+                   "QUERY_STRING": "", "CONTENT_LENGTH": str(len(raw)),
+                   "CONTENT_TYPE": "application/json", "wsgi.input": io.BytesIO(raw),
+                   "wsgi.url_scheme": "https", wsgi.SITE_KEY: SITE}
+        body = wsgi.application(environ, lambda s, h: None)
+        b"".join(body)
+        assert calls == []                        # not while answering
+        body.close()                              # the server is done sending
+        assert len(calls) == 1

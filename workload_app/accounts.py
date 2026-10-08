@@ -604,6 +604,15 @@ class Accounts:
         return [{k: v for k, v in dict(row).items() if k not in hidden}
                 for row in rows]
 
+    def has_push_devices(self, user_ids: List[int]) -> bool:
+        """Whether any of these accounts has a phone with notifications on."""
+        if not user_ids:
+            return False
+        with self._connect() as db:
+            return db.execute(
+                "SELECT 1 FROM push_devices WHERE user_id IN (%s) LIMIT 1"
+                % ",".join("?" * len(user_ids)), list(user_ids)).fetchone() is not None
+
     def remove_push_device(self, user_id: int, device_id: int) -> bool:
         with self._connect() as db:
             return db.execute("DELETE FROM push_devices WHERE id = ? AND user_id = ?",

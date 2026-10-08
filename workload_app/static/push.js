@@ -119,9 +119,9 @@
       action,
       devices,
       p.task && p.devices.length ? el('div', { class: 'wk-task' },
-        el('p', { class: 'small' }, el('b', {}, 'So they arrive on their own every morning, for you and the team: '),
-          'on PythonAnywhere open the Tasks tab, set a daily time before work (04:00 UTC is 7 am '
-          + 'in Riyadh, 6 or 7 am in Cairo), paste this line, and press Create. Once is enough.'),
+        el('p', { class: 'small' }, el('b', {}, 'Changes reach the phones the moment they are saved. '),
+          'For date reminders (due tomorrow, a new week), on PythonAnywhere open the Tasks tab, '
+          + 'set a daily time before work in UTC, paste this line, and press Create. Once is enough.'),
         el('div', { class: 'wk-task-line' },
           el('code', {}, p.task),
           el('button', { class: 'btn btn-sm', type: 'button', onclick: () => copy(p.task) }, 'Copy'))) : null,
