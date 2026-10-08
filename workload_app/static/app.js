@@ -65,8 +65,40 @@ const fmt = {
   pct0: (v) => (v === null || v === undefined ? '—' : `${Math.round(Number(v) * 100)}%`),
   ratio: (v) => (v === null || v === undefined ? '—' : `${Number(v).toFixed(2)}×`),
   int: (v) => (v === null || v === undefined ? '—' : Number(v).toLocaleString()),
-  date: (v) => v || '—',
+  /** Every date on screen is day-first, DD/MM/YYYY, whatever the phone's locale. */
+  date: (v) => dayFirst(v),
+  /** "2026-10" as "Oct 2026". */
+  month: (v) => monthLabel(v),
 };
+
+/** "2026-10-08" (or "2026-10-08T16:43:15+00:00") as "08/10/2026"; '—' when blank.
+ *  Anything that is not an ISO date is shown as it came. */
+function dayFirst(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "2026-10" as "Oct 2026"; anything else as it came. */
+function monthLabel(v) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(v ?? ''));
+  return m ? `${MONTH_NAMES[Number(m[2]) - 1]} ${m[1]}` : (v ?? '');
+}
+
+/** Every ISO date inside a sentence the server wrote, made day-first:
+ *  "2026-10-08" as "08/10/2026", and "since 2026-06" as "since Jun 2026". A
+ *  bare "2026-06" is only read as a month after a word like "since", so a job
+ *  number that happens to look like one is left alone. */
+function dayFirstText(text) {
+  if (text === null || text === undefined) return text;
+  return String(text)
+    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3/$2/$1')
+    .replace(/\b(since|in|from|to|until|till|of|by|before|after|for) (\d{4})-(0[1-9]|1[0-2])\b(?!-)/gi,
+      (_, word, y, mo) => `${word} ${MONTH_NAMES[Number(mo) - 1]} ${y}`);
+}
 
 /** Percentages are held as fractions in the workbook and shown as whole numbers. */
 const toPercent = (v) => (v === null || v === undefined || v === '' ? ''
@@ -241,8 +273,8 @@ async function renderChooser() {
           el('span', { class: 'muted' },
             unit.exists ? `${unit.size_mb} MB` : 'its data is missing'),
           el('span', { class: 'muted' },
-            unit.opened_at ? `last opened ${String(unit.opened_at).slice(0, 10)}`
-              : `created ${String(unit.created_at).slice(0, 10)}`)),
+            unit.opened_at ? `last opened ${fmt.date(unit.opened_at)}`
+              : `created ${fmt.date(unit.created_at)}`)),
         el('div', { class: 'unit-tools' },
           el('button', {
             class: 'btn btn-ghost btn-sm', type: 'button', title: 'Rename this unit',
@@ -565,7 +597,7 @@ function renderMap() {
       canvas,
       el('p', { class: 'muted' },
         `Effort is the last ${data.thresholds.window} month(s)`
-        + (data.recent_months.length ? ` — ${data.recent_months.join(', ')}.` : '.')
+        + (data.recent_months.length ? ` — ${data.recent_months.map(monthLabel).join(', ')}.` : '.')
         + ' A project with budget left and nobody charging to it reads as '
         + 'starved, which is the point: it is the one nobody has noticed.')),
     el('div', { class: 'panel', id: 'map-detail' },
@@ -634,15 +666,15 @@ function renderFindings(data) {
     el('p', { class: 'muted' },
       `Judged on the last ${data.thresholds.window} month(s) of booked hours`
       + (data.recent_months.length
-        ? ` — ${data.recent_months.join(', ')}. ` : '. ')
+        ? ` — ${data.recent_months.map(monthLabel).join(', ')}. ` : '. ')
       + 'Booked hours are history, not a forecast: this says what has been '
       + 'happening, and the decision stays yours.'),
     findings.length
       ? el('div', { class: 'findings' }, findings.map((f) => el('div', {
           class: `finding finding-${f.level}`,
         },
-        el('b', {}, f.headline),
-        el('p', { class: 'muted' }, f.detail),
+        el('b', {}, dayFirstText(f.headline)),
+        el('p', { class: 'muted' }, dayFirstText(f.detail)),
         f.kind === 'move' && f.person
           ? el('button', {
               class: 'btn btn-sm', type: 'button',
@@ -669,8 +701,8 @@ function renderTeams(data) {
         el('td', { class: 'num' }, fmt.hours(team.hours)),
         el('td', { class: 'num' }, fmt.hours(team.monthly_capacity)),
         el('td', {}, utilisationPill(team.recent_utilisation)),
-        el('td', {}, team.over_since
-          ? el('span', { class: 'pill pill-warn' }, team.over_since) : ''),
+        el('td', { 'data-sort': team.over_since || '' }, team.over_since
+          ? el('span', { class: 'pill pill-warn' }, monthLabel(team.over_since)) : ''),
         el('td', { class: 'row-actions' },
           team.id === '__none__' ? null : el('button', {
             class: 'btn btn-sm btn-ghost', type: 'button', title: 'Rename, or set the lead',
@@ -695,7 +727,7 @@ function renderTeamTrend(data) {
   // size; when they are not, the capacity is per team and belongs in the table.
   const sameSize = new Set(teams.map((t) => t.monthly_capacity)).size === 1;
   return el('div', { class: 'panel' },
-    charts.groupedBars(months, series, {
+    charts.groupedBars(months.map(shortMonth), series, {
       title: 'Hours booked by team, month by month',
       note: sameSize
         ? `The line is each team's capacity: ${fmt.hours(teams[0].monthly_capacity)} h a month.`
@@ -934,7 +966,8 @@ function renderAdmin() {
         }, user.role === 'member' ? 'team member' : 'manager')),
         el('td', {}, passwordCell(user)),
         el('td', { class: 'num' }, fmt.int(user.units || 0)),
-        el('td', {}, user.last_seen ? String(user.last_seen).slice(0, 10) : 'never'),
+        el('td', { 'data-sort': user.last_seen ? String(user.last_seen).slice(0, 10) : '' },
+          user.last_seen ? fmt.date(user.last_seen) : 'never'),
         el('td', {}, user.is_admin
           ? el('span', { class: 'pill pill-info' }, 'administrator') : ''),
         el('td', { class: 'row-actions' },
@@ -1353,12 +1386,11 @@ function renderFormation(report) {
     }));
 }
 
-/** "2026-03" as "Mar 26", short enough to sit under a column. */
+/** "2026-03" as "Mar ’26", short enough to sit under a column. The apostrophe
+ *  keeps it from reading as the 26th of March. */
 function shortMonth(month) {
   const [year, m] = String(month).split('-');
-  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return m ? `${names[Number(m) - 1]} ${year.slice(2)}` : String(month);
+  return m ? `${MONTH_NAMES[Number(m) - 1]} ’${year.slice(2)}` : String(month);
 }
 
 /** One engineer's booked months, from the overview, oldest first. */
@@ -1535,7 +1567,7 @@ function renderIssues(issues) {
     const project = issue.project
       || state.projects.find((p) => issue.message.includes(p.number))?.number;
     return el('div', { class: `msg msg-${level} msg-action` },
-      el('span', {}, el('strong', {}, `${issue.where}: `), issue.message),
+      el('span', {}, el('strong', {}, `${issue.where}: `), dayFirstText(issue.message)),
       project
         ? el('button', { class: 'btn btn-sm', type: 'button',
             onclick: () => openProject(project) }, 'Fix')
@@ -1616,12 +1648,12 @@ async function renderNightly() {
   const last = info.last_result;
   if (!last) {
     setChildren(box, el('div', { class: 'msg msg-warn' },
-      `Kit made ${fmt.date((info.created_at || '').slice(0, 10))}. Nothing has arrived from your PC yet.`));
+      `Kit made ${fmt.date(info.created_at)}. Nothing has arrived from your PC yet.`));
     return;
   }
   const when = new Date(info.last_used);
   const stale = Date.now() - when.getTime() > 36 * 3600 * 1000;
-  const at = `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const at = `${fmt.date(todayLocal(when))} ${when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
   if (!last.ok) {
     setChildren(box, el('div', { class: 'msg msg-bad' },
       `The last import did not go in (${at}): ${last.error}`,
@@ -2852,7 +2884,7 @@ function renderReports() {
     el('div', { class: 'print-head' },
       el('h1', {}, data.unit ? data.unit.name : 'Selecao+'),
       el('p', {}, `${REPORT_VIEWS.find(([k]) => k === state.reportView)[1]}`
-        + ` · ${data.period.label} · as at ${data.as_at}`)));
+        + ` · ${data.period.label} · as at ${fmt.date(data.as_at)}`)));
 
   const body = $('#report-body');
   const views = {
@@ -3266,7 +3298,7 @@ function renderReview(data) {
       issues.length
         ? el('div', {}, issues.map((issue) => el('div', {
             class: `msg msg-${issue.level === 'error' ? 'bad' : issue.level === 'warning' ? 'warn' : 'info'}`,
-          }, el('strong', {}, `${issue.where}: `), issue.message)))
+          }, el('strong', {}, `${issue.where}: `), dayFirstText(issue.message))))
         : el('div', { class: 'msg msg-ok' },
             'Every project accounts for 100% of its scope and every deliverable '
             + 'splits 100% between the team.')));
@@ -3857,7 +3889,7 @@ function taskProgressCell(task) {
 function taskFields(data) {
   const deliverables = data.deliverables.map((d) => ({
     value: String(d.row),
-    label: `${d.project_number} — ${d.name}${d.date ? ` (${d.date})` : ''}`,
+    label: `${d.project_number} — ${d.name}${d.date ? ` (${fmt.date(d.date)})` : ''}`,
   }));
   return [
     { name: 'name', label: 'Task', full: true },
@@ -4005,7 +4037,7 @@ function openSubmissionModal() {
       hint: 'or leave on every deliverable still ahead',
       options: [{ value: '', label: 'Every deliverable still ahead' },
         ...dated.map((d) => ({
-          value: String(d.row), label: `${d.project_number} — ${d.name} (${d.date})`,
+          value: String(d.row), label: `${d.project_number} — ${d.name} (${fmt.date(d.date)})`,
         }))] },
     { name: 'include_past', label: 'Include dates already past', type: 'checks',
       full: true, options: [{ value: 'yes', label: 'Yes, generate for past dates too' }] },

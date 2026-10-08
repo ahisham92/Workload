@@ -29,7 +29,7 @@ function mdQuery(extra = {}) {
 
 function mdDate(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
   if (!iso) return '';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, opts);
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
 }
 
 async function loadMyDay(unit) {
@@ -120,7 +120,7 @@ function renderMyDay() {
     ...asks.map((ask) => el('div', { class: 'md-ask' },
       el('span', { class: `pill ${ask.seen ? 'pill-ok' : 'pill-warn'}` },
         ask.seen ? 'Your lead has seen it' : 'Sent to your lead'),
-      el('span', {}, ask.note),
+      el('span', {}, dayFirstText(ask.note)),
       ask.seen ? null : el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
         onclick: () => undo(ask.id) }, 'Undo'))),
     myDay.open === 'help'

@@ -313,12 +313,12 @@
       const t = v > 1.0001 ? 'bad' : v < 0.8 ? 'warn' : 'ok';
       return svg('rect', { class: `pf-bar t-${t}`, x: pad + i * bw + 3, y: y(v), width: bw - 6,
         height: Math.max(1, H - pad - y(v)), rx: 3 },
-      svg('title', {}, `Week of ${w.week}: ${pct(v)} of their hours (${fmt.hours(w.hours)} h)`));
+      svg('title', {}, `Week of ${fmt.date(w.week)}: ${pct(v)} of their hours (${fmt.hours(w.hours)} h)`));
     }),
     svg('line', { class: 'pf-line', x1: pad, x2: W, y1: y(1), y2: y(1) }),
     svg('text', { class: 'pf-axis', x: 0, y: y(1) + 3 }, '100%'),
-    svg('text', { class: 'pf-axis', x: pad, y: H - 4 }, weeks[0].week.slice(5)),
-    svg('text', { class: 'pf-axis', x: W, y: H - 4, 'text-anchor': 'end' }, weeks[weeks.length - 1].week.slice(5)));
+    svg('text', { class: 'pf-axis', x: pad, y: H - 4 }, shortWeek(weeks[0].week)),
+    svg('text', { class: 'pf-axis', x: W, y: H - 4, 'text-anchor': 'end' }, shortWeek(weeks[weeks.length - 1].week)));
   }
 
   function dayStrip(person) {
@@ -327,8 +327,8 @@
     return el('div', { class: 'pf-days' }, days.map((d) => {
       const t = d.away ? 'away' : d.free > 0.05 ? 'free' : d.over > 0.05 ? 'over' : 'full';
       const label = d.away ? 'away' : d.free > 0.05 ? `+${fmt.hours(d.free)}` : d.over > 0.05 ? `−${fmt.hours(d.over)}` : 'full';
-      return el('div', { class: `pf-day pf-${t}`, title: `${d.date}: ${label}` },
-        el('span', {}, new Date(`${d.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })),
+      return el('div', { class: `pf-day pf-${t}`, title: `${fmt.date(d.date)}: ${label}` },
+        el('span', {}, new Date(`${d.date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'narrow' })),
         el('b', {}, label));
     }));
   }
@@ -419,7 +419,7 @@
       points.length
         ? el('section', { class: 'pf-block' },
           el('h4', {}, 'To raise with them'),
-          el('ul', { class: 'pf-points' }, points.map((c) => el('li', { class: `pf-point pf-${c.level}` }, c.text))))
+          el('ul', { class: 'pf-points' }, points.map((c) => el('li', { class: `pf-point pf-${c.level}` }, dayFirstText(c.text)))))
         : null,
       el('div', { class: 'pf-actions' },
         el('button', { class: 'btn', type: 'button', onclick: () => step(-1), 'aria-label': 'Previous person' }, '‹'),
@@ -844,7 +844,7 @@
   const scape = { mode: 'next', outlook: null };
 
   function shortWeek(iso) {
-    return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   }
 
   /** People: the last weeks from the timesheets, then the next two as laid out. */
@@ -956,7 +956,7 @@
     for (const c of data.can_take || []) {
       if (taking.has(c.name)) continue;
       out.push({ tone: 'room', title: `${c.name} can take the next job`,
-        text: `${hrs(c.free_week)} free this week${c.next_free ? `, from ${new Date(`${c.next_free}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}.`,
+        text: `${hrs(c.free_week)} free this week${c.next_free ? `, from ${new Date(`${c.next_free}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}.`,
         action: go('Add a task', () => switchView('tasks')) });
     }
     const urgent = [];
@@ -977,7 +977,7 @@
       el('span', { class: 'idea-n' }, String(k + 1)),
       el('div', { class: 'idea-body' },
         el('b', {}, it.title),
-        el('p', {}, it.text),
+        el('p', {}, dayFirstText(it.text)),
         it.action))));
   }
 

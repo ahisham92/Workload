@@ -49,7 +49,7 @@ const MEETING_KIND = { client: 'Client', trade: 'Other trade', internal: 'Intern
 const MEETING_REPEAT = { '': 'Once', weekly: 'Every week', fortnightly: 'Every 2 weeks' };
 
 function meetingDay(iso) {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined,
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB',
     { weekday: 'short', day: 'numeric', month: 'short' });
 }
 

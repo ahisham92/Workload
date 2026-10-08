@@ -93,8 +93,11 @@ def as_date(value: Any) -> Optional[_dt.date]:
     text = str(value).strip()
     if not text:
         return None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%b-%Y", "%d-%b-%y",
-                "%Y/%m/%d", "%d.%m.%Y"):
+    # Day first, always; month first only for a date day-first cannot be.
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y %I:%M:%S %p", "%d-%b-%Y", "%d-%b-%y",
+                "%Y/%m/%d", "%d.%m.%Y", "%m/%d/%Y", "%m/%d/%Y %H:%M:%S",
+                "%m/%d/%Y %I:%M:%S %p"):
         try:
             return _dt.datetime.strptime(text, fmt).date()
         except ValueError:
@@ -135,6 +138,27 @@ def today() -> _dt.date:
         except ValueError:
             pass
     return _dt.date.today()
+
+
+def month_done(month: str, as_at: _dt.date,
+               work_days: Sequence[int] = (0, 1, 2, 3, 4)) -> float:
+    """How much of a month ("2026-10") has been worked by ``as_at``.
+
+    A month already over is 1, one not reached yet is 0, and the month we are
+    in is its working days up to and including ``as_at`` over all of its
+    working days: on 8 October, October is judged on its first week, not on
+    hours nobody could have booked yet.
+    """
+    year, number = int(month[:4]), int(month[5:7])
+    first = _dt.date(year, number, 1)
+    last = (first + _dt.timedelta(days=32)).replace(day=1) - _dt.timedelta(days=1)
+    if as_at >= last:
+        return 1.0
+    if as_at < first:
+        return 0.0
+    days = [first + _dt.timedelta(days=i) for i in range((last - first).days + 1)]
+    working = [d for d in days if d.weekday() in work_days] or days
+    return sum(1 for d in working if d <= as_at) / len(working)
 
 
 def pattern_to_regex(pattern: str) -> "re.Pattern":

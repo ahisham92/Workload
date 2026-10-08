@@ -22,10 +22,10 @@ import datetime as _dt
 import json
 import math
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .model import ValidationError
-from .model import today as model_today
+from .model import month_done, today as model_today
 
 #: What somebody is, in the order they rank. The label is what the app shows.
 GRADES = [
@@ -101,6 +101,11 @@ def clean_name(value: Any) -> str:
     return name
 
 
+def _month_label(month: str) -> str:
+    """"2026-06" as people read it: "Jun 2026"."""
+    return _dt.date(int(month[:4]), int(month[5:7]), 1).strftime("%b %Y")
+
+
 def month_of(date: Optional[_dt.date]) -> Optional[str]:
     return f"{date.year:04d}-{date.month:02d}" if date else None
 
@@ -141,7 +146,8 @@ def roster(store, *, known: Iterable[str] = ()) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
-            today: Optional[_dt.date] = None) -> Dict[str, Any]:
+            today: Optional[_dt.date] = None,
+            work_days: Sequence[int] = (0, 1, 2, 3, 4)) -> Dict[str, Any]:
     """The resourcing picture: teams, their people, and what to do about it."""
     monthly_capacity = float(monthly_capacity or 0) or 185.0
     people = {p["name"]: p for p in roster(store)["people"]}
@@ -170,6 +176,8 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
 
     months = sorted({month for person in hours.values() for month in person})
     recent = months[-WINDOW:]
+    # The month we are in counts only as far as today: capacity to date.
+    done = {month: month_done(month, today, work_days) for month in months}
 
     member_rows = []
     for name, person in people.items():
@@ -188,8 +196,8 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
             "projects": len(person_projects.get(name, ())),
             "by_month": {month: round(booked.get(month, 0.0), 1)
                          for month in months},
-            "recent_utilisation": _utilisation(booked, recent, capacity),
-            "utilisation": _utilisation(booked, months, capacity),
+            "recent_utilisation": _utilisation(booked, recent, capacity, done),
+            "utilisation": _utilisation(booked, months, capacity, done),
         })
 
     team_rows = []
@@ -218,9 +226,9 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
             "members": [m["name"] for m in members],
             "by_month": {month: round(booked.get(month, 0.0), 1)
                          for month in months},
-            "recent_utilisation": _utilisation(booked, recent, capacity),
-            "utilisation": _utilisation(booked, months, capacity),
-            "over_since": _over_since(booked, months, capacity),
+            "recent_utilisation": _utilisation(booked, recent, capacity, done),
+            "utilisation": _utilisation(booked, months, capacity, done),
+            "over_since": _over_since(booked, months, capacity, done),
         })
 
     return {
@@ -237,16 +245,17 @@ def balance(store, *, monthly_capacity: float, year: Optional[int] = None,
 
 
 def _utilisation(booked: Dict[str, float], months: Sequence[str],
-                 capacity: float) -> Optional[float]:
-    """Booked against capacity over these months, or None with nothing to say."""
-    if not months or capacity <= 0:
+                 capacity: float, done: Mapping[str, float]) -> Optional[float]:
+    """Booked against capacity to date over these months, or None."""
+    worked = sum(done.get(month, 1.0) for month in months)
+    if not months or capacity <= 0 or worked <= 0:
         return None
     total = sum(booked.get(month, 0.0) for month in months)
-    return round(total / (capacity * len(months)), 3)
+    return round(total / (capacity * worked), 3)
 
 
 def _over_since(booked: Dict[str, float], months: Sequence[str],
-                capacity: float) -> Optional[str]:
+                capacity: float, done: Mapping[str, float]) -> Optional[str]:
     """The first month of the run of over-capacity months ending at the last.
 
     Answering "since when", which is the question, rather than "at some point",
@@ -256,7 +265,7 @@ def _over_since(booked: Dict[str, float], months: Sequence[str],
         return None
     started = None
     for month in months:
-        if booked.get(month, 0.0) > capacity * OVER:
+        if booked.get(month, 0.0) > capacity * done.get(month, 1.0) * OVER:
             started = started or month
         else:
             started = None
@@ -344,7 +353,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
                 "detail": (
                     f"{team['name']} has been at "
                     f"{team['recent_utilisation'] * 100:.0f}% of its capacity"
-                    + (f" since {team['over_since']}" if team["over_since"] else "")
+                    + (f" since {_month_label(team['over_since'])}" if team["over_since"] else "")
                     + f", about {short:.1f} people short, while "
                       f"{lender['name']} has been at "
                       f"{lender['recent_utilisation'] * 100:.0f}%."),
@@ -385,7 +394,7 @@ def findings(teams: Sequence[Dict[str, Any]], members: Sequence[Dict[str, Any]],
                              f"{'person' if math.ceil(short) <= 1 else 'people'}"),
                 "detail": (
                     f"At {team['recent_utilisation'] * 100:.0f}% of capacity"
-                    + (f" since {team['over_since']}" if team["over_since"] else "")
+                    + (f" since {_month_label(team['over_since'])}" if team["over_since"] else "")
                     + f", about {short:.1f} people short. " + why),
                 "people": round(short, 1),
             })

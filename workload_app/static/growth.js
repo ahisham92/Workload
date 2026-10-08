@@ -22,7 +22,7 @@ const GR_LEVEL_TONE = { now: 'bad', soon: 'warn', note: 'info' };
 
 function grDay(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
   if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, opts);
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', opts);
 }
 
 async function loadGrowth(force = false) {
@@ -95,7 +95,7 @@ function growthTodo(data) {
       el('p', { class: 'muted' }, 'Most pressing first. Goals are set at the start of each quarter and reviewed at its end.'))),
     el('ol', { class: 'gr-todo-list' }, ...data.todo.map((item) =>
       el('li', { class: `gr-todo-item gr-${GR_LEVEL_TONE[item.level] || 'info'}` },
-        el('span', {}, item.text), action(item)))));
+        el('span', {}, dayFirstText(item.text)), action(item)))));
 }
 
 function growthStats(data) {
@@ -172,7 +172,7 @@ function kpiRow(p) {
       p.leads ? el('span', { class: 'muted' }, ` leads ${p.leads}`) : null,
       parts,
       el('details', { class: 'gr-why' }, el('summary', {}, 'Why this score'),
-        el('ul', {}, ...p.parts.map((x) => el('li', {}, el('b', {}, `${x.label}: `), x.why))))),
+        el('ul', {}, ...p.parts.map((x) => el('li', {}, el('b', {}, `${x.label}: `), dayFirstText(x.why)))))),
     el('div', { class: 'gr-score-wrap' }, bar,
       el('b', { class: 'gr-score' }, p.score === null ? '—' : Math.round(p.score)),
       p.complete ? null : el('span', { class: 'muted gr-prov' }, 'so far')));

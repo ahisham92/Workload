@@ -273,7 +273,8 @@ def review(*, week_days: Sequence[_dt.date], lines: Sequence[Dict[str, Any]],
             if state in ("late", "not_done"):
                 slips.append({**entry, "kind": "task",
                               "what": f"{line['title']}: not done"
-                                      + (f", due {line['due']}" if line["due"] else "")})
+                                      + (f", due {_dt.date.fromisoformat(line['due'][:10]):%d/%m/%Y}"
+                                         if line["due"] else "")})
         task_rows.sort(key=lambda t: (t["state"] == "done", t["due"] or "9999"))
 
         for slip in slips:

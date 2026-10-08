@@ -30,7 +30,7 @@ class TestTimesheetText:
         assert len(timesheets.parse("Pat", "e.csv", data, cfg.TS_HEADERS).rows) == 1
 
     @pytest.mark.parametrize("text", [
-        "2026-03-02T00:00:00", "2026-03-02 00:00:00.000", "3/2/2026 12:00:00 AM",
+        "2026-03-02T00:00:00", "2026-03-02 00:00:00.000", "2/3/2026 12:00:00 AM",
     ])
     def test_dates_with_a_time_keep_their_day(self, text):
         assert str(timesheets._coerce_date(text)) == "2026-03-02"

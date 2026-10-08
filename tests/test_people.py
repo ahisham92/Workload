@@ -121,7 +121,7 @@ class TestWhatToDoAboutIt:
         assert finding["kind"] == "move"
         assert finding["team"] == "Quay" and finding["from_team"] == "Jetty"
         assert finding["person"] in {"Peter", "Sara", "Nader"}
-        assert "since 2026-05" in finding["detail"]
+        assert "since May 2026" in finding["detail"]
 
     def test_on_a_tie_it_moves_the_junior_not_the_senior(self, store):
         """A quiet team is quiet all through, so the tie-break does the choosing."""

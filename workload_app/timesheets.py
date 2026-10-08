@@ -228,7 +228,7 @@ def find_header_row(grid: Sequence[Sequence[Any]]) -> int:
 # coercion
 # --------------------------------------------------------------------------
 
-def _coerce(value: Any, header: str) -> CellValue:
+def _coerce(value: Any, header: str, month_first: bool = False) -> CellValue:
     if value is None:
         return None
     if isinstance(value, str):
@@ -236,7 +236,7 @@ def _coerce(value: Any, header: str) -> CellValue:
         if not value:
             return None
     if header in cfg.TS_DATE_HEADERS:
-        return _coerce_date(value)
+        return _coerce_date(value, month_first)
     if header in cfg.TS_NUMERIC_HEADERS:
         return _coerce_number(value)
     if isinstance(value, (_dt.datetime, _dt.date)):
@@ -246,7 +246,33 @@ def _coerce(value: Any, header: str) -> CellValue:
     return value
 
 
-def _coerce_date(value: Any) -> Optional[_dt.date]:
+_SLASHED = re.compile(r"\s*(\d{1,2})/(\d{1,2})/\d{2,4}\b")
+
+
+def month_first(values: Iterable[Any]) -> bool:
+    """Whether a file writes its dates month first (3/25/2026).
+
+    Read from the file as a whole: one date that can only be month first
+    (its second number over 12) and none that can only be day first says the
+    whole file is, so 9/3/2026 in it is 3 September. Anything else is read
+    day first.
+    """
+    seen = False
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        found = _SLASHED.match(value)
+        if not found:
+            continue
+        first, second = int(found.group(1)), int(found.group(2))
+        if first > 12:
+            return False
+        if second > 12:
+            seen = True
+    return seen
+
+
+def _coerce_date(value: Any, month_first: bool = False) -> Optional[_dt.date]:
     if isinstance(value, _dt.datetime):
         return value.date()
     if isinstance(value, _dt.date):
@@ -264,10 +290,14 @@ def _coerce_date(value: Any) -> Optional[_dt.date]:
         return _dt.datetime.fromisoformat(text).date()
     except ValueError:
         pass
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S",
-                "%d-%b-%Y", "%d-%b-%y", "%d.%m.%Y", "%m/%d/%Y %H:%M:%S",
-                "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p",
-                "%d/%m/%Y %I:%M:%S %p", "%Y/%m/%d"):
+    # Day first: 9/3/2026 is 9 March, with or without a time, unless the file
+    # is month first (see month_first). Either way, a date the first reading
+    # cannot be (12/31/2026) is read the other way round.
+    day_first = ("%d/%m/%Y", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %I:%M:%S %p")
+    month_first_ = ("%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p")
+    slashed = month_first_ + day_first if month_first else day_first + month_first_
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", *slashed,
+                "%d-%b-%Y", "%d-%b-%y", "%d.%m.%Y"):
         try:
             return _dt.datetime.strptime(text, fmt).date()
         except ValueError:
@@ -355,6 +385,11 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
         return result
 
     width = len(ts_headers)
+    date_columns = [i for i, target in positions.items()
+                    if ts_headers[target] in cfg.TS_DATE_HEADERS]
+    month_first_file = month_first(
+        source_row[i] for source_row in grid[header_index + 1:]
+        for i in date_columns if i < len(source_row))
     rows: List[List[CellValue]] = []
     for source_row in grid[header_index + 1:]:
         if not any(cell not in (None, "") for cell in source_row):
@@ -363,7 +398,8 @@ def parse(engineer: str, filename: str, data: bytes, ts_headers: Sequence[str],
         for source_index, target in positions.items():
             if source_index >= len(source_row):
                 continue
-            row[target] = _coerce(source_row[source_index], ts_headers[target])
+            row[target] = _coerce(source_row[source_index], ts_headers[target],
+                                  month_first_file)
         rows.append(row)
     result.rows = rows
 

@@ -31,12 +31,12 @@ const BU_BASIS = {
 function buMonth(iso) {
   if (!iso) return '—';
   return new Date(`${iso.length === 7 ? `${iso}-01` : iso}T00:00:00`)
-    .toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    .toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
 }
 
 function buDay(iso) {
   if (!iso) return '—';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined,
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB',
     { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -120,7 +120,7 @@ function budgetsTodo(data) {
       el('p', { class: 'muted' }, 'Most pressing first.'))),
     el('ol', { class: 'gr-todo-list' }, ...data.todo.map((item) =>
       el('li', { class: `gr-todo-item gr-${BU_LEVEL[item.level] || 'info'}` },
-        el('span', {}, item.text), action(item)))));
+        el('span', {}, dayFirstText(item.text)), action(item)))));
 }
 
 function budgetsStats(data, live) {

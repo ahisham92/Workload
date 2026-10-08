@@ -146,7 +146,7 @@
     // at 23:00 on the Sunday and label the tick a day early.
     for (const d = first; d.getTime() < endAt; d.setDate(d.getDate() + 7)) {
       ticks.push(el('span', { class: 'tl-tick', style: `left:${x(d.getTime())}%` },
-        d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })));
+        d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })));
     }
 
     const rows = people.map((name) => {

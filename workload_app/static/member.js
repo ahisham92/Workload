@@ -42,8 +42,29 @@ const fmt = {
   pct: (v) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(1)}%`),
   pct0: (v) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`),
   ratio: (v) => (v === null || v === undefined ? '—' : `${Number(v).toFixed(2)}×`),
-  date: (v) => (v ? String(v).slice(0, 10) : '—'),
+  /** Every date on screen is day-first, DD/MM/YYYY, whatever the phone's locale. */
+  date: (v) => dayFirst(v),
 };
+
+/** "2026-10-08" (or "2026-10-08T16:43:15+00:00") as "08/10/2026"; '—' when blank.
+ *  Anything that is not an ISO date is shown as it came. */
+function dayFirst(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Every ISO date inside a sentence the server wrote, made day-first (as in app.js). */
+function dayFirstText(text) {
+  if (text === null || text === undefined) return text;
+  return String(text)
+    .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3/$2/$1')
+    .replace(/\b(since|in|from|to|until|till|of|by|before|after|for) (\d{4})-(0[1-9]|1[0-2])\b(?!-)/gi,
+      (_, word, y, mo) => `${word} ${MONTH_NAMES[Number(mo) - 1]} ${y}`);
+}
 
 /* The same colour rules as the manager's app: below target reads red. */
 const tone = {
@@ -176,7 +197,7 @@ function render() {
   fillYears(data);
 
   if (!data.known) {
-    setChildren($('#member-message'), el('div', { class: 'msg msg-warn' }, data.message));
+    setChildren($('#member-message'), el('div', { class: 'msg msg-warn' }, dayFirstText(data.message)));
     for (const id of ['member-cards', 'member-projects', 'member-months',
       'member-timesheet', 'member-tasks']) setChildren($(`#${id}`));
     return;

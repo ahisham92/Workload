@@ -197,6 +197,8 @@ def _job(value: Any) -> str:
 
 def _project_jobs(body, columns) -> List[Dict[str, Any]]:
     jobs: Dict[str, Dict[str, Any]] = {}
+    month_first = timesheets.month_first(
+        _cell(row, columns, field) for row in body for field in ("start", "end"))
     for row in body:
         number = _job(_cell(row, columns, "job_number"))
         if not number or number.lower() == "total":
@@ -219,7 +221,7 @@ def _project_jobs(body, columns) -> List[Dict[str, Any]]:
         if progress is not None:
             job["progress"] = progress / 100 if progress > 1.5 else progress
         for field, pick in (("start", min), ("end", max)):
-            day = timesheets._coerce_date(_cell(row, columns, field))
+            day = timesheets._coerce_date(_cell(row, columns, field), month_first)
             if day and day.year > 1900:
                 job[field] = pick(job[field], day) if job[field] else day
         if _flag(_cell(row, columns, "needs_more")):
@@ -241,13 +243,14 @@ def _spend_rows(body, columns) -> List[Dict[str, Any]]:
         raise BudgetError("The staff expenditure has neither MM Spent nor "
                           "TotalHours.")
     out = []
+    month_first = timesheets.month_first(_cell(row, columns, "day") for row in body)
     for row in body:
         number = _job(_cell(row, columns, "job_number"))
         name = _text(_cell(row, columns, "name"))
         if not number or not name:
             continue
         phase = _number(_cell(row, columns, "phase"))
-        day = timesheets._coerce_date(_cell(row, columns, "day"))
+        day = timesheets._coerce_date(_cell(row, columns, "day"), month_first)
         out.append({
             "job_number": number, "name": name,
             "mm": _number(_cell(row, columns, "mm")),
@@ -481,7 +484,7 @@ def set_person(service, body: Dict[str, Any]) -> None:
         value = body.get(field)
         day = timesheets._coerce_date(value) if value not in (None, "") else None
         if value not in (None, "") and day is None:
-            raise BudgetError("Give the dates as days, like 2026-03-01.")
+            raise BudgetError("Give the dates as days, like 01/03/2026.")
         days[field] = day.isoformat() if day else None
     if kind == "left" and not days["to"]:
         raise BudgetError("Say the day they left.")

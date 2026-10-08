@@ -41,8 +41,40 @@
     return cell.textContent.replace(/\s+/g, ' ').trim();
   }
 
+  const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+    'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const MON = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+  const DATES = [
+    // 08/10/2026, as every date is shown; may be followed by words ("overdue")
+    [/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/, (m) => [m[3], m[2], m[1]]],
+    // 2026-10-08 and 2026-10, as a data-sort carries them
+    [/^(\d{4})-(\d{2})-(\d{2})\b/, (m) => [m[1], m[2], m[3]]],
+    [/^(\d{4})-(\d{2})$/, (m) => [m[1], m[2], 0]],
+    // 8 Oct 2026 / Thu 8 Oct 2026
+    [new RegExp(`^(?:[a-z]{3},? )?(\\d{1,2}) ${MON},? (\\d{4})\\b`, 'i'),
+      (m) => [m[3], MONTHS.indexOf(m[2].toLowerCase()) + 1, m[1]]],
+    // Oct 2026 / Oct ’26
+    [new RegExp(`^${MON} (\\d{4})$`, 'i'), (m) => [m[2], MONTHS.indexOf(m[1].toLowerCase()) + 1, 0]],
+    [new RegExp(`^${MON} ’(\\d{2})$`, 'i'), (m) => [2000 + Number(m[2]), MONTHS.indexOf(m[1].toLowerCase()) + 1, 0]],
+  ];
+
+  /** A day-first date (or an ISO one) as a number that sorts by the real date. */
+  function dateKey(text) {
+    for (const [re, parts] of DATES) {
+      const m = re.exec(text);
+      if (!m) continue;
+      const [y, mo, d] = parts(m).map(Number);
+      if (mo < 1 || mo > 12 || d > 31) return null;
+      return y * 10000 + mo * 100 + d;
+    }
+    return null;
+  }
+  window.tablesDateKey = dateKey;   // for the tests
+
   function parse(text) {
     if (EMPTY.has(text.toLowerCase())) return null;
+    const day = dateKey(text);
+    if (day !== null) return { n: day };
     if (NUMBER.test(text)) {
       return { n: Number(text.replace(/[,\s%×xXhHmM+]/g, '').replace('−', '-')) };
     }

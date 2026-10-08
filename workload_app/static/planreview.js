@@ -21,7 +21,7 @@
 
   function day(iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
     if (!iso) return '';
-    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, opts);
+    return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', opts);
   }
 
   function pct(v) { return v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`; }
@@ -151,7 +151,7 @@
     const slipList = slips.length ? el('div', { class: 'pr-block pr-slips' },
       el('h4', {}, 'Did not go to plan'),
       el('ul', { class: 'pr-list' }, slips.map((s) => el('li', {},
-        el('span', { class: 'pr-what' }, s.what),
+        el('span', { class: 'pr-what' }, dayFirstText(s.what)),
         reasonPicker(s, choices, send))))) : null;
 
     return el('details', { class: 'panel pr-person', open: open || null }, head,
