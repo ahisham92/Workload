@@ -52,11 +52,13 @@
     if (show.loading && !force) return show.loading;
     show.loading = (async () => {
       const shared = typeof checkin !== 'undefined' ? checkin.data : null;
-      const [ci, outlook, drawings] = await Promise.all([
+      const [ci, outlook, drawings, me] = await Promise.all([
         shared && !force ? shared : api('/api/checkins', { quiet: true }).catch(() => null),
         api('/api/planner', { method: 'POST', quiet: true, body: { days: 5 } }).catch(() => null),
         api('/api/drawings', { quiet: true }).catch(() => null),
+        api('/api/team/me', { quiet: true }).catch(() => null),
       ]);
+      if (me) state.myself = me.me || '';
       show.checkins = ci;
       show.outlook = outlook;
       show.drawings = drawings;
@@ -169,7 +171,8 @@
       el('div', { class: 'pc-rank' },
         p.rank ? el('b', {}, `${p.rank}`) : null,
         p.rank ? el('span', {}, `of ${p.of}`) : null)),
-    el('div', { class: 'pc-name' }, name),
+    el('div', { class: 'pc-name' }, name,
+      name === state.myself ? el('span', { class: 'pill pill-ok pc-you' }, 'You') : null),
     el('div', { class: 'pc-sub' }, [p.grade, p.team].filter(Boolean).join(' · ') || 'No grade or team yet'),
     signal ? el('span', { class: `pc-signal pill pill-${SIGNAL_CLASS[signal.key] || 'info'}` }, signal.label) : null,
     el('div', { class: 'pc-stats' },

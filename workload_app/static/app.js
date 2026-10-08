@@ -3255,12 +3255,16 @@ function renderReview(data) {
 state.team = null;
 
 async function loadTeam() {
-  const [team, access] = await Promise.all([
+  const [team, access, me, roster] = await Promise.all([
     api('/api/team'),
     api('/api/team/access').catch(() => ({ members: [] })),
+    api('/api/team/me').catch(() => ({ me: '' })),
+    api('/api/people').catch(() => ({ people: [], grades: [] })),
   ]);
   state.team = team;
   state.access = access;
+  state.myself = me.me || '';
+  state.teamRoster = roster;
   renderTeam();
 }
 
@@ -3325,7 +3329,9 @@ function engineerRow(person, position, years) {
         class: 'swatch',
         style: `background:var(--series-${(person.slot % 6) + 1})`,
       }),
-      el('b', {}, person.short_name))),
+      el('b', {}, person.short_name),
+      person.short_name === state.myself
+        ? el('span', { class: 'pill pill-ok', title: 'You' }, 'You') : null)),
     el('td', { class: 'code' }, person.pattern),
     el('td', { class: 'num' }, fmt.int(person.available_hours)),
     ...years.map((year) => el('td', { class: 'num' },
@@ -3459,6 +3465,10 @@ async function revokeAccess(person, granted) {
 function openEngineerModal(person) {
   const years = state.team.years || [];
   const editing = Boolean(person);
+  const roster = state.teamRoster || {};
+  const grades = roster.grades || [];
+  const known = editing
+    ? (roster.people || []).find((p) => p.name === person.short_name) : null;
   const fields = [
     { name: 'short_name', label: 'Short name',
       hint: 'also names their timesheet sheet' },
@@ -3470,12 +3480,24 @@ function openEngineerModal(person) {
       name: `availability_${year}`, label: `Availability ${year} %`,
       type: 'number', step: '5', min: '0', max: '200',
     })),
+    ...(editing && known && grades.length ? [{
+      name: 'grade', label: 'Grade', type: 'select',
+      hint: 'a Manager keeps time each day for leading the team',
+      options: grades.map(([value, label]) => ({ value, label })),
+    }] : []),
+    ...(editing ? [{
+      name: 'is_me', label: 'This is me', type: 'select',
+      hint: 'marks them as you across the unit',
+      options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }],
+    }] : []),
   ];
   const values = editing ? {
     short_name: person.short_name, pattern: person.pattern,
     available_hours: person.available_hours,
     ...Object.fromEntries(years.map((y) => [
       `availability_${y}`, toPercent((person.availability || {})[y])])),
+    grade: known ? known.grade : '',
+    is_me: person.short_name === state.myself ? 'yes' : 'no',
   } : {
     available_hours: 185,
     ...Object.fromEntries(years.map((y) => [`availability_${y}`, 100])),
@@ -3494,6 +3516,18 @@ function openEngineerModal(person) {
         ? await api(`/api/team/${encodeURIComponent(person.short_name)}`,
             { method: 'PUT', body })
         : await api('/api/team', { method: 'POST', body });
+      if (editing) {
+        const name = result.engineer || person.short_name;
+        if (known && raw.grade && raw.grade !== known.grade) {
+          await api(`/api/people/${encodeURIComponent(name)}`,
+            { method: 'PUT', body: { grade: raw.grade } });
+        }
+        const wasMe = person.short_name === state.myself;
+        if ((raw.is_me === 'yes') !== wasMe || (wasMe && name !== person.short_name)) {
+          await api('/api/team/me', { method: 'PUT',
+            body: { me: raw.is_me === 'yes' ? name : '' } });
+        }
+      }
       markSaved(result.save);
       toast(editing
         ? `${result.engineer} updated.`
@@ -3501,6 +3535,7 @@ function openEngineerModal(person) {
       state.reportMember = null;
       await refreshAll();
       await loadTeam();
+      if (window.showcase) window.showcase.teamCards();
     }, values);
 }
 

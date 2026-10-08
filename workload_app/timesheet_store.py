@@ -508,6 +508,10 @@ class TimesheetStore:
                        "WHERE to_person = ?", (new, old))
             db.execute("UPDATE absences SET person = ? WHERE person = ?",
                        (new, old))
+            # "This is me" (service.me_key) follows the person it names.
+            db.execute("UPDATE settings SET value = ? "
+                       "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
+                       (new, old))
 
     # -- settings --------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
