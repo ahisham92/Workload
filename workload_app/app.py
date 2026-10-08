@@ -35,7 +35,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import (accounts as accounts_module, export as export_module,
+from . import (accounts as accounts_module, budgets, export as export_module,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
@@ -1216,7 +1216,8 @@ class WorkloadApp:
         return {"unit": unit["name"],
                 "filename": "selecao-nightly-manager.zip",
                 "kit_base64": nightly.encode(nightly.kit(
-                    request, shared_folder=folder, app_url=app_url, key=key)),
+                    request, shared_folder=folder, app_url=app_url, key=key,
+                    budget_requests=budgets.requests(ctx.service))),
                 "key": self.accounts.import_key_info(ctx.user["id"], unit["id"])}
 
     def revoke_import_key(self, ctx: Context, query, body) -> Dict[str, Any]:
@@ -1243,6 +1244,16 @@ class WorkloadApp:
         # A service of its own: whatever the manager has open in the browser,
         # and anything they have staged there, is left exactly as it was.
         service = WorkloadService(autosave=self.autosave)
+        kind = str(body.get("kind") or "timesheets")
+        if kind != "timesheets":
+            # The budgets step. Its answer is for the PC's log alone: the
+            # Timesheets tab keeps showing how the timesheets went.
+            try:
+                self._open(service, user["id"], unit["id"])
+                return {"ok": True, "unit": unit["name"],
+                        **nightly.run_budgets(service, kind, body.get("files") or [])}
+            finally:
+                service.close()
         try:
             self._open(service, user["id"], unit["id"])
             late = body.get("late") or []
@@ -1464,6 +1475,17 @@ class WorkloadApp:
              "manager"),
             ("DELETE", "/api/growth/goals/{}",
              lambda ctx, q, b, goal_id: ctx.service.remove_goal(_int(goal_id)), "manager"),
+            ("GET", "/api/budgets", lambda ctx, q, b: ctx.service.budgets(), "manager"),
+            ("POST", "/api/budgets/import",
+             lambda ctx, q, b: ctx.service.import_budgets(b.get("files") or []),
+             "manager"),
+            ("PUT", "/api/budgets/requests",
+             lambda ctx, q, b: ctx.service.save_budget_requests(b, nightly.parse_capture),
+             "manager"),
+            ("PUT", "/api/budgets/people",
+             lambda ctx, q, b: ctx.service.set_budget_person(b), "manager"),
+            ("PUT", "/api/budgets/jobs/{}",
+             lambda ctx, q, b, job: ctx.service.set_budget_share(job, b), "manager"),
             ("GET", "/api/weekly", lambda ctx, q, b: ctx.service.weekly(), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),
             ("GET", "/api/push", self.push_status, "user"),

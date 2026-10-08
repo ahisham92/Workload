@@ -18,6 +18,14 @@ Your team
   to each engineer and ask them to double-click setup.bat on their own PC.
   Their rows go into your unit every night too.
 
+Budgets (manager's PC only)
+  If the Budgets tab has the Projects list and staff expenditure requests,
+  the manager's kit also asks BISpark once a day for the Projects list, then
+  for the staff expenditure of each job on it (at most 40), and sends them to
+  Selecao+. Each request is written in logs\last-run.txt. The files it sends
+  are kept in the budgets folder here until the next run. To stop only this
+  part, delete budgets.json from this folder.
+
 Stopping it
   pause.bat     stops it until resume.bat is run
   remove.bat    removes it from this PC for good; then delete the folder

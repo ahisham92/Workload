@@ -217,6 +217,64 @@ CREATE TABLE IF NOT EXISTS development_goals (
     reviewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS development_goals_quarter ON development_goals(quarter, person);
+
+-- What BISpark's Projects list says each job has, for the department, and the
+-- share of it that is this team's.  The share is the manager's own (NULL: work
+-- it out from who booked the hours); it is kept through every import.
+CREATE TABLE IF NOT EXISTS job_budgets (
+    job_number        TEXT PRIMARY KEY,
+    title             TEXT NOT NULL DEFAULT '',
+    lead              TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT '',
+    dept              TEXT NOT NULL DEFAULT '',
+    budget_mm         REAL,
+    spent_mm          REAL,
+    remaining_mm      REAL,
+    eac_mm            REAL,
+    ev_mm             REAL,
+    progress          REAL,
+    start             TEXT,
+    end               TEXT,
+    needs_more        INTEGER NOT NULL DEFAULT 0,
+    listed            INTEGER NOT NULL DEFAULT 1,  -- in the latest Projects list
+    team_share        REAL,
+    applied_budget_mm REAL,      -- the project budget this last set, if any
+    source            TEXT NOT NULL DEFAULT '',
+    imported_at       TEXT
+);
+
+-- Who spent a job's man-months, from BISpark's staff expenditure: a name,
+-- the unit and department they sit in, and the hours.  Nothing else about
+-- them is kept.  A job's rows are replaced only by a new export of that job.
+CREATE TABLE IF NOT EXISTS job_spend (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_number  TEXT NOT NULL,
+    full_name   TEXT NOT NULL DEFAULT '',
+    unit        TEXT NOT NULL DEFAULT '',
+    dept        TEXT NOT NULL DEFAULT '',
+    day         TEXT,
+    phase       INTEGER,
+    deliverable TEXT NOT NULL DEFAULT '',
+    hours       REAL NOT NULL DEFAULT 0,
+    overtime    REAL NOT NULL DEFAULT 0,   -- of those hours
+    mm          REAL NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS job_spend_job ON job_spend(job_number);
+
+-- What the manager says each person on the staff expenditures is to the
+-- team, where the unit they sit in does not say it: team | draftsman |
+-- other | left (counted up to to_day) | loan (counted from_day to to_day).
+-- Nobody listed here is "team" if they sit in the team's unit, else "other".
+CREATE TABLE IF NOT EXISTS spend_people (
+    full_name TEXT NOT NULL,
+    unit      TEXT NOT NULL DEFAULT '',
+    kind      TEXT NOT NULL,
+    from_day  TEXT,
+    to_day    TEXT,
+    set_at    TEXT NOT NULL,
+    PRIMARY KEY (full_name, unit)
+);
 """ + "".join(f"""
 -- Counts the writes to the timesheet rows alone, whoever makes them, so the
 -- rows read before can be kept through every other kind of change.
@@ -383,10 +441,17 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("SELECT COUNT(*) AS n FROM rows").fetchone()["n"]
 
-    def counts(self) -> Dict[str, int]:
+    def counts(self, *, without_source: str = "") -> Dict[str, int]:
+        """Rows per person, leaving out the rows one source added if asked."""
         with self._connect() as db:
-            return {row["person"]: row["n"] for row in db.execute(
-                "SELECT person, COUNT(*) AS n FROM rows GROUP BY person")}
+            if not without_source:
+                found = db.execute(
+                    "SELECT person, COUNT(*) AS n FROM rows GROUP BY person")
+            else:
+                found = db.execute(
+                    "SELECT person, COUNT(*) AS n FROM rows WHERE source <> ? "
+                    "GROUP BY person", (without_source,))
+            return {row["person"]: row["n"] for row in found}
 
     def people_with_rows(self) -> List[str]:
         """Everybody the timesheets know about, team or no team."""
@@ -760,3 +825,111 @@ class TimesheetStore:
         with self._connect() as db:
             return db.execute("DELETE FROM planned_work WHERE id = ?",
                               (int(item_id),)).rowcount
+
+    # -- budgets -------------------------------------------------------------
+    _BUDGET_FIELDS = ("title", "lead", "status", "dept", "budget_mm",
+                      "spent_mm", "remaining_mm", "eac_mm", "ev_mm",
+                      "progress", "start", "end", "needs_more", "source")
+
+    def job_budgets(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM job_budgets ORDER BY job_number")]
+
+    def save_job_budgets(self, jobs: Sequence[Dict[str, Any]]) -> int:
+        """A new Projects list: these jobs, and only these, are listed now.
+
+        A job missing from it is kept, unlisted, so the share set for it is
+        there again if it comes back.
+        """
+        stamp = now()
+        fields = self._BUDGET_FIELDS
+        with self._connect() as db:
+            db.execute("UPDATE job_budgets SET listed = 0 WHERE listed <> 0")
+            for job in jobs:
+                values = [job.get(f) for f in fields]
+                db.execute(
+                    f"INSERT INTO job_budgets (job_number, {', '.join(fields)}, "
+                    "listed, imported_at) VALUES "
+                    f"(?, {', '.join('?' for _ in fields)}, 1, ?) "
+                    "ON CONFLICT(job_number) DO UPDATE SET "
+                    + ", ".join(f"{f} = excluded.{f}" for f in fields)
+                    + ", listed = 1, imported_at = excluded.imported_at",
+                    [job["job_number"], *values, stamp])
+            return len(jobs)
+
+    def set_job_share(self, job_number: str, share: Optional[float]) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO job_budgets (job_number, team_share, listed) "
+                "VALUES (?, ?, 0) ON CONFLICT(job_number) DO UPDATE SET "
+                "team_share = excluded.team_share", (job_number, share))
+
+    def set_applied_budget(self, job_number: str, budget: Optional[float]) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE job_budgets SET applied_budget_mm = ? "
+                       "WHERE job_number = ?", (budget, job_number))
+
+    def job_spend(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT job_number, full_name, unit, dept, day, phase, "
+                "deliverable, hours, overtime, mm, imported_at FROM job_spend")]
+
+    def spend_people(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        with self._connect() as db:
+            return {(row["full_name"], row["unit"]): dict(row) for row in
+                    db.execute("SELECT * FROM spend_people")}
+
+    def set_spend_person(self, full_name: str, unit: str, kind: Optional[str],
+                         from_day: Optional[str] = None,
+                         to_day: Optional[str] = None) -> None:
+        """What somebody is to the team; ``kind=None`` goes back to the default."""
+        with self._connect() as db:
+            if kind is None:
+                db.execute("DELETE FROM spend_people WHERE full_name = ? AND unit = ?",
+                           (full_name, unit))
+                return
+            db.execute(
+                "INSERT INTO spend_people (full_name, unit, kind, from_day, to_day, "
+                "set_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(full_name, unit) "
+                "DO UPDATE SET kind = excluded.kind, from_day = excluded.from_day, "
+                "to_day = excluded.to_day, set_at = excluded.set_at",
+                (full_name, unit, kind, from_day, to_day, now()))
+
+    def own_days(self, job_number: str, source: str) -> set:
+        """``(person, day, phase)`` each person's own rows already cover."""
+        with self._connect() as db:
+            return {(row["person"], row["day"], row["phase"]) for row in db.execute(
+                "SELECT DISTINCT person, day, phase FROM rows "
+                "WHERE job_number = ? AND source <> ?", (job_number, source))}
+
+    def replace_job_spend(self, job_number: str,
+                          entries: Sequence[Dict[str, Any]],
+                          gaps: Dict[str, Sequence[Dict[str, Any]]],
+                          source: str) -> int:
+        """One job's staff expenditure, and the gap rows it fills, at once.
+
+        The gap rows ``source`` added before for this job go first, so a
+        second import never counts the same hours twice; nobody's own rows
+        are touched.
+        """
+        stamp = now()
+        with self._connect() as db:
+            db.execute("DELETE FROM job_spend WHERE job_number = ?", (job_number,))
+            db.executemany(
+                "INSERT INTO job_spend (job_number, full_name, unit, dept, "
+                "day, phase, deliverable, hours, overtime, mm, imported_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(job_number, e.get("full_name") or "", e.get("unit") or "",
+                  e.get("dept") or "", e.get("day"), e.get("phase"),
+                  e.get("deliverable") or "", float(e.get("hours") or 0),
+                  float(e.get("overtime") or 0), float(e.get("mm") or 0), stamp)
+                 for e in entries])
+            db.execute("DELETE FROM rows WHERE job_number = ? AND source = ?",
+                       (job_number, source))
+            added = 0
+            for person, rows in gaps.items():
+                added += self._insert(db, person, rows, source)
+            return added
+

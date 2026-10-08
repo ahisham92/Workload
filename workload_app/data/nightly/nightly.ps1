@@ -1,4 +1,5 @@
 # Selecao+ nightly timesheets: export from BISpark, and send it on.
+# On the manager's PC, also the Projects list and each job's staff expenditure.
 #
 # Uses only what Windows already has. BISpark is asked for the same export the
 # Export button asks for (request.json, saved from a browser), signed in with
@@ -63,6 +64,94 @@ function Send-Selecao([string]$json) {
     Invoke-RestMethod -Uri ($settings.app_url.TrimEnd('/') + '/api/nightly/timesheets') `
         -Method Post -ContentType 'application/json' -TimeoutSec 600 `
         -Body ([Text.Encoding]::UTF8.GetBytes($json))
+}
+
+# -- budgets: the Projects list and each job's staff expenditure ------------
+# Only on the manager's PC, only if budgets.json came with the kit, once a day.
+# Every request is written to the log, job by job.
+$budgetsFile = Join-Path $here 'budgets.json'
+$budgetsMark = Join-Path $logs 'last-budgets.txt'
+$mostStaffLists = 40
+
+function Export-BISpark([string]$address, [string]$body, [string]$file, $web) {
+    $target = [Uri]$address
+    $headers = @{
+        'Accept' = 'application/json, text/plain, */*'
+        'Origin' = ('{0}://{1}' -f $target.Scheme, $target.Host)
+        'X-PowerBI-ResourceKey' = 'any'
+        'ActivityId' = [guid]::NewGuid().ToString()
+        'RequestId' = [guid]::NewGuid().ToString()
+    }
+    Invoke-WebRequest -Uri $address -Method Post -UseDefaultCredentials `
+        -UseBasicParsing -WebSession $web -Headers $headers `
+        -ContentType 'application/json;charset=UTF-8' `
+        -Body ([Text.Encoding]::UTF8.GetBytes($body)) `
+        -OutFile $file -TimeoutSec 900
+    $bytes = [IO.File]::ReadAllBytes($file)
+    if ($bytes.Length -lt 4 -or $bytes[0] -ne 0x50 -or $bytes[1] -ne 0x4B) {
+        throw 'BISpark answered with something other than a spreadsheet.'
+    }
+}
+
+function Send-Budgets([string]$kind, $files) {
+    $parts = foreach ($path in $files) {
+        '{"filename":"' + (Split-Path $path -Leaf).Replace('"', '') + '","content_base64":"' +
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) + '"}'
+    }
+    $json = '{"key":"' + $settings.key + '","kind":"' + $kind + '","files":[' + ($parts -join ',') + ']}'
+    Send-Selecao $json
+}
+
+function Run-Budgets {
+    $wanted = Get-Content $budgetsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $wanted.projects) { return }
+    $target = [Uri]$wanted.projects.uri
+    $web = $null
+    try {
+        Invoke-WebRequest -Uri ('{0}://{1}/reports/' -f $target.Scheme, $target.Host) `
+            -UseDefaultCredentials -UseBasicParsing -SessionVariable web -TimeoutSec 30 | Out-Null
+    } catch {
+        if ($null -eq $_.Exception.Response) {
+            Log 'Budgets: BISpark cannot be reached from here yet. Trying again next time.'
+            return
+        }
+        $web = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    }
+    $folder = Join-Path $here 'budgets'
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    Get-ChildItem $folder -Filter '*.xlsx' | Remove-Item -Force
+
+    Log 'Budgets: asking BISpark for the Projects list'
+    $list = Join-Path $folder 'projects.xlsx'
+    Export-BISpark $wanted.projects.uri $wanted.projects.body $list $web
+    $answer = Send-Budgets 'budgets' @($list)
+    Log ('Budgets: Projects list sent, {0} jobs' -f $answer.jobs_listed)
+
+    if ($wanted.spend) {
+        $jobs = @($answer.jobs | Select-Object -First $mostStaffLists)
+        $batch = @()
+        foreach ($job in $jobs) {
+            if ($job -notmatch '^[A-Za-z0-9-]+$') { continue }
+            Log "Budgets: asking BISpark for the staff expenditure of $job"
+            $file = Join-Path $folder ('staff-' + $job + '.xlsx')
+            try {
+                Export-BISpark $wanted.spend.uri $wanted.spend.body.Replace('{{JOB}}', $job) $file $web
+                $batch += $file
+            } catch {
+                Log ("Budgets: no staff expenditure for $job (" + $_.Exception.Message + ')')
+            }
+            if ($batch.Count -ge 10) {
+                $sent = Send-Budgets 'spend' $batch
+                Log ('Budgets: sent {0} staff lists' -f @($sent.spend_jobs).Count)
+                $batch = @()
+            }
+        }
+        if ($batch.Count) {
+            $sent = Send-Budgets 'spend' $batch
+            Log ('Budgets: sent {0} staff lists' -f @($sent.spend_jobs).Count)
+        }
+    }
+    Write-Mark $budgetsMark
 }
 
 # The log keeps the last few hundred lines, so hourly runs never grow it.
@@ -139,6 +228,14 @@ try {
     }
 
     if (-not $manager) { exit 0 }
+
+    # -- budgets: once a day, and never in the way of the timesheets --------
+    if ((Test-Path $budgetsFile) -and (Read-Mark $budgetsMark) -lt (Get-Date).AddHours(-20)) {
+        try { Run-Budgets } catch {
+            Log ('Budgets step stopped: ' + $_.Exception.Message + ' ' + (Error-Body $_))
+            Write-Mark $budgetsMark       # tried today; again tomorrow
+        }
+    }
 
     # -- the upload: every 6 hours, and only when the folder has something new
     # An engineer whose PC was off at midnight exports when they next sign in;
