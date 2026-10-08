@@ -95,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     link.add_argument("--login", default=None,
                       help="what they sign in to the site with, for show")
 
+    sub.add_parser(
+        "notify", help="send each manager's phone what is new: the weekly "
+                       "report, and anything that needs them (for the host's "
+                       "scheduled task, once a day)")
+
     checker = sub.add_parser(
         "check", help="is this installation ready to serve, and what should "
                       "the host's WSGI file say?")
@@ -432,6 +437,24 @@ def _units(db: Accounts, data_dir: Path, args) -> int:
     return 0
 
 
+def _notify(db: Accounts, data_dir: Path, args) -> int:
+    """What the host's scheduled task runs: one look at every unit."""
+    from .app import WorkloadApp
+    from . import notify
+
+    app = WorkloadApp(data_dir)
+    try:
+        report = notify.run(app, log=sys.stderr)
+    finally:
+        app.close_all()
+    print(f"{report['accounts']} account(s) with notifications on, "
+          f"{report['new']} new, sent to {report['sent']} phone(s)"
+          + (f", {report['failed']} failed" if report["failed"] else "") + ".")
+    for error in report["errors"]:
+        print(f"  {error}", file=sys.stderr)
+    return 0
+
+
 def _check(db, data_dir, args) -> int:
     """The one command to run on a host before -- and after -- a reload."""
     if getattr(args, "wsgi_only", False):
@@ -466,6 +489,7 @@ COMMANDS = {
     "units": _units,
     "restore": _restore,
     "bring": _bring,
+    "notify": _notify,
 }
 
 

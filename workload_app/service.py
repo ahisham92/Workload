@@ -31,6 +31,7 @@ from .timesheet_store import TimesheetStore
 from .timesheets import ParsedTimesheet
 from .model import ValidationError, iso, today as _model_today
 from . import unit as unit_module
+from . import weekly as weekly_module
 from .unit import Unit, outside_message
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
@@ -1130,6 +1131,20 @@ class WorkloadService:
                 config=inputs["config"], project_names=inputs["project_names"],
                 saved=self.store.plan_moves(), slots=self.store.slots(),
                 today=_today(), management=inputs["management"])
+
+    @_remembered
+    def weekly(self) -> Dict[str, Any]:
+        """This week's report, from what Check-ins, the forecast and the
+        submissions plan already work out."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            unit = self.unit if isinstance(self.unit, dict) else {}
+            return weekly_module.build(
+                unit_name=unit.get("name") or "", today=_today(),
+                config=inputs["config"], checkins=self.checkins(),
+                needs=self.needs(), submissions=self.submissions(),
+                rows=inputs["rows"], project_names=inputs["project_names"])
 
     def _agendas(self, inputs: Dict[str, Any], today: _dt.date,
                  saved: List[Dict[str, Any]], slots: Dict[int, Dict[str, Any]]):

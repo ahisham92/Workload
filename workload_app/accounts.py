@@ -129,6 +129,40 @@ CREATE TABLE IF NOT EXISTS import_keys (
     last_used   TEXT,
     last_result TEXT
 );
+
+-- A phone (or browser) that has turned notifications on.  The endpoint is the
+-- address at its maker's push service; p256dh and auth are the keys a message
+-- is sealed with for that phone alone.  site is the address the app was
+-- opened at, which the push service is told as the sender's contact.
+CREATE TABLE IF NOT EXISTS push_devices (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint    TEXT NOT NULL UNIQUE,
+    auth        TEXT NOT NULL,
+    p256dh      TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT '',
+    site        TEXT NOT NULL DEFAULT '',
+    added_at    TEXT NOT NULL,
+    last_ok_at  TEXT,
+    failures    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT
+);
+CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id);
+
+-- Every notification sent.  The key says what it was about ("rest:Nour:
+-- 2026-10-04"), so the same thing is never sent twice; the app lists the
+-- recent ones beside the weekly report.
+CREATE TABLE IF NOT EXISTS push_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id     TEXT NOT NULL DEFAULT '',
+    key         TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL DEFAULT '',
+    url         TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    UNIQUE (user_id, unit_id, key)
+);
 """
 
 
@@ -527,6 +561,82 @@ class Accounts:
             return db.execute(
                 "DELETE FROM import_keys WHERE unit_id = ? AND user_id = ?",
                 (unit_id, user_id)).rowcount > 0
+
+    # -- notifications ---------------------------------------------------
+
+    def add_push_device(self, user_id: int, *, endpoint: str, auth: str,
+                        p256dh: str, label: str = "", site: str = ""
+                        ) -> Dict[str, Any]:
+        """Keep a phone's subscription; the same phone again replaces it."""
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO push_devices (user_id, endpoint, auth, p256dh, label, "
+                "site, added_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, "
+                "auth = excluded.auth, p256dh = excluded.p256dh, label = excluded.label, "
+                "site = excluded.site, failures = 0, last_error = NULL",
+                (user_id, endpoint, auth, p256dh, label[:80], site[:200], now()))
+            device_id = db.execute("SELECT id FROM push_devices WHERE endpoint = ?",
+                                   (endpoint,)).fetchone()["id"]
+        return next(d for d in self.push_devices(user_id) if d["id"] == device_id)
+
+    def push_devices(self, user_id: Optional[int] = None,
+                     *, secrets_too: bool = False) -> List[Dict[str, Any]]:
+        """One account's devices, or everybody's; the keys only when asked."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM push_devices"
+                + (" WHERE user_id = ?" if user_id is not None else "")
+                + " ORDER BY id", (() if user_id is None else (user_id,))).fetchall()
+        out = []
+        for row in rows:
+            device = dict(row)
+            if not secrets_too:
+                for key in ("endpoint", "auth", "p256dh"):
+                    device.pop(key)
+            out.append(device)
+        return out
+
+    def remove_push_device(self, user_id: int, device_id: int) -> bool:
+        with self._connect() as db:
+            return db.execute("DELETE FROM push_devices WHERE id = ? AND user_id = ?",
+                              (device_id, user_id)).rowcount > 0
+
+    def push_result(self, device_id: int, error: Optional[str] = None) -> None:
+        with self._connect() as db:
+            if error is None:
+                db.execute("UPDATE push_devices SET last_ok_at = ?, failures = 0, "
+                           "last_error = NULL WHERE id = ?", (now(), device_id))
+            else:
+                db.execute("UPDATE push_devices SET failures = failures + 1, "
+                           "last_error = ? WHERE id = ?", (error[:300], device_id))
+
+    def forget_push_device(self, device_id: int) -> None:
+        """The push service says this phone is gone."""
+        with self._connect() as db:
+            db.execute("DELETE FROM push_devices WHERE id = ?", (device_id,))
+
+    def new_push_messages(self, user_id: int, unit_id: str,
+                          messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep these; back come only the ones not sent before."""
+        fresh = []
+        with self._connect() as db:
+            for message in messages:
+                cursor = db.execute(
+                    "INSERT OR IGNORE INTO push_messages (user_id, unit_id, key, "
+                    "title, body, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, unit_id, message["key"], message["title"],
+                     message.get("body", ""), message.get("url", ""), now()))
+                if cursor.rowcount:
+                    fresh.append({**message, "id": cursor.lastrowid})
+        return fresh
+
+    def push_messages(self, user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id, unit_id, key, title, body, url, created_at "
+                "FROM push_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit))]
 
     # -- units -----------------------------------------------------------
     #

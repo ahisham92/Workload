@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import (accounts as accounts_module, export as export_module,
-               member as member_view, nightly, storage)
+               member as member_view, nightly, notify, storage, webpush,
+               weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
                        ROLE_MEMBER)
 from .library import NotAWorkbook
@@ -1190,7 +1191,76 @@ class WorkloadApp:
             service.close()
         result = {"ok": True, "unit": unit["name"], **result}
         self.accounts.record_import(unit["id"], result)
+        # Fresh timesheets can change what needs the manager: tell their phone.
+        try:
+            notify.run(self, user_ids=[user["id"]], unit_ids=[unit["id"]])
+        except Exception:                  # pragma: no cover - a notification
+            traceback.print_exc()          # never fails an import
         return result
+
+    # ------------------------------------------------------------------
+    # the weekly report, and notifications on the manager's phone
+    # ------------------------------------------------------------------
+
+    def weekly_download(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """The report as a page to keep, send on or print to PDF."""
+        report = ctx.service.weekly()
+        data = weekly_module.as_html(report).encode("utf-8")
+        name = re.sub(r'[\\/:*?"<>|]+', " ", report["unit"] or "Selecao+").strip()
+        return {"filename": f"{name} weekly report {report['week_start']}.html",
+                "size_bytes": len(data),
+                "content_base64": base64.b64encode(data).decode("ascii")}
+
+    def push_status(self, ctx: Context, query, body) -> Dict[str, Any]:
+        user_id = ctx.user["id"]
+        devices = []
+        for device in self.accounts.push_devices(user_id, secrets_too=True):
+            # Enough for a phone to know itself in the list; the address
+            # itself never leaves the server again.
+            device["fingerprint"] = hashlib.sha256(
+                device.pop("endpoint").encode("utf-8")).hexdigest()[:12]
+            device.pop("auth")
+            device.pop("p256dh")
+            devices.append(device)
+        return {"public_key": notify.keys_for(self.data_dir).public,
+                "devices": devices,
+                "messages": self.accounts.push_messages(user_id),
+                "task": notify.task_command(self)}
+
+    def push_subscribe(self, ctx: Context, query, body) -> Dict[str, Any]:
+        endpoint = str(body.get("endpoint") or "").strip()
+        keys = body.get("keys") if isinstance(body.get("keys"), dict) else {}
+        auth, p256dh = str(keys.get("auth") or ""), str(keys.get("p256dh") or "")
+        if not endpoint.startswith("https://") or len(endpoint) > 1000:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "That is not a push address.")
+        try:
+            webpush._point(webpush.unb64url(p256dh))
+            if len(webpush.unb64url(auth)) < 16:
+                raise ValueError
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST,
+                           "This browser sent keys that cannot be used.")
+        site = str(body.get("site") or "").strip()
+        if not site.startswith("https://"):
+            site = ""
+        device = self.accounts.add_push_device(
+            ctx.user["id"], endpoint=endpoint, auth=auth, p256dh=p256dh,
+            label=str(body.get("label") or "").strip(), site=site)
+        return {"device": device}
+
+    def push_unsubscribe(self, ctx: Context, query, body, device_id) -> Dict[str, Any]:
+        return {"removed": self.accounts.remove_push_device(
+            ctx.user["id"], self._account_id(device_id))}
+
+    def push_test(self, ctx: Context, query, body) -> Dict[str, Any]:
+        if not self.accounts.push_devices(ctx.user["id"]):
+            raise ApiError(HTTPStatus.CONFLICT,
+                           "Turn notifications on on this phone first.")
+        return {"results": notify.test(self, ctx.user["id"])}
+
+    def push_check(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """Look now, rather than waiting for the morning's run."""
+        return notify.run(self, user_ids=[ctx.user["id"]])
 
     # ------------------------------------------------------------------
     # the routes
@@ -1304,6 +1374,13 @@ class WorkloadApp:
              "manager"),
             ("GET", "/api/needs", lambda ctx, q, b: ctx.service.needs(), "manager"),
             ("GET", "/api/checkins", lambda ctx, q, b: ctx.service.checkins(), "manager"),
+            ("GET", "/api/weekly", lambda ctx, q, b: ctx.service.weekly(), "manager"),
+            ("GET", "/api/weekly/download", self.weekly_download, "manager"),
+            ("GET", "/api/push", self.push_status, "manager"),
+            ("POST", "/api/push/devices", self.push_subscribe, "manager"),
+            ("DELETE", "/api/push/devices/{}", self.push_unsubscribe, "manager"),
+            ("POST", "/api/push/test", self.push_test, "manager"),
+            ("POST", "/api/push/check", self.push_check, "manager"),
             ("GET", "/api/units/together", self.units_together, "manager"),
             ("POST", "/api/planned-work",
              lambda ctx, q, b: ctx.service.add_planned_work(b), "manager"),

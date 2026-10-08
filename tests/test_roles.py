@@ -207,6 +207,9 @@ class TestWhatAMemberCannotDo:
         ("GET", "/api/reference"),
         ("GET", "/api/timesheets"),
         ("GET", "/api/checkins"),
+        ("GET", "/api/weekly"),
+        ("GET", "/api/weekly/download"),
+        ("GET", "/api/push"),
     ])
     def test_the_managers_reads_are_refused(self, osama, method, path):
         status, body = call(osama, path, method)
@@ -222,6 +225,9 @@ class TestWhatAMemberCannotDo:
         ("POST", "/api/reload", {}),
         ("PUT", "/api/reference", {}),
         ("POST", "/api/team/access", {"engineer": "Osama", "username": "x"}),
+        ("POST", "/api/push/devices", {}),
+        ("POST", "/api/push/test", {}),
+        ("POST", "/api/push/check", {}),
     ])
     def test_every_write_is_refused(self, osama, method, path, body):
         status, answer = call(osama, path, method, body)
