@@ -8,6 +8,8 @@ up, and no link is ever fetched from the network.
 """
 
 import datetime as dt
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -191,6 +193,32 @@ class TestTheLink:
     def test_anything_else_is_refused(self, link):
         with pytest.raises(bc.CalendarLinkError):
             bc.clean_link(link)
+
+
+class TestRefusals:
+    def test_the_hosts_proxy_is_not_outlook(self, monkeypatch):
+        def refused(self, request, timeout=None):
+            raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", refused)
+        with pytest.raises(bc.CalendarLinkError) as caught:
+            bc.fetch("https://outlook.office365.com/owa/calendar/a/b/calendar.ics")
+        assert caught.value.errors == [bc.HOST_REFUSED]
+
+    def test_outlook_saying_no_is_outlook(self, monkeypatch):
+        def gone(self, request, timeout=None):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", gone)
+        with pytest.raises(bc.CalendarLinkError) as caught:
+            bc.fetch("https://outlook.office365.com/owa/calendar/a/b/calendar.ics")
+        assert "Outlook did not give" in caught.value.errors[0]
+
+    def test_no_network_at_all(self, monkeypatch):
+        def down(self, request, timeout=None):
+            raise urllib.error.URLError(OSError("Name or service not known"))
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", down)
+        with pytest.raises(bc.CalendarLinkError) as caught:
+            bc.fetch("https://outlook.office365.com/owa/calendar/a/b/calendar.ics")
+        assert "Could not reach Outlook" in caught.value.errors[0]
 
 
 CONFIG = {"work_days": [0, 1, 2, 3, 4], "day_start": "08:00", "day_end": "16:30",

@@ -90,6 +90,22 @@ def clean_link(raw: Any) -> str:
     return urllib.parse.urlunsplit(("https", host, parts.path, parts.query, ""))
 
 
+#: Said when the website's own host would not let the request out -- a free
+#: hosting plan only reaches the addresses it has approved -- so it is never
+#: mistaken for Outlook refusing.
+HOST_REFUSED = ("The website's host blocked the request to that calendar "
+                "address (it only lets the site reach approved addresses). "
+                "This is not Outlook refusing, and nothing is wrong with the link.")
+
+
+def refused_by_host(exc: BaseException) -> bool:
+    """Whether a failed request was stopped by the site's own outgoing proxy
+    (a refused CONNECT), not answered by Outlook."""
+    reason = getattr(exc, "reason", exc)
+    text = str(reason).lower()
+    return "tunnel connection failed" in text or "proxy" in text and "403" in text
+
+
 class _SameHosts(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         host = (urllib.parse.urlsplit(newurl).hostname or "").lower()
@@ -117,6 +133,8 @@ def fetch(link: str) -> str:
         raise CalendarLinkError([f"Outlook answered {exc.code}; try again later."]) \
             from None
     except (urllib.error.URLError, OSError) as exc:
+        if refused_by_host(exc):
+            raise CalendarLinkError([HOST_REFUSED]) from None
         raise CalendarLinkError([
             f"Could not reach Outlook just now ({getattr(exc, 'reason', exc)}); "
             "try again later."]) from None
