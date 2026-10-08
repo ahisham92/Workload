@@ -454,7 +454,8 @@ function openAccountModal() {
    to disagree with them and needs the numbers to do it.
 */
 
-const GRADE_ORDER = ['senior', 'engineer', 'junior', 'bim', 'drafter'];
+const GRADE_ORDER = ['manager', 'senior', 'engineer', 'junior', 'bim', 'drafter'];
+const GRADE_HEADS = ['Manager', 'Senior', 'Engineer', 'Junior', 'BIM', 'Draftsman'];
 
 const RESOURCING_VIEWS = [['balance', 'Balance'], ['map', 'Map']];
 
@@ -638,8 +639,7 @@ function renderTeams(data) {
   return el('div', { class: 'panel' },
     el('h3', {}, 'Teams'),
     el('div', { class: 'table-wrap' }, el('table', {},
-      el('thead', {}, el('tr', {}, ['Team', 'Lead', 'People', 'Senior', 'Engineer',
-        'Junior', 'BIM', 'Hours', 'Capacity/month', 'Recent', 'Over since', '']
+      el('thead', {}, el('tr', {}, ['Team', 'Lead', 'People', ...GRADE_HEADS, 'Hours', 'Capacity/month', 'Recent', 'Over since', '']
         .map((h) => el('th', {}, h)))),
       el('tbody', {}, (data.teams || []).map((team) => el('tr', {},
         el('td', {}, el('b', {}, team.name)),
