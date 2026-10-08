@@ -190,7 +190,7 @@
   async function lockAgain() {
     try {
       await api('/api/plan-review/lock', { method: 'POST', body: { week: review.data.week } });
-      toast('This week’s plan is locked as it stands now. Reasons already given stay.', 'ok');
+      toast('A new copy of this week’s plan is kept. Reasons already given stay.', 'ok');
       await load();
     } catch (error) {
       toast((error.errors || [error.message]).join(' '), 'bad');
@@ -207,9 +207,9 @@
 
   function lockNote(data) {
     if (data.locked) {
-      return el('span', { class: 'pill pill-ok' }, `Plan locked${data.locked_at ? ` on ${day(data.locked_at)}` : ''}`);
+      return el('span', { class: 'pill pill-ok' }, `Week’s plan copied${data.locked_at ? ` on ${day(data.locked_at)}` : ''}`);
     }
-    return el('span', { class: 'pill' }, data.state === 'past' ? 'No plan was kept for this week' : 'Not locked yet: showing the plan as it stands');
+    return el('span', { class: 'pill' }, data.state === 'past' ? 'No plan was kept for this week' : 'No copy kept yet: showing the plan as it stands');
   }
 
   function render() {
@@ -228,13 +228,13 @@
           el('div', {},
             el('h3', {}, 'Plan against what happened'),
             el('p', { class: 'muted' },
-              'Each week’s plan is locked on its first day, so it cannot drift. '
+              'On the first working day the app keeps a copy of the week’s plan. The daily plan still changes every day; the copy is what the week is checked against. '
               + 'At the end of the week it is laid beside the tasks done and the hours in the timesheets. '
               + 'Anything that did not go to plan gets a reason with one tap.')),
           el('div', { class: 'row-actions' }, lockNote(data),
             data.can_lock ? el('button', { class: 'btn btn-sm', type: 'button', onclick: lockAgain,
-              title: 'After changing the plan this week, keep the new one' },
-            data.locked ? 'Lock again' : 'Lock now') : null)),
+              title: 'After big changes this week, check the week against the new plan instead' },
+            data.locked ? 'Copy the plan again' : 'Copy the plan now') : null)),
         weekNav(data, (week) => { review.week = week; load(); }),
         el('div', { class: 'stat-strip' },
           stat('Planned hours kept', pct(s.kept), keptTone(s.kept),

@@ -293,3 +293,15 @@ class TestWhatIfs:
     def test_a_member_cannot_keep_one(self, site, osama):
         assert call(osama, "/api/what-ifs")[0] == 403
         assert call(osama, "/api/what-ifs", "POST", {"name": "x", "moves": []})[0] == 403
+
+
+class TestCairoWeek:
+    def test_a_sunday_week_is_copied_on_sunday(self):
+        from workload_app import daily
+        config = {**cfg.DEFAULTS, "work_days": [6, 0, 1, 2, 3]} if hasattr(cfg, "DEFAULTS") \
+            else {"work_days": [6, 0, 1, 2, 3], "holidays": [], "away": {}}
+        friday = _dt.date(2026, 10, 9)
+        days = weekplan.current_week(friday, config, daily.week_of)
+        assert days[0] == _dt.date(2026, 10, 11) and days[0].weekday() == 6
+        assert weekplan.current_week(_dt.date(2026, 10, 11), config, daily.week_of)[0] \
+            == _dt.date(2026, 10, 11)
