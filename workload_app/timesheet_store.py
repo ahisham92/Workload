@@ -734,11 +734,15 @@ class TimesheetStore:
 
     def calendar_read(self, person: str, *, digest: str = "",
                       busy: Optional[Sequence[Tuple[str, str]]] = None,
-                      problem: str = "") -> bool:
+                      problem: str = "", keep_from: Optional[str] = None) -> bool:
         """What reading the calendar gave: new busy times, or a problem.
         Nothing is written when nothing changed, so the figures worked out
-        from the unit are kept.  True when something was written."""
+        from the unit are kept.  Busy times ending before ``keep_from`` go
+        whatever came back.  True when something was written."""
         with self._connect() as db:
+            if keep_from:
+                db.execute("DELETE FROM calendar_busy WHERE person = ? AND end < ?",
+                           (person, keep_from))
             row = db.execute("SELECT digest, problem FROM calendar_links "
                              "WHERE person = ?", (person,)).fetchone()
             if row is None:

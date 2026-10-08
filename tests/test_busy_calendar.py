@@ -301,6 +301,14 @@ class TestTheUnit:
         dina = next(p for p in unit.calendars()["people"] if p["person"] == "Dina")
         assert dina["problem"] and dina["meetings"] == 1
 
+    def test_only_the_coming_weeks_are_kept(self, unit):
+        unit.set_calendar_link("Dina", "sealed", "self")
+        unit.record_calendar("Dina", busy=[
+            (dt.datetime(2026, 9, 1, 10), dt.datetime(2026, 9, 1, 11)),
+            (dt.datetime(2026, 10, 7, 10), dt.datetime(2026, 10, 7, 11)),
+            (dt.datetime(2027, 3, 1, 10), dt.datetime(2027, 3, 1, 11))])
+        assert unit.store.calendar_busy()["Dina"] == [("2026-10-07T10:00", "2026-10-07T11:00")]
+
     def test_only_people_on_the_team(self, unit):
         with pytest.raises(Exception):
             unit.set_calendar_link("Nobody Here", "sealed", "manager")

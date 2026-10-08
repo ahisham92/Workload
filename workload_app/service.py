@@ -1707,12 +1707,17 @@ class WorkloadService:
     def record_calendar(self, person: str, *, busy=None, problem: str = "") -> bool:
         """Busy times read from a person's calendar, or why it could not be."""
         with self._lock:
+            first, last = busy_calendar.window(_today())
+            keep_from = first.isoformat()
             if problem:
-                return self.store.calendar_read(person, problem=problem)
+                return self.store.calendar_read(person, problem=problem,
+                                                keep_from=keep_from)
             spans = [(a.isoformat(timespec="minutes"), b.isoformat(timespec="minutes"))
-                     for a, b in busy or ()]
+                     for a, b in busy or ()
+                     if b.date() >= first and a.date() <= last]
             digest = hashlib.sha256(json.dumps(spans).encode()).hexdigest()
-            return self.store.calendar_read(person, digest=digest, busy=spans)
+            return self.store.calendar_read(person, digest=digest, busy=spans,
+                                            keep_from=keep_from)
 
     def _my_mark(self, engineer: str, mark_id: Any) -> Dict[str, Any]:
         try:

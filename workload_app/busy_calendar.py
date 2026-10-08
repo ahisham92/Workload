@@ -38,7 +38,7 @@ except ImportError:                    # pragma: no cover
     ZoneInfo = None                    # type: ignore
 
 #: How far ahead busy times are kept.
-AHEAD_DAYS = 42
+AHEAD_DAYS = 56
 #: And how far back, so today's earlier meetings still show.
 BEHIND_DAYS = 1
 #: Where an Outlook calendar is published.  Nothing else is ever fetched.
