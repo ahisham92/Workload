@@ -36,6 +36,10 @@ from . import people as people_module
 from . import planner
 from . import tasks as task_sheet
 
+#: How a meeting typed in reads on the page, by who it is with.
+MEETING_KINDS = {"client": "Client meeting", "trade": "Meeting with another trade",
+                 "internal": "Internal meeting"}
+
 #: Usual project work shorter than this in a day is folded into the largest,
 #: so a diary page is not cut into ten-minute slivers.
 SMALLEST_BLOCK_HOURS = 0.5
@@ -109,13 +113,15 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
             for meeting in meetings:
                 if name != meeting["leader"] and name not in meeting["with"]:
                     continue
-                if meeting["kind"] == "outlook":
+                if meeting["kind"] in ("outlook", "typed"):
                     # Only what no request or meeting above already holds.
                     for first, last in busy_calendar.minus(
                             [(meeting["start"], meeting["end"])],
                             [(b["start"], b["end"]) for b in fixed]):
                         fixed.append({"start": first, "end": last, "kind": "meeting",
-                                      "source": "outlook",
+                                      "source": meeting["kind"],
+                                      "what": meeting.get("what", ""),
+                                      "meeting_id": meeting.get("meeting_id"),
                                       "title": _meeting_title(meeting, name),
                                       "project": "", "task_id": None, "done": False,
                                       "agenda": []})
@@ -198,6 +204,9 @@ def _meeting_title(meeting: Dict[str, Any], name: str) -> str:
         return "Development time: your goals for the quarter"
     if meeting["kind"] == "outlook":
         return "In a meeting (from Outlook)"
+    if meeting["kind"] == "typed":
+        what = MEETING_KINDS.get(meeting.get("what") or "", "Meeting")
+        return f"{what}: {meeting['title']}" if meeting.get("title") else what
     if meeting["kind"] == "one_to_one":
         other = meeting["with"][0] if name == leader else leader
         return f"One-to-one with {other}"

@@ -1364,4 +1364,27 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 @media (max-width: 640px) { .cal-paste .btn { flex: 1 1 100%; } }
 @media print { .cal-panel, #mycalendar { display: none !important; } }
 
+/* Meetings typed in by hand. */
+.meet-form { display: grid; gap: 8px; margin: 8px 0 12px; padding: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2, transparent); }
+.meet-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.meet-row > .grow { flex: 1 1 260px; min-width: 0; }
+.meet-form input[type=text], .meet-form input[type=date], .meet-form input[type=time], .meet-form select {
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--text); font: inherit; }
+.meet-people { align-items: center; gap: 6px 14px; }
+.meet-people > .muted { flex: 1 1 100%; }
+.meet-who { display: inline-flex; align-items: center; gap: 4px; font-size: 13.5px; }
+.meet-client { background: var(--bad-soft); color: var(--bad); }
+.meet-trade { background: var(--warn-soft, #fff3d6); color: var(--warn); }
+.meet-internal { background: var(--surface-2, #eef1f5); color: var(--muted); }
+.request.meet-item { grid-template-columns: 11.5em minmax(0, 1fr) auto; }
+@media (max-width: 640px) {
+  .request.meet-item { grid-template-columns: 1fr auto; }
+  .meet-item .request-time { grid-column: 1 / -1; }
+  .meet-row > * { flex: 1 1 45%; }
+  .meet-form .btn-primary { flex: 1 1 100%; }
+}
+@media print { .meet-form { display: none !important; } }
+
 .md-goal-list { margin: 4px 0 6px; padding-left: 18px; display: grid; gap: 4px; }
