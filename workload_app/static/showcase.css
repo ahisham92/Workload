@@ -309,3 +309,37 @@ body.bd-dragging { cursor: grabbing; user-select: none; }
 .scape3d-hint.is-gone { opacity: 0; }
 @media (max-width: 700px) { .scape3d-row { max-width: 112px; font-size: 10.5px; padding: 1px 15px 1px 6px; }
   .scape3d-row::after { right: 5px; width: 6px; height: 6px; margin-top: -3px; } }
+
+/* ---------------------------------------- next two weeks (team3d.js) */
+.scape-actions { display: flex; justify-content: flex-end; margin: -4px 0 8px; }
+.scape3d-name { color: var(--text); font-weight: 650; font-size: 12px; padding: 2px 8px 2px 18px; border-radius: 999px;
+  border: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.scape3d-name::before { content: ''; position: absolute; left: 7px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px;
+  border-radius: 50%; background: var(--dot, var(--muted)); }
+.scape3d-pct { color: var(--text); font-weight: 750; font-size: 15px; letter-spacing: -.01em;
+  text-shadow: 0 1px 0 var(--surface), 0 0 6px var(--surface); }
+.scape3d-move { color: #fff; background: var(--accent); font-weight: 650; font-size: 11.5px; padding: 2px 8px;
+  border-radius: 999px; box-shadow: 0 2px 6px rgb(0 0 0 / .18); }
+@media (max-width: 700px) {
+  .scape3d-name { font-size: 10.5px; padding: 1px 6px 1px 14px; }
+  .scape3d-name::before { left: 5px; width: 6px; height: 6px; margin-top: -3px; }
+  .scape3d-pct { font-size: 12.5px; }
+  .scape3d-move { font-size: 10px; padding: 1px 6px; }
+}
+.ideas-wrap { margin-top: 14px; }
+.ideas-wrap h4 { margin: 0 0 8px; font-size: 15px; }
+.ideas { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.idea { display: flex; gap: 10px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+  border-left: 4px solid var(--c, var(--accent)); background: color-mix(in srgb, var(--c, var(--accent)) 6%, var(--surface)); }
+.idea-move { --c: var(--accent); }
+.idea-bad { --c: var(--bad); }
+.idea-rest { --c: var(--series-4); }
+.idea-room { --c: var(--series-3); }
+.idea-ask { --c: var(--series-5); }
+.idea-n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--c, var(--accent)); color: #fff; font-weight: 700; font-size: 12.5px; }
+.idea-body { min-width: 0; }
+.idea-body b { display: block; font-size: 14px; }
+.idea-body p { margin: 3px 0 8px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.idea-none { padding: 12px 14px; border-radius: 12px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }

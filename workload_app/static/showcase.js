@@ -830,7 +830,7 @@
 
   /* -------------------------------------- the landscape on Check-ins */
 
-  const scape = { mode: 'people', needs: null };
+  const scape = { mode: 'next', outlook: null };
 
   function shortWeek(iso) {
     return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -884,24 +884,91 @@
     };
   }
 
-  /** Teams: the forecast's coming weeks, each team's work against its people. */
-  function teamsModel(needs) {
-    const groups = (needs && needs.groups) || [];
-    if (!groups.length) return null;
-    const weeks = needs.weeks || [];
+  /** The next two weeks, one tower per person, before and after the planner's suggestions. */
+  function nextModel(data, outlook) {
+    const names = new Set((data.people || []).map((p) => p.name));
+    const people = (outlook.people || []).filter((p) => names.has(p.name) && p.before)
+      .map((p) => ({
+        name: p.name, color: engineerColor(p.name), now: p.before.load || 0,
+        after: (p.after || p.before).load || 0, hours: p.before.hours, hoursAfter: (p.after || p.before).hours,
+        capacity: p.capacity, items: p.items || [],
+      }))
+      .sort((a, b) => b.now - a.now);
+    if (!people.length) return null;
+    const byName = new Map(people.map((p) => [p.name, p]));
+    const projectName = new Map((outlook.projects || []).map((p) => [p.number, p.name]));
+    const moves = (outlook.suggested || []).filter((m) => byName.has(m.from) && byName.has(m.to)).map((m) => {
+      const item = (byName.get(m.from).items || []).find((it) => it.project === m.project || it.key === m.project);
+      const hours = item && m.share ? item.hours_before * m.share : null;
+      return { ...m, hours, name: projectName.get(m.project) || m.project,
+        label: `${m.project}${hours ? ` · ${Math.round(hours)} h` : ''}` };
+    });
     return {
-      rows: groups.map((g) => ({ label: g.role === 'drafting' ? `${g.team_name} · drafting` : g.team_name })),
-      cols: weeks.map((w) => shortWeek(w.from)),
-      values: groups.map((g) => g.weeks.map((w) => (w.capacity_hours ? w.load : (w.demand_hours ? 2.2 : null)))),
-      now: 0,
-      summary: `Work against people, team by team, the next ${weeks.length} weeks`,
-      text: (r, c, v) => {
-        const w = groups[r].weeks[c];
-        return `Week of ${shortWeek(weeks[c].from)}: ${fmt.hours(w.demand_hours)} h of work for `
-          + `${fmt.hours(w.capacity_hours)} h of people (${pct(v)})`
-          + (w.gap_people > 0.05 ? `, ${num(w.gap_people, 1)} more people needed` : '');
-      },
+      people, moves, byName, summary: outlook.summary || {},
+      text: (p, which) => (which === 'after'
+        ? `After the moves: ${pct(p.after)} of their hours (${hrs(p.hoursAfter)} lined up for ${hrs(p.capacity)}).`
+        : `Next two weeks: ${pct(p.now)} of their hours (${hrs(p.hours)} lined up for ${hrs(p.capacity)}).`),
     };
+  }
+
+  /** What to do about it, in plain sentences, each with the place to do it. */
+  function ideas(data, model) {
+    const out = [];
+    const go = (label, action) => el('button', { class: 'btn btn-sm', type: 'button', onclick: action }, label);
+    const board = () => window.planner && window.planner.board();
+    const people = new Map((data.people || []).map((p) => [p.name, p]));
+    if (model) {
+      for (const m of model.moves) {
+        const from = model.byName.get(m.from); const to = model.byName.get(m.to);
+        out.push({ tone: 'move', title: `Hand ${m.to} part of ${m.name}`,
+          text: `${m.from} is at ${pct(from.now)} over the next two weeks and ${m.to} is at ${pct(to.now)}. `
+            + `Moving ${Math.round(m.share * 100)}% of ${m.project}${m.hours ? ` (about ${Math.round(m.hours)} h)` : ''} `
+            + `brings ${m.from} to ${pct(from.after)} and ${m.to} to ${pct(to.after)}.`,
+          action: go('Plan it on the board', board) });
+      }
+      const still = model.people.filter((p) => p.after > 1.05);
+      if (still.length) {
+        out.push({ tone: 'bad', title: `${still.length === 1 ? `${still[0].name} stays` : `${still.length} people stay`} over a full load`,
+          text: `${still.map((p) => `${p.name} (${pct(p.after)})`).join(', ')} will still be over even after `
+            + 'the handovers, because nobody doing the same kind of work has room. Push a due date back, or ask for more people.',
+          action: go('See who to ask for', () => switchView('planner')) });
+      }
+    }
+    for (const p of data.people || []) {
+      if (!p.signal || p.signal.key !== 'rest') continue;
+      const off = p.last_day_off ? Math.round((Date.now() - new Date(`${p.last_day_off}T00:00:00`)) / 864e5) : null;
+      out.push({ tone: 'rest', title: `Give ${p.name} a lighter week`,
+        text: `${(p.signal.reasons || []).slice(0, 2).join(', ')}.`
+          + (off !== null && off > 20 ? ` Their last day off was ${off} days ago: a day off would help.` : ''),
+        action: go('Plan a lighter week', board) });
+    }
+    const taking = new Set(model ? model.moves.map((m) => m.to) : []);
+    for (const c of data.can_take || []) {
+      if (taking.has(c.name)) continue;
+      out.push({ tone: 'room', title: `${c.name} can take the next job`,
+        text: `${hrs(c.free_week)} free this week${c.next_free ? `, from ${new Date(`${c.next_free}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}` : ''}.`,
+        action: go('Add a task', () => switchView('tasks')) });
+    }
+    const urgent = [];
+    for (const p of data.people || []) {
+      for (const c of p.checkpoints || []) if (c.level === 'now' && c.kind !== 'rest') urgent.push(c);
+    }
+    for (const c of urgent.slice(0, 2)) {
+      out.push({ tone: 'ask', title: 'Ask about this today', text: c.text, action: go('Open Tasks', () => switchView('tasks')) });
+    }
+    return out.slice(0, 6);
+  }
+
+  function ideaList(items) {
+    if (!items.length) {
+      return el('div', { class: 'idea-none' }, 'Nothing needs you this fortnight: everyone is within their hours.');
+    }
+    return el('ol', { class: 'ideas' }, ...items.map((it, k) => el('li', { class: `idea idea-${it.tone}` },
+      el('span', { class: 'idea-n' }, String(k + 1)),
+      el('div', { class: 'idea-body' },
+        el('b', {}, it.title),
+        el('p', {}, it.text),
+        it.action))));
   }
 
   async function renderScape() {
@@ -912,43 +979,69 @@
     show.checkins = data;
     host.hidden = false;
     let model = null;
-    if (scape.mode === 'teams') {
+    if (!scape.outlook) {
       try {
-        scape.needs = scape.needs || await api('/api/needs', { quiet: true });
-      } catch (error) { scape.needs = null; }
-      model = teamsModel(scape.needs);
+        scape.outlook = await api('/api/planner/suggest', { quiet: true, method: 'POST', body: { days: 10, moves: [] } });
+      } catch (error) { scape.outlook = null; }
     }
-    if (!model) { scape.mode = 'people'; model = peopleModel(data); }
-    if (!model) { host.hidden = true; return; }
+    const next = scape.outlook ? nextModel(data, scape.outlook) : null;
+    if (scape.mode === 'next' && !next) scape.mode = 'weeks';
+    if (scape.mode === 'weeks') model = peopleModel(data);
+    if (scape.mode === 'weeks' && !model) { host.hidden = true; return; }
     const stage = el('div', { class: 'scape-host' });
     const pick = (mode, label) => el('button', {
       class: `subtab ${scape.mode === mode ? 'is-active' : ''}`, type: 'button',
       onclick: () => { scape.mode = mode; renderScape(); },
     }, label);
+    let instance = null;
+    let after = false;
+    const toggle = scape.mode === 'next' && next.moves.length
+      ? el('button', {
+        class: 'btn btn-primary btn-sm scape-toggle', type: 'button',
+        onclick: (e) => {
+          after = !after;
+          e.currentTarget.textContent = after ? 'Back to now' : 'Show the suggested moves';
+          if (instance && instance.show) instance.show(after ? 'after' : 'now');
+        },
+      }, 'Show the suggested moves')
+      : null;
     setChildren(host,
       el('div', { class: 'panel-head' },
         el('div', {},
-          el('h3', {}, 'The team\'s load in 3D'),
+          el('h3', {}, scape.mode === 'next' ? 'Who is over, who has room: the next two weeks' : 'Week by week, in 3D'),
           el('p', { class: 'muted' },
-            scape.mode === 'people'
-              ? 'Each block is one person\'s week: its height is how much of their hours they booked, '
-                + 'the sheet of glass is a full load. Left of the blue line are the weeks the timesheets '
-                + 'hold, right of it the next two as laid out. Turn it with a finger, pinch to zoom, tap a block to read it.'
-              : 'Each block is a team\'s week: work forecast against the people in it. Above the glass '
-                + 'the team needs more people that week. Turn it with a finger, pinch to zoom, tap a block to read it.')),
-        el('div', { class: 'subtabs scape-modes' }, pick('people', 'People'), pick('teams', 'Teams ahead'))),
+            scape.mode === 'next'
+              ? 'One tower per person: the taller it is, the more work they have lined up for the next two weeks. '
+                + 'Above the glass sheet means more than their hours. '
+                + (next.moves.length ? 'Press "Show the suggested moves" to see who should hand what to whom.' : '')
+              : 'Each block is one person\'s week: its height is how much of their hours they booked, '
+                + 'the glass sheet is a full load. Left of the blue line are past weeks, right of it the next two.')),
+        el('div', { class: 'subtabs scape-modes' },
+          next ? pick('next', 'Next two weeks') : null, pick('weeks', 'Week by week'))),
+      toggle ? el('div', { class: 'scape-actions' }, toggle) : null,
       stage,
       el('div', { class: 'legend scape-legend' },
-        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-1)' }), 'room to take more'),
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-1)' }), 'has room'),
         el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-3)' }), 'about right'),
         el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--series-4)' }), 'heavy'),
-        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--bad)' }), 'over a full load')));
+        el('span', { class: 'legend-item' }, el('span', { class: 'swatch', style: 'background:var(--bad)' }), 'over their hours')),
+      el('div', { class: 'ideas-wrap' },
+        el('h4', {}, 'What to do'),
+        ideaList(ideas(data, next))));
     // The real 3D when the phone can draw it; the flat drawing if not.
     try {
+      if (scape.mode === 'next') {
+        const three = await import('./team3d.js');
+        if (stage.isConnected) instance = three.render(stage, next);
+        if (instance) return;
+        stage.replaceChildren(el('p', { class: 'muted' }, 'This phone cannot draw 3D; the ideas below say the same thing.'));
+        if (toggle) toggle.remove();
+        return;
+      }
       const three = await import('./load3d.js');
       if (stage.isConnected && three.render(stage, model)) return;
     } catch (error) { /* no WebGL or no modules: fall through */ }
-    if (stage.isConnected) landscape(stage, model);
+    if (stage.isConnected && model) landscape(stage, model);
   }
 
   /* ----------------------------------------------------------- wiring */
@@ -960,7 +1053,7 @@
       window.checkins.load = async (...args) => { await load(...args); renderScape(); };
       window.checkins.summary = async (...args) => {
         await summary(...args);
-        show.checkins = null; show.outlook = null; scape.needs = null;
+        show.checkins = null; show.outlook = null; scape.outlook = null;
         if ($('#view-checkins').classList.contains('is-active')) renderScape();
         if ($('#view-team').classList.contains('is-active')) teamCards();
       };
