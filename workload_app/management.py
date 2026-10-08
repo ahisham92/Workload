@@ -15,6 +15,8 @@ So it is reserved, from what the app already knows about who leads whom:
   of the day, longer for a bigger team;
 * **a one-to-one with each person** -- every second week, short, at the end of
   a day, spread over the fortnight so no day is all one-to-ones;
+* **meetings typed in** -- a client or another trade, a time and who is in
+  it (see ``meetings``), taken as they are;
 * **Outlook meetings** -- for anybody whose calendar link is in (see
   ``busy_calendar``), the times Outlook says they are busy, less any time the
   meetings above already hold, so nothing is counted twice;
@@ -139,7 +141,8 @@ class Plan:
                  teams: Sequence[Dict[str, Any]], config: Dict[str, Any],
                  goals: Optional[Mapping[str, Sequence[str]]] = None,
                  outlook: Optional[Mapping[str, Sequence[tuple]]] = None,
-                 today: Optional[_dt.date] = None):
+                 today: Optional[_dt.date] = None,
+                 typed: Optional[Sequence[Dict[str, Any]]] = None):
         self.config = config
         self.led = leaders(roster, teams)
         self.support = {name: support_hours(led, config)
@@ -153,6 +156,8 @@ class Plan:
         self.outlook = {name: [(_moment(a), _moment(b)) for a, b in spans]
                         for name, spans in (outlook or {}).items() if spans}
         self.today = today
+        #: Meetings typed in by hand (see ``meetings``), each time it falls.
+        self.typed = list(typed or ())
 
     def hours_a_day(self) -> Dict[str, float]:
         """What leading people takes from each leader's day, on average:
@@ -179,9 +184,10 @@ class Plan:
         return out
 
     def outlook_a_day(self) -> Dict[str, float]:
-        """Each person's Outlook meetings, on average a working day over the
-        coming days, beyond what the meetings above already hold."""
-        if not self.outlook or self.today is None:
+        """Each person's meetings from outside the app -- typed in or from
+        Outlook -- on average a working day over the coming days, beyond what
+        the meetings above already hold."""
+        if not (self.outlook or self.typed) or self.today is None:
             return {}
         days = []
         day = self.today
@@ -224,15 +230,46 @@ class Plan:
                                 "title": "In a meeting (Outlook)"})
         return out
 
+    def typed_on(self, day: _dt.date, taken: Sequence[Dict[str, Any]] = ()
+                 ) -> List[Dict[str, Any]]:
+        """The meetings typed in for ``day``, one block for each person in
+        them, inside the working day, less the time ``taken`` holds."""
+        config = self.config
+        if not self.typed or not task_sheet.is_working_day(day, config):
+            return []
+        start = _dt.datetime.combine(day, _clock(config["day_start"]))
+        close = _dt.datetime.combine(day, _clock(config["day_end"]))
+        out = []
+        for meeting in self.typed:
+            if not (meeting["start"] < close and meeting["end"] > start):
+                continue
+            span = (max(meeting["start"], start), min(meeting["end"], close))
+            for name in meeting["people"]:
+                if calendar_.is_away(config, name, day):
+                    continue
+                held = [(m["start"], m["end"]) for m in taken
+                        if name == m["leader"] or name in m["with"]]
+                for first, last in busy_calendar.minus([span], held):
+                    out.append({"kind": "typed", "leader": name, "with": [],
+                                "start": first, "end": last,
+                                "title": meeting["title"], "what": meeting["kind"],
+                                "meeting_id": meeting.get("id")})
+        return out
+
     def day_blocks(self, day: _dt.date) -> tuple:
-        """The day's meetings, development times and Outlook meetings, each
-        placed around the ones before it."""
+        """The day's meetings, development times, and the meetings from
+        outside the app (typed in, then Outlook), each placed around the ones
+        before it."""
         meetings = self.meetings_on(day)
         raw = [{"leader": name, "with": [], "start": a, "end": b}
                for name, spans in self.outlook.items() for a, b in spans
                if a.date() <= day <= b.date()]
+        raw += [{"leader": name, "with": [], "start": m["start"], "end": m["end"]}
+                for m in self.typed if m["start"].date() == day for name in m["people"]]
         development = self.development_on(day, meetings + raw)
-        return meetings, development, self.outlook_on(day, meetings + development)
+        typed = self.typed_on(day, meetings + development)
+        outlook = self.outlook_on(day, meetings + development + typed)
+        return meetings, development, typed + outlook
 
     def development_day(self, name: str, day: _dt.date) -> Optional[_dt.date]:
         """The day of ``day``'s week that holds ``name``'s development time:

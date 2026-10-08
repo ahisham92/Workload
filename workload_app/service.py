@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import budgets as budgets_module
 from . import busy_calendar
+from . import meetings as meetings_module
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                growth as growth_module, management as management_module,
                drawing_list as drawing_list_module,
@@ -1020,7 +1021,9 @@ class WorkloadService:
                 goals=growth_module.goals_by_person(
                     self.store.goals(quarter=growth_module.quarter_of(_today())),
                     growth_module.quarter_of(_today())),
-                outlook=self.store.calendar_busy(), today=_today()),
+                outlook=self.store.calendar_busy(), today=_today(),
+                typed=meetings_module.occurrences(
+                    self.store.meetings(), *busy_calendar.window(_today()))),
             "rows": rows,
             "tasks": wb.task_records(),
             "roster": roster["people"],
@@ -1974,6 +1977,42 @@ class WorkloadService:
                 self.store.remove_absence(mine["id"])
             self.store.clear_mark(mark["id"], "undone")
             return {"removed": mark["id"]}
+
+    # -- meetings typed in by hand ----------------------------------------
+    def meetings(self, *, person: Optional[str] = None) -> Dict[str, Any]:
+        """The meetings still to come; for a member, only the ones they are in."""
+        with self._lock:
+            rows = self.store.meetings()
+            if person is not None:
+                rows = [r for r in rows if person in r["people"]]
+            return {"meetings": meetings_module.upcoming(rows, _today()),
+                    "people": self._people_names() if person is None else [person],
+                    "kinds": list(meetings_module.KINDS)}
+
+    def add_meeting(self, body: Dict[str, Any], *, person: Optional[str] = None
+                    ) -> Dict[str, Any]:
+        """A meeting typed in. A member's always has them in it and only them."""
+        with self._lock:
+            names = self._people_names()
+            if person is not None:
+                body = {**body, "people": [person]}
+            meeting = meetings_module.clean(body, people=names, today=_today())
+            new_id = self.store.add_meeting(**meeting, added_by=person or "")
+            return {"id": new_id, **meeting}
+
+    def remove_meeting(self, meeting_id: Any, *, person: Optional[str] = None
+                       ) -> Dict[str, Any]:
+        """The manager takes off any; a member only the ones they put in."""
+        with self._lock:
+            try:
+                meeting_id = int(meeting_id)
+            except (TypeError, ValueError):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such meeting.")
+            row = next((r for r in self.store.meetings() if r["id"] == meeting_id), None)
+            if row is None or (person is not None and row["added_by"] != person):
+                raise ApiError(HTTPStatus.NOT_FOUND, "There is no such meeting.")
+            self.store.remove_meeting(meeting_id)
+            return {"removed": meeting_id}
 
     # -- Outlook calendars: busy times only --------------------------------
     #

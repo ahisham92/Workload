@@ -42,3 +42,72 @@ function calendarPaste(save, label = 'Link my calendar') {
   return el('div', { class: 'cal-paste' }, input,
     el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: go }, label));
 }
+
+/* -- meetings typed in by hand ------------------------------------------- */
+
+const MEETING_KIND = { client: 'Client', trade: 'Other trade', internal: 'Internal' };
+const MEETING_REPEAT = { '': 'Once', weekly: 'Every week', fortnightly: 'Every 2 weeks' };
+
+function meetingDay(iso) {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined,
+    { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+/** The add-a-meeting form. ``people`` (names) shows "Who goes" ticks, with
+    ``ticked`` ticked; leave it empty for a person's own page. */
+function meetingForm({ day, people = [], ticked = [], add }) {
+  const title = el('input', { type: 'text', maxlength: 120, class: 'grow',
+    placeholder: 'What, e.g. Design review with the client', 'aria-label': 'What the meeting is' });
+  const kind = el('select', { 'aria-label': 'With' },
+    ...Object.entries(MEETING_KIND).map(([value, text]) => el('option', { value }, text)));
+  const date = el('input', { type: 'date', value: day, 'aria-label': 'Day' });
+  const from = el('input', { type: 'time', value: '10:00', step: 900, 'aria-label': 'From' });
+  const to = el('input', { type: 'time', value: '11:00', step: 900, 'aria-label': 'To' });
+  from.addEventListener('change', () => {
+    if (to.value <= from.value) {
+      const [h, m] = from.value.split(':').map(Number);
+      to.value = `${String(Math.min(23, h + 1)).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+  });
+  const repeat = el('select', { 'aria-label': 'Repeat' },
+    ...Object.entries(MEETING_REPEAT).map(([value, text]) => el('option', { value }, text)));
+  const until = el('input', { type: 'date', 'aria-label': 'Until' });
+  const untilLabel = el('label', { class: 'field', hidden: true }, el('span', {}, 'Until'), until);
+  repeat.addEventListener('change', () => { untilLabel.hidden = !repeat.value; });
+  const boxes = people.map((name) => el('label', { class: 'meet-who' },
+    el('input', { type: 'checkbox', value: name, ...(ticked.includes(name) ? { checked: '' } : {}) }),
+    ` ${name}`));
+  const go = async () => {
+    const body = { title: title.value, kind: kind.value, day: date.value, start: from.value,
+      end: to.value, repeat: repeat.value, until: until.value || null,
+      people: boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value) };
+    if (await add(body)) title.value = '';
+  };
+  return el('div', { class: 'meet-form' },
+    el('div', { class: 'meet-row' }, title,
+      el('label', { class: 'field' }, el('span', {}, 'With'), kind)),
+    el('div', { class: 'meet-row' },
+      el('label', { class: 'field' }, el('span', {}, 'Day'), date),
+      el('label', { class: 'field' }, el('span', {}, 'From'), from),
+      el('label', { class: 'field' }, el('span', {}, 'To'), to),
+      el('label', { class: 'field' }, el('span', {}, 'Repeat'), repeat),
+      untilLabel),
+    boxes.length ? el('div', { class: 'meet-row meet-people' }, el('span', { class: 'muted small' }, 'Who goes:'), ...boxes) : null,
+    el('div', { class: 'meet-row' },
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: go }, 'Add meeting')));
+}
+
+/** The meetings coming up, each with Remove when ``canRemove(m)``. */
+function meetingList(meetings, { remove, canRemove = () => true, showPeople = true }) {
+  if (!meetings.length) return el('p', { class: 'muted small' }, 'No meetings put in yet.');
+  return el('ul', { class: 'request-list' }, meetings.map((m) => el('li', { class: 'request meet-item' },
+    el('span', { class: 'request-time' }, `${meetingDay(m.next)} ${m.start}–${m.end}`),
+    el('span', { class: 'request-what' },
+      el('span', { class: `pill meet-${m.kind}` }, MEETING_KIND[m.kind] || m.kind), ' ',
+      el('b', {}, m.title || 'Meeting'),
+      el('span', { class: 'muted small' },
+        [m.repeat ? MEETING_REPEAT[m.repeat].toLowerCase() + (m.until ? ` until ${meetingDay(m.until)}` : '') : '',
+          showPeople ? m.people.join(', ') : ''].filter(Boolean).map((t) => ` · ${t}`).join(''))),
+    canRemove(m) ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+      onclick: () => remove(m) }, 'Remove') : el('span'))));
+}

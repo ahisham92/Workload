@@ -22,6 +22,7 @@ the file you download is still a workbook that opens and calculates.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import sqlite3
 from collections import defaultdict
 from contextlib import contextmanager
@@ -318,6 +319,23 @@ CREATE TABLE IF NOT EXISTS calendar_links (
     read_at    TEXT,                -- when the busy times below last changed
     problem    TEXT NOT NULL DEFAULT '',
     digest     TEXT NOT NULL DEFAULT ''
+);
+
+-- Meetings typed in by hand: with a client, another trade, or internal; the
+-- day, from and to (local), who goes (a JSON list of names), and a repeat
+-- (weekly | fortnightly) up to a date.
+CREATE TABLE IF NOT EXISTS meetings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT NOT NULL DEFAULT '',
+    kind       TEXT NOT NULL DEFAULT 'client',
+    day        TEXT NOT NULL,
+    start      TEXT NOT NULL,
+    end        TEXT NOT NULL,
+    people     TEXT NOT NULL DEFAULT '[]',
+    repeat     TEXT NOT NULL DEFAULT '',
+    until      TEXT,
+    added_by   TEXT NOT NULL DEFAULT '',   -- '' for the manager, else the person
+    created_at TEXT NOT NULL
 );
 
 -- When each of them is busy in the coming weeks, from that calendar: a start
@@ -645,6 +663,14 @@ class TimesheetStore:
                        "WHERE person = ?", (new, old))
             db.execute("UPDATE calendar_busy SET person = ? WHERE person = ?",
                        (new, old))
+            for row in db.execute("SELECT id, people, added_by FROM meetings").fetchall():
+                names = json.loads(row["people"] or "[]")
+                if old in names or row["added_by"] == old:
+                    names = list(dict.fromkeys(new if n == old else n for n in names))
+                    db.execute("UPDATE meetings SET people = ?, added_by = ? WHERE id = ?",
+                               (json.dumps(names),
+                                new if row["added_by"] == old else row["added_by"],
+                                row["id"]))
             # "This is me" (service.me_key) follows the person it names.
             db.execute("UPDATE settings SET value = ? "
                        "WHERE key LIKE 'team\\_me:%' ESCAPE '\\' AND value = ?",
@@ -739,6 +765,32 @@ class TimesheetStore:
     def remove_slot(self, task_id: int) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM slots WHERE task_id = ?", (int(task_id),))
+
+    # -- meetings typed in --------------------------------------------------
+    def meetings(self) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            rows = [dict(r) for r in db.execute("SELECT * FROM meetings ORDER BY day, start")]
+        for row in rows:
+            try:
+                row["people"] = [str(p) for p in json.loads(row["people"] or "[]")]
+            except ValueError:
+                row["people"] = []
+        return rows
+
+    def add_meeting(self, *, title: str, kind: str, day: str, start: str, end: str,
+                    people: Sequence[str], repeat: str = "",
+                    until: Optional[str] = None, added_by: str = "") -> int:
+        with self._connect() as db:
+            return db.execute(
+                "INSERT INTO meetings (title, kind, day, start, end, people, repeat, "
+                "until, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (title, kind, day, start, end, json.dumps(list(people)), repeat,
+                 until, added_by, now())).lastrowid
+
+    def remove_meeting(self, meeting_id: int) -> int:
+        with self._connect() as db:
+            return db.execute("DELETE FROM meetings WHERE id = ?",
+                              (int(meeting_id),)).rowcount
 
     # -- Outlook calendars, busy times only ---------------------------------
     def calendar_links(self) -> Dict[str, Dict[str, Any]]:
