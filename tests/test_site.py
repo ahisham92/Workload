@@ -677,7 +677,7 @@ class TestWhoSeesWhom:
         assert mine["people"] == ["Sara", "Nour"]
         status, theirs = looks_at(SARA, "Nour")
         assert status == 200, theirs
-        assert theirs["engineer"] == "Nour" and theirs["me"] == "Sara"
+        assert theirs["engineer"] == "Nour" and theirs["viewer"] == "Sara"
         assert ask_query("GET", "/api/me/day", "person=Nour", site=SARA)[0] == 200
         assert ask_query("GET", "/api/me/timesheet", "person=Nour",
                          site=SARA)[0] == 200

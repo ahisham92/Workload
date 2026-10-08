@@ -980,7 +980,7 @@ class WorkloadApp:
                         "manager": row.get("owner_name") or ""}
         data["units"] = [{"id": g["unit_id"], "name": g["unit_name"],
                           "engineer": g["engineer"]} for g in granted]
-        data["me"] = row["engineer"]
+        data["viewer"] = row["engineer"]
         data["people"] = [row["engineer"]] + self._led_by(service, row["engineer"])
         return data
 

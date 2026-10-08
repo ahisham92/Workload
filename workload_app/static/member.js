@@ -127,7 +127,7 @@ async function load() {
   render();
   // My day is for your own day: looking at somebody you lead shows their
   // figures only, and nothing on their page can be changed from yours.
-  const own = !state.data.me || state.data.engineer === state.data.me;
+  const own = !state.data.viewer || state.data.engineer === state.data.viewer;
   for (const id of ['myday', 'mytimesheet', 'myoff', 'mymeetings', 'mycalendar']) {
     if (!own && $(`#${id}`)) $(`#${id}`).hidden = true;
   }
@@ -146,7 +146,7 @@ function render() {
   $('#member-unit').textContent = data.unit
     ? `${data.unit.name}${data.unit.manager ? ` · ${data.unit.manager}'s team` : ''}`
     : '';
-  const own = !data.me || data.engineer === data.me;
+  const own = !data.viewer || data.engineer === data.viewer;
   $('#member-title').textContent = own
     ? `My workload — ${data.period.label}`
     : `${data.engineer}'s workload — ${data.period.label}`;
@@ -187,7 +187,7 @@ function fillPeople(data) {
   const people = data.people || [];
   select.parentElement.hidden = people.length < 2;
   setChildren(select, ...people.map((name) => el('option', { value: name },
-    name === data.me ? `${name} (me)` : name)));
+    name === data.viewer ? `${name} (me)` : name)));
   select.value = data.engineer;
 }
 
@@ -405,7 +405,7 @@ async function submitPassword() {
     load();
   });
   $('#member-person').addEventListener('change', (event) => {
-    state.person = event.target.value === (state.data || {}).me ? null : event.target.value;
+    state.person = event.target.value === (state.data || {}).viewer ? null : event.target.value;
     load();
   });
 
