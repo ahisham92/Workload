@@ -493,13 +493,14 @@ class WorkloadService:
             written = (store.append(parsed.engineer, records)
                        if mode == "append"
                        else store.replace(parsed.engineer, records))
+            held = store.counts().get(parsed.engineer, 0)
             result = {
                 "engineer": parsed.engineer,
                 # "rows" is what this person now holds, which is what the
                 # sheet-based import used to report.
-                "rows": store.counts().get(parsed.engineer, 0),
+                "rows": held,
                 "rows_written": written,
-                "rows_held": store.counts().get(parsed.engineer, 0),
+                "rows_held": held,
                 "rows_in_unit": store.count(),
                 "mode": mode,
                 "capacity_raised": None,
@@ -613,8 +614,7 @@ class WorkloadService:
                 if grade and person not in graded:
                     store.save_person(person, grade=grade)
 
-            teams = people_module.teams_from_timesheets(
-                store, lambda: uuid.uuid4().hex[:12])
+            teams = self._teams_from_timesheets()
             projects = self._add_derived_projects()
             placed = set(wb.engineer_names())
             result = {
@@ -758,15 +758,21 @@ class WorkloadService:
     # The establishment: which team each person is in, and their grade.  A
     # head of department has many people, and they move between teams often.
 
+    def _roster(self, wb) -> Dict[str, Any]:
+        """The establishment: everybody and their teams."""
+        return people_module.roster(self.store, known=wb.ts_sheets())
+
+    def _teams_from_timesheets(self) -> Any:
+        return people_module.teams_from_timesheets(
+            self.store, lambda: uuid.uuid4().hex[:12])
+
     @_remembered
     def roster(self) -> Dict[str, Any]:
         with self._lock:
             # Units imported before teams were read from the timesheets get
             # theirs the first time anybody looks.
-            people_module.teams_from_timesheets(
-                self.store, lambda: uuid.uuid4().hex[:12])
-            return people_module.roster(self.store,
-                                        known=self.workbook.ts_sheets())
+            self._teams_from_timesheets()
+            return self._roster(self.workbook)
 
     @_remembered
     def resourcing(self, year: Optional[int] = None) -> Dict[str, Any]:
@@ -774,8 +780,7 @@ class WorkloadService:
             wb = self.workbook
             data = people_module.balance(
                 self.store, monthly_capacity=wb.hours_per_man_month(), year=year)
-            data["roster"] = people_module.roster(self.store,
-                                                  known=wb.ts_sheets())
+            data["roster"] = self._roster(wb)
             data["available_years"] = metrics.available_years(
                 wb, self._index(wb))
             return data
@@ -874,7 +879,7 @@ class WorkloadService:
             drawings_module.counts(self.store, deliverables),
             project_rows if project_rows is not None
             else metrics.project_rows(wb, index),
-            people_module.roster(self.store, known=wb.ts_sheets())["people"],
+            self._roster(wb)["people"],
             measured={p.number for p in wb.projects()
                       if not derive.needs_confirming(p.notes or "")},
             issued={row: e["issued"] for row, e in self._listed(deliverables).items()})
@@ -1009,9 +1014,8 @@ class WorkloadService:
         index = self._index(wb)
         project_rows = metrics.project_rows(wb, index)
         drawn = self._drawings(wb, index, project_rows)
-        people_module.teams_from_timesheets(self.store,
-                                            lambda: uuid.uuid4().hex[:12])
-        roster = people_module.roster(self.store, known=wb.ts_sheets())
+        self._teams_from_timesheets()
+        roster = self._roster(wb)
         rows = self.store.all_rows()
         config, absences, leave, public, choice = self._calendar(
             wb, rows, roster["people"], roster["teams"])
@@ -1169,12 +1173,16 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             inputs = self._planning(wb)
-            return checkins_module.build(
-                rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
-                config=inputs["config"], project_names=inputs["project_names"],
-                saved=self.store.plan_moves(), slots=self.store.slots(),
-                today=_today(), management=inputs["management"],
-                marks=self._open_marks())
+            return self._checkins(inputs, self.store.plan_moves(),
+                                  self.store.slots(), _today())
+
+    def _checkins(self, inputs: Dict[str, Any], saved: List[Dict[str, Any]],
+                  slots: Dict[int, Dict[str, Any]], today: _dt.date) -> Dict[str, Any]:
+        return checkins_module.build(
+            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
+            config=inputs["config"], project_names=inputs["project_names"],
+            saved=saved, slots=slots, today=today, management=inputs["management"],
+            marks=self._open_marks())
 
     def _open_marks(self) -> List[Dict[str, Any]]:
         """What people said from My day that the lead has not dealt with,
@@ -1204,11 +1212,7 @@ class WorkloadService:
     def _agendas(self, inputs: Dict[str, Any], today: _dt.date,
                  saved: List[Dict[str, Any]], slots: Dict[int, Dict[str, Any]]):
         """Each meeting's agenda, from the checkpoints Check-ins raises."""
-        seen = checkins_module.build(
-            rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
-            config=inputs["config"], project_names=inputs["project_names"],
-            saved=saved, slots=slots, today=today, management=inputs["management"],
-            marks=self._open_marks())
+        seen = self._checkins(inputs, saved, slots, today)
         points = {p["name"]: p["checkpoints"] for p in seen["people"]}
         signals = {p["name"]: p["signal"]["label"] for p in seen["people"]}
         room = [p["name"] for p in seen["can_take"]]
@@ -1241,11 +1245,7 @@ class WorkloadService:
             wb = self.workbook
             inputs = self._planning(wb)
             today = _today()
-            raw = (query.get("date") or [""])[0]
-            try:
-                day = _dt.date.fromisoformat(raw) if raw else today
-            except ValueError:
-                raise ApiError(HTTPStatus.BAD_REQUEST, f"{raw!r} is not a date.")
+            day = _date_in(query, "date", today)
             span = (query.get("span") or ["day"])[0]
             config = inputs["config"]
             days = daily.week_of(day, config) if span == "week" else [day]
@@ -1392,7 +1392,7 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             today = _today()
-            roster = people_module.roster(self.store, known=wb.ts_sheets())["people"]
+            roster = self._roster(wb)["people"]
             absence = calendar_.clean_absence(
                 body, people=[p["name"] for p in roster], today=today)
             new_id = self.store.add_absence(**absence)
@@ -2021,7 +2021,7 @@ class WorkloadService:
     # the busy times that came back.
 
     def _people_names(self) -> List[str]:
-        roster = people_module.roster(self.store, known=self.workbook.ts_sheets())
+        roster = self._roster(self.workbook)
         return [p["name"] for p in roster["people"] if p.get("active", True)]
 
     def calendars(self, *, person: Optional[str] = None) -> Dict[str, Any]:
@@ -2075,7 +2075,7 @@ class WorkloadService:
         """Each person's time zone, from the country whose holidays their team
         (or else the unit) keeps; None when no country is set."""
         with self._lock:
-            roster = people_module.roster(self.store, known=self.workbook.ts_sheets())
+            roster = self._roster(self.workbook)
             choice = self._holiday_choice(roster["teams"])
             return {p["name"]: busy_calendar.COUNTRY_ZONES.get(
                         choice["teams"].get(p.get("team_id") or "") or choice["unit"] or "")
@@ -2185,8 +2185,7 @@ class WorkloadService:
 
     def add_goal(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            names = [p["name"] for p in people_module.roster(
-                self.store, known=self.workbook.ts_sheets())["people"]]
+            names = [p["name"] for p in self._roster(self.workbook)["people"]]
             goal = growth_module.clean_goal(body, people=names, today=_today(),
                                             existing=self.store.goals())
             saved = self._commit()
@@ -2231,7 +2230,7 @@ class WorkloadService:
             index = self._index(wb)
             deliverables = wb.deliverables()
             rows = self.store.all_rows()
-            roster = people_module.roster(self.store, known=wb.ts_sheets())
+            roster = self._roster(wb)
             result = submissions_module.plan(
                 deliverable_rows=metrics.deliverable_rows(wb, index),
                 deliverables=deliverables,

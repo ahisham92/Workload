@@ -982,7 +982,7 @@ async function resetPassword(user) {
     { name: 'password', label: 'New password', type: 'password', full: true,
       hint: 'leave blank and one is generated for you' },
   ], async () => {
-    const result = await api(`/api/admin/users/${user.id}/password`,
+    await api(`/api/admin/users/${user.id}/password`,
       { method: 'POST', body: modalValues() });
     closeModal();
     toast(`Password changed for ${user.username}.`, 'ok');
@@ -3845,7 +3845,7 @@ function taskProgressCell(task) {
         : null));
 }
 
-function taskFields(data, task) {
+function taskFields(data) {
   const deliverables = data.deliverables.map((d) => ({
     value: String(d.row),
     label: `${d.project_number} — ${d.name}${d.date ? ` (${d.date})` : ''}`,
@@ -3901,7 +3901,7 @@ function openTaskModal(task) {
     values.pro_rata = Math.round(task.pro_rata * 100);
   }
 
-  openModal(task ? `Task ${task.id}` : 'New task', taskFields(data, task),
+  openModal(task ? `Task ${task.id}` : 'New task', taskFields(data),
     async () => {
       const body = modalValues();
       const chosen = data.deliverables.find(

@@ -410,5 +410,5 @@
     return { colours };
   }
 
-  window.portfolioMap = { render, STATE_TONE, STATE_WORD, teamColours };
+  window.portfolioMap = { render, STATE_WORD, teamColours };
 }());

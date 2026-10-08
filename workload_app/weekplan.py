@@ -29,11 +29,10 @@ import datetime as _dt
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
-from . import config as cfg
 from . import derive
 from . import intake
 from . import tasks as task_sheet
-from .model import ValidationError
+from .model import ValidationError, iso
 
 #: Why something did not go to plan, as a tap.
 REASONS = {
@@ -60,10 +59,6 @@ NO_JOB = ""
 
 class WeekPlanError(ValidationError):
     pass
-
-
-def _iso(day: Optional[_dt.date]) -> Optional[str]:
-    return day.isoformat() if day else None
 
 
 def _round(value: float) -> float:
@@ -114,7 +109,7 @@ def snapshot(day_plans: Sequence[Dict[str, Any]],
             out.append({"person": name, "kind": "task",
                         "job_number": task.project_number or "", "task_id": task_id,
                         "title": task.name or f"Task {task_id}",
-                        "hours": round(hours, 2), "due": _iso(task.due)})
+                        "hours": round(hours, 2), "due": iso(task.due)})
         if others.get(name):
             out.append({"person": name, "kind": "other", "job_number": "",
                         "task_id": None, "title": OTHER_TITLE,

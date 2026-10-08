@@ -45,10 +45,6 @@ MEETING_KINDS = {"client": "Client meeting", "trade": "Meeting with another trad
 SMALLEST_BLOCK_HOURS = 0.5
 
 
-def _minutes(moment: _dt.datetime) -> float:
-    return moment.hour * 60 + moment.minute
-
-
 def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
                   config: Dict[str, Any]) -> float:
     """The part of a task that falls on ``day``."""

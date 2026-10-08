@@ -272,7 +272,7 @@ class _Zone:
 
     def __init__(self, parts: List[Tuple[str, List]]):
         self.rules = []
-        for kind, lines in parts:
+        for _kind, lines in parts:
             start = _first(lines, "DTSTART")
             to = _first(lines, "TZOFFSETTO")
             if not start or not to:

@@ -325,6 +325,4 @@
     } else draw();
     keepFitted(memberHost, draw);
   }
-
-  window.selecaoGuide = { MANAGER, MEMBER };
 }());

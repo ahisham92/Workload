@@ -17,7 +17,7 @@ import html
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .checkins import week_start
+from .checkins import _hours, week_start
 
 #: How many things to do the report leads with, most pressing first.
 TODO_AT_MOST = 7
@@ -40,10 +40,6 @@ def _short(day: Optional[_dt.date]) -> str:
 
 def _pct(load: Optional[float]) -> str:
     return "—" if load is None else f"{round(load * 100)}%"
-
-
-def _hours(value: float) -> str:
-    return f"{value:,.0f} h" if abs(value - round(value)) < 0.05 else f"{value:,.1f} h"
 
 
 def _names(names: Sequence[str]) -> str:

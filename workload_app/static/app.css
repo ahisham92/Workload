@@ -117,10 +117,6 @@ p { margin: 0 0 10px; }
   top: env(safe-area-inset-top, 0px); z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-/* The mark: three months of effort under the line that is the capacity, which
-   is the one picture this whole app draws. Inline SVG so it is sharp at any
-   size and takes its two colours from the theme. */
-.mark { display: block; width: 32px; height: 32px; flex: none; }
 /* The logo is one file, logo.svg, so a new one is a file swap. */
 .logo { display: block; width: 34px; height: 34px; flex: none; border-radius: 9px;
   object-fit: contain; }
@@ -130,12 +126,6 @@ p { margin: 0 0 10px; }
 /* The orange of the star in the logo. */
 .wordmark-plus { color: #FF5A1F; margin-left: 1px; }
 .brand-divider { width: 1px; align-self: stretch; background: var(--border); margin: 2px 2px; }
-.mark svg { display: block; width: 100%; height: 100%; }
-.mark-bg { fill: var(--accent); }
-/* The surface colour, so the bars read light on blue in daylight and dark on
-   blue at night -- either way against the accent, never against the page. */
-.mark-bar { fill: var(--surface); }
-.mark-rule { fill: var(--surface); opacity: .55; }
 .brand p { margin: 0; max-width: 46vw; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -266,11 +256,6 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .bar > span { display: block; width: 100%; min-height: 2px;
   background: var(--accent); border-radius: 2px 2px 0 0; }
 .bar.over > span { background: var(--bad); }
-.bar-labels { display: flex; gap: 3px; margin-top: 4px; }
-.bar-labels div { flex: 1 0 14px; text-align: center; font-size: 9.5px;
-  color: var(--muted); overflow: hidden; }
-.chart-legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted);
-  margin-top: 6px; }
 
 /* tables */
 .table-wrap { overflow-x: auto; background: var(--surface);
@@ -397,22 +382,6 @@ textarea { resize: vertical; min-height: 56px; }
 .chooser details { margin-top: 18px; }
 .chooser summary { cursor: pointer; color: var(--accent); font-weight: 500; }
 
-.file-list { display: flex; flex-direction: column; gap: 6px; }
-.file-row {
-  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 9px 12px; cursor: pointer;
-  font: inherit; color: var(--text);
-}
-.file-row:hover { background: var(--surface-2); border-color: var(--accent); }
-.file-row .icon { flex: none; opacity: .65; }
-.file-row .who { min-width: 0; flex: 1; }
-.file-row .who b { display: block; font-weight: 600; }
-.file-row .who span { display: block; font-size: 11.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-row .meta { flex: none; font-size: 11.5px; color: var(--muted);
-  font-variant-numeric: tabular-nums; }
-
 /* -- capacity meter ------------------------------------------------------ */
 .meter { height: 8px; border-radius: 4px; background: var(--surface-2);
   overflow: hidden; margin: 8px 0 6px; }
@@ -422,7 +391,6 @@ textarea { resize: vertical; min-height: 56px; }
 .meter.bad > span { background: var(--bad); }
 
 /* -- units --------------------------------------------------------------- */
-.mark-lg { width: 44px; height: 44px; }
 .chooser-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
 .chooser-head h1 { font-size: 22px; }
 .chooser-head p { margin: 2px 0 0; }
@@ -443,8 +411,6 @@ textarea { resize: vertical; min-height: 56px; }
   text-overflow: ellipsis; white-space: nowrap; }
 
 
-.add-unit { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 14px; }
-.add-unit > summary { cursor: pointer; font-weight: 600; color: var(--accent); }
 .add-unit-body { padding-top: 14px; }
 
 /* -- shell --------------------------------------------------------------- */
@@ -454,9 +420,6 @@ textarea { resize: vertical; min-height: 56px; }
 
 /* -- project detail ------------------------------------------------------ */
 .crumb { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.panel-head { display: flex; justify-content: space-between; align-items: flex-start;
-  gap: 16px; margin-bottom: 10px; }
-.panel-head h3 { margin-bottom: 2px; }
 .form-grid { display: grid; gap: 13px;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .form-grid .full { grid-column: 1 / -1; }
@@ -816,7 +779,6 @@ tr.total-row td { font-weight: 600; background: var(--surface-2); }
 .hero-empty { color: var(--muted); font-size: 13px; }
 
 /* -- team ---------------------------------------------------------------- */
-.slot-note { font-size: 11.5px; color: var(--muted); }
 #definitions-panel { padding: 0; }
 #definitions-panel > summary { cursor: pointer; padding: 14px 17px;
   font-size: 13px; }
