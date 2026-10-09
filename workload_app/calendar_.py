@@ -39,6 +39,17 @@ LEAVE = re.compile(r"leave|holiday|vacation|annual|sick|absen|day ?off|public",
 LONGEST_DAYS = 120
 #: Booked off for at least this much of a day, and the day is off.
 HALF_DAY_HOURS = 4.0
+#: A public holiday on a timesheet, as opposed to somebody's own leave.
+HOLIDAY_CODE = re.compile(r"holiday|public|official|feast|\beid\b", re.IGNORECASE)
+#: A personal excuse: part of a day off with permission.  Half a day or more
+#: of one is half a day of leave, so nobody has to type it.
+EXCUSE = re.compile(r"excuse|permission", re.IGNORECASE)
+#: At least this many people, and most of those who booked that day, booked
+#: it as a holiday: it was an official holiday.
+HOLIDAY_QUORUM = 2
+#: A built-in holiday worked through, with a holiday booked this close to it,
+#: was moved (Egypt moves many to a Thursday).
+MOVED_WITHIN_DAYS = 7
 
 
 class CalendarError(ValidationError):
@@ -85,6 +96,96 @@ def leave_from_timesheets(rows: Iterable[Dict[str, Any]], *,
     return dict(out)
 
 
+def _row_text(row: Dict[str, Any]) -> str:
+    return " ".join(str(row.get(k) or "") for k in
+                    ("job_number", "job_type", "deliverable", "job_name"))
+
+
+def half_days_from_timesheets(rows: Iterable[Dict[str, Any]], *,
+                              min_hours: float = HALF_DAY_HOURS) -> Dict[str, Set[str]]:
+    """The days each person took a personal excuse of half a day or more.
+
+    A personal excuse of about four hours is half a day of leave.  Nothing is
+    typed for it: the timesheet says so.
+    """
+    hours: Dict[tuple, float] = defaultdict(float)
+    for row in rows:
+        day = row.get("date")
+        if not day or derive.is_project_work(row.get("job_type") or ""):
+            continue
+        if EXCUSE.search(_row_text(row)):
+            hours[(row["engineer"], day.isoformat())] += float(row.get("hours") or 0.0)
+    out: Dict[str, Set[str]] = defaultdict(set)
+    for (name, day), booked in hours.items():
+        if booked >= min_hours:
+            out[name].add(day)
+    return dict(out)
+
+
+def holidays_from_timesheets(rows: Iterable[Dict[str, Any]], *,
+                             min_hours: float = HALF_DAY_HOURS) -> Dict[str, Dict[str, int]]:
+    """Day -> how many people booked it, booked it as a holiday, or worked.
+
+    A row is a holiday when its code or description says holiday (not
+    leave: leave is somebody's own).  Worked means half a day or more on
+    anything that is not time off.
+    """
+    holiday: Dict[tuple, float] = defaultdict(float)
+    work: Dict[tuple, float] = defaultdict(float)
+    booked: Dict[str, Set[str]] = defaultdict(set)
+    for row in rows:
+        day = row.get("date")
+        if not day:
+            continue
+        key = (row["engineer"], day.isoformat())
+        booked[key[1]].add(key[0])
+        hours = float(row.get("hours") or 0.0)
+        text = _row_text(row)
+        if derive.is_project_work(row.get("job_type") or ""):
+            work[key] += hours
+        elif HOLIDAY_CODE.search(text) and not re.search(r"leave", text, re.IGNORECASE):
+            holiday[key] += hours
+        elif not (LEAVE.search(text) or EXCUSE.search(text)
+                  or re.search(r"late|absen", text, re.IGNORECASE)):
+            work[key] += hours
+    out: Dict[str, Dict[str, int]] = {}
+    for day, people in booked.items():
+        out[day] = {
+            "people": len(people),
+            "holiday": sum(1 for p in people if holiday.get((p, day), 0) >= min_hours),
+            "worked": sum(1 for p in people if work.get((p, day), 0) >= min_hours),
+        }
+    return out
+
+
+def learned_holidays(counts: Mapping[str, Mapping[str, int]],
+                     built_in: Iterable[str] = ()) -> Dict[str, Any]:
+    """What the timesheets say about which days were official holidays.
+
+    ``add``: days at least two people, and most of those who booked that
+    day, booked as a holiday.  ``remove``: built-in holidays most people
+    worked through and nobody booked as one, with a holiday booked within the
+    week instead -- it was moved, or the moon put it on another day.
+    """
+    add = sorted(day for day, c in counts.items()
+                 if c["holiday"] >= HOLIDAY_QUORUM and c["holiday"] * 2 > c["people"])
+    added = [_dt.date.fromisoformat(day) for day in add]
+
+    def moved(day: str) -> bool:
+        # Only when a holiday was booked within the week: the holiday went to
+        # another day.  People who simply work through holidays (or never book
+        # them) take nothing off anybody's list.
+        when = _dt.date.fromisoformat(day)
+        return any(0 < abs((other - when).days) <= MOVED_WITHIN_DAYS for other in added)
+
+    remove = sorted(day for day in built_in
+                    if day in counts and counts[day]["holiday"] == 0
+                    and counts[day]["worked"] >= HOLIDAY_QUORUM
+                    and counts[day]["worked"] * 2 > counts[day]["people"]
+                    and moved(day))
+    return {"add": add, "remove": remove}
+
+
 def _days(start: _dt.date, end: _dt.date) -> List[str]:
     return [(start + _dt.timedelta(days=i)).isoformat()
             for i in range((end - start).days + 1)]
@@ -93,11 +194,13 @@ def _days(start: _dt.date, end: _dt.date) -> List[str]:
 def with_calendar(config: Dict[str, Any], *, holidays: Iterable[str] = (),
                   absences: Sequence[Dict[str, Any]] = (),
                   leave: Mapping[str, Iterable[str]] = (),
-                  own_holidays: Mapping[str, Iterable[str]] = ()) -> Dict[str, Any]:
+                  own_holidays: Mapping[str, Iterable[str]] = (),
+                  half_days: Mapping[str, Iterable[str]] = ()) -> Dict[str, Any]:
     """The working-day settings, with who is away added to them.
 
     ``holidays`` are days nobody works; ``own_holidays`` are public holidays
-    only some people have, because their team is in another country.
+    only some people have, because their team is in another country;
+    ``half_days`` are half days of leave (a personal excuse).
     """
     out = dict(config)
     days_off = set(holidays)
@@ -118,6 +221,9 @@ def with_calendar(config: Dict[str, Any], *, holidays: Iterable[str] = (),
             away[absence["person"]] |= set(days)
     out["holidays"] = days_off
     out["away"] = dict(away)
+    out["half_away"] = {name: set(days) - away.get(name, set())
+                        for name, days in dict(half_days).items()
+                        if set(days) - away.get(name, set())}
     return out
 
 
@@ -125,10 +231,22 @@ def is_away(config: Dict[str, Any], person: str, day: _dt.date) -> bool:
     return day.isoformat() in (config.get("away") or {}).get(person, ())
 
 
+def is_half_away(config: Dict[str, Any], person: str, day: _dt.date) -> bool:
+    """Half the day off (a personal excuse), and in for the other half."""
+    return day.isoformat() in (config.get("half_away") or {}).get(person, ())
+
+
 def present_days(config: Dict[str, Any], person: str,
-                 days: Iterable[_dt.date]) -> int:
+                 days: Iterable[_dt.date]) -> float:
+    """Days in, a half day off counting as half."""
     away = (config.get("away") or {}).get(person, ())
-    return sum(1 for d in days if d.isoformat() not in away)
+    half = (config.get("half_away") or {}).get(person, ())
+    there = 0.0
+    for d in days:
+        key = d.isoformat()
+        if key not in away:
+            there += 0.5 if key in half else 1
+    return there
 
 
 def away_on(config: Dict[str, Any], day: _dt.date) -> Set[str]:
@@ -161,7 +279,8 @@ def clean_absence(body: Mapping[str, Any], *, people: Iterable[str],
 def upcoming(config: Dict[str, Any], absences: Sequence[Dict[str, Any]],
              leave: Mapping[str, Iterable[str]], today: _dt.date,
              until: _dt.date, public: Sequence[Dict[str, Any]] = (),
-             country_names: Mapping[str, str] = ()) -> List[Dict[str, Any]]:
+             country_names: Mapping[str, str] = (),
+             half_days: Mapping[str, Iterable[str]] = ()) -> List[Dict[str, Any]]:
     """Who is away between now and ``until``, for the Planner to list.
 
     ``public`` is the built-in public holidays, one entry a day; a holiday of
@@ -197,6 +316,11 @@ def upcoming(config: Dict[str, Any], absences: Sequence[Dict[str, Any]],
         for run in _runs(ahead):
             out.append({"id": None, "person": name, "start": run[0], "end": run[-1],
                         "note": "booked on a timesheet", "source": "timesheet"})
+    for name, days in dict(half_days).items():
+        for day in sorted(d for d in days if today.isoformat() <= d <= until.isoformat()):
+            out.append({"id": None, "person": name, "start": day, "end": day,
+                        "note": "half a day off: a personal excuse on the timesheet",
+                        "source": "half_day"})
     for day in sorted(d for d in config.get("holidays", ())
                       if today.isoformat() <= d <= until.isoformat() and d not in named):
         if not any(a["person"] == EVERYONE and a["start"] <= day <= a["end"]

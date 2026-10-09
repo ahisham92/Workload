@@ -304,24 +304,59 @@ def guess(text: str) -> Optional[str]:
     return None
 
 
+#: What the official list says when the timesheets taught it a day.
+LEARNED_NAME = "Official holiday (from the timesheets)"
+
+
+def official_changes(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """The site's official list, as changes to the built-in holidays.
+
+    ``rows`` are the list's entries (country, day, name, off, source).  What
+    an administrator set wins over what the timesheets taught; each country
+    gets ``add`` (day -> name) and ``remove`` (days that are not holidays).
+    """
+    best: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for row in rows:
+        key = (row["country"], row["day"])
+        if key not in best or (row.get("source") == "admin"
+                               and best[key].get("source") != "admin"):
+            best[key] = row
+    out: Dict[str, Dict[str, Any]] = {}
+    for (code, day), row in best.items():
+        changes = out.setdefault(code, {"add": {}, "remove": set()})
+        if row.get("off", True):
+            changes["add"][day] = row.get("name") or "Official holiday"
+        else:
+            changes["remove"].add(day)
+    return out
+
+
 def calendar_for(choice: Dict[str, Any], *, people: Sequence[Dict[str, Any]],
-                 start: _dt.date, end: _dt.date) -> Dict[str, Any]:
+                 start: _dt.date, end: _dt.date,
+                 official: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Who has which public holidays, from the unit's and the teams' countries.
 
     Returns ``common`` (days off for everybody) and ``own`` (person -> the
     days off only they have, because their team is somewhere else), plus the
-    named list for showing.
+    named list for showing.  ``official`` is the site's own list for each
+    country (see ``official_changes``), which every unit there follows.
     """
     unit = choice.get("unit")
     teams = choice.get("teams") or {}
-    skipped = choice.get("off") or []
+    skipped = set(choice.get("off") or [])
+    official = official or {}
     cache: Dict[str, Dict[str, str]] = {}
 
     def of(code: Optional[str]) -> Dict[str, str]:
         if not code:
             return {}
         if code not in cache:
-            cache[code] = days_between(code, start, end, skipped)
+            changes = official.get(code) or {}
+            days = days_between(code, start, end, skipped | set(changes.get("remove", ())))
+            for iso, name in (changes.get("add") or {}).items():
+                if start.isoformat() <= iso <= end.isoformat() and iso not in skipped:
+                    days[iso] = name
+            cache[code] = dict(sorted(days.items()))
         return cache[code]
 
     everyone = of(unit)
@@ -340,3 +375,35 @@ def calendar_for(choice: Dict[str, Any], *, people: Sequence[Dict[str, Any]],
             entry["countries"].append(code)
     return {"common": common, "own": own,
             "named": sorted(named.values(), key=lambda h: h["date"])}
+
+
+def official_year(code: str, year: int,
+                  rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A country's year as every unit there has it, a day at a time.
+
+    Each day says where it came from: ``built_in``, ``admin`` (the site's
+    administrator added it, or said a built-in day is not a holiday) or
+    ``timesheets`` (most people booked it as a holiday, or worked through a
+    built-in one).  ``off`` is false for a day that is not a holiday after all.
+    """
+    built_in = {h["date"]: h for h in for_year(code, year)}
+    best: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if row["country"] != code or not row["day"].startswith(f"{year:04d}-"):
+            continue
+        if row["day"] not in best or row.get("source") == "admin":
+            best[row["day"]] = row
+    out = []
+    for day in sorted(set(built_in) | set(best)):
+        row = best.get(day)
+        base = built_in.get(day)
+        out.append({
+            "date": day,
+            "name": (row or {}).get("name") or (base or {}).get("name") or "Official holiday",
+            "off": bool(row["off"]) if row else True,
+            "source": row.get("source", "admin") if row else "built_in",
+            "built_in": base is not None,
+            "built_in_name": (base or {}).get("name", ""),
+            "expected": bool((base or {}).get("expected")),
+        })
+    return out

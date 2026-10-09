@@ -29,7 +29,7 @@ import secrets
 import sqlite3
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from . import secretbox
 
@@ -179,6 +179,23 @@ CREATE TABLE IF NOT EXISTS push_messages (
     created_at  TEXT NOT NULL,
     UNIQUE (user_id, unit_id, key)
 );
+
+-- The site's own list of official holidays, by country, which every unit
+-- in that country follows on top of the built-in ones.  off = 1 is a
+-- holiday, off = 0 a built-in day that is not one this year.  source is
+-- 'admin' (typed by the site's administrator, and always wins) or
+-- 'timesheets' (most people booked the day as a holiday, or worked a
+-- built-in one).
+CREATE TABLE IF NOT EXISTS official_holidays (
+    country     TEXT NOT NULL,
+    day         TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    off         INTEGER NOT NULL DEFAULT 1,
+    source      TEXT NOT NULL DEFAULT 'admin',
+    set_by      INTEGER,
+    set_at      TEXT NOT NULL,
+    PRIMARY KEY (country, day)
+);
 """
 
 
@@ -225,6 +242,49 @@ class Accounts:
         db.execute("PRAGMA journal_mode = WAL")
         db.execute("PRAGMA busy_timeout = 15000")
         return db
+
+    # -- official holidays ---------------------------------------------
+    def official_holidays(self, country: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The site's list, for one country or all of them, by date."""
+        with self._connect() as db:
+            if country:
+                rows = db.execute(
+                    "SELECT country, day, name, off, source FROM official_holidays "
+                    "WHERE country = ? ORDER BY day", (country,)).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT country, day, name, off, source FROM official_holidays "
+                    "ORDER BY country, day").fetchall()
+        return [{**dict(row), "off": bool(row["off"])} for row in rows]
+
+    def set_official_holiday(self, country: str, day: str, *, name: str = "",
+                             off: bool = True, set_by: Optional[int] = None) -> None:
+        """The administrator says a day is, or is not, an official holiday."""
+        with self._connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO official_holidays (country, day, name, off, "
+                "source, set_by, set_at) VALUES (?, ?, ?, ?, 'admin', ?, ?)",
+                (country, day, name, 1 if off else 0, set_by, now()))
+
+    def clear_official_holiday(self, country: str, day: str) -> bool:
+        """Take back what the administrator set, so the day is as built in
+        (or as the timesheets show) again."""
+        with self._connect() as db:
+            return db.execute(
+                "DELETE FROM official_holidays WHERE country = ? AND day = ?",
+                (country, day)).rowcount > 0
+
+    def learn_official_holidays(self, rows: Iterable[Dict[str, Any]]) -> int:
+        """Days the timesheets showed; never over anything already listed."""
+        added = 0
+        with self._connect() as db:
+            for row in rows:
+                added += db.execute(
+                    "INSERT OR IGNORE INTO official_holidays (country, day, name, "
+                    "off, source, set_at) VALUES (?, ?, ?, ?, 'timesheets', ?)",
+                    (row["country"], row["day"], row.get("name") or "",
+                     1 if row.get("off", True) else 0, now())).rowcount
+        return added
 
     # -- users -----------------------------------------------------------
     def user_count(self) -> int:

@@ -95,6 +95,12 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
         fixed: List[Dict[str, Any]] = []
         flexible: List[Dict[str, Any]] = []
         away = calendar_.is_away(config, name, day)
+        if working and not away and calendar_.is_half_away(config, name, day):
+            # A personal excuse of half a day: the second half is off.
+            middle = day_start + (day_end - day_start) / 2
+            fixed.append({"start": middle, "end": day_end, "kind": "half_day",
+                          "title": "Half a day off (personal excuse)",
+                          "project": "", "task_id": None, "done": False})
         if working:
             # A request booked before the absence was known still shows, so
             # it is seen and handed on rather than lost.
