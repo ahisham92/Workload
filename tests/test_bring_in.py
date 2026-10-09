@@ -203,12 +203,18 @@ class TestPaths:
         import re
         views = set(re.findall(r'data-view="([a-z]+)"', self.index))
         lists = re.findall(r"tabs: \[([^\]]+)\]", self.paths)
-        assert len(lists) == 4
+        assert len(lists) == 3
         for found in lists:
             for view in re.findall(r"'([a-z]+)'", found):
                 assert view in views, view
-        # Between them, the paths reach every tab but help and Admin.
-        reached = {v for found in lists for v in re.findall(r"'([a-z]+)'", found)}
+        # Each tab is on one path only.
+        on_paths = [v for found in lists for v in re.findall(r"'([a-z]+)'", found)]
+        assert len(on_paths) == len(set(on_paths))
+        # Between them, the paths and the pages sharing their tabs reach
+        # every tab but help and Admin.
+        shared = self.paths[self.paths.index("const SHARED"):]
+        shared = shared[:shared.index("};")]
+        reached = set(on_paths) | set(re.findall(r"'([a-z]+)'", shared))
         assert views - reached == {"guide", "admin"}
 
 

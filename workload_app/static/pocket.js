@@ -53,9 +53,10 @@
     onclick: () => (sheet.hidden ? openSheet() : closeSheet()) });
   moreButton.innerHTML = `${MORE_ICON}<span>More</span>`;
 
-  // A tab off the chosen path (paths.js) is out of the bar as well.
+  // A tab off the chosen path (paths.js) is out of the bar as well, and so is
+  // a page that shares another's tab (focus.js): it is reached from that tab.
   const visibleTabs = () => Array.from(tabs.querySelectorAll('.tab'))
-    .filter((t) => !t.hidden && !t.classList.contains('off-path'));
+    .filter((t) => !t.hidden && !t.classList.contains('off-path') && !t.classList.contains('in-group'));
   const labelOf = (tab) => tab.textContent.replace(/\s+/g, ' ').trim();
 
   function split() {

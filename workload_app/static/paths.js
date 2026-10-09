@@ -1,8 +1,8 @@
 /* Selecao+ — paths: what do you want to do?
  *
- * Sixteen tabs are a wall to somebody opening the app. So it opens on four
- * paths, by what the person came to do: plan people, see the workload, read
- * the results, or set up and bring data in. Choosing one leads to its first
+ * Sixteen tabs are a wall to somebody opening the app. So it opens on three
+ * paths, by what the person came to do: plan the week, see how we're doing,
+ * or set up. Choosing one leads to its first
  * tab and keeps only that path's tabs in the bar (and in the phone's bottom
  * bar); "Everything" brings them all back. The path chosen is kept on this
  * device, and opening the app again offers it first.
@@ -14,20 +14,29 @@
 (function () {
   'use strict';
 
+  // Three paths, each asking one question; each tab sits on one path only.
+  // Tabs that answer the same kind of question share a tab (focus.js): Tasks
+  // with Planner, Resourcing with Check-ins, Budgets with Projects, Growth
+  // with Reports, Timesheets with Bring in data, Reference with Team.
   const PATHS = [
-    { key: 'plan', title: 'Plan people', icon: '⇄',
-      say: 'Who does what today and this week, who has room, who needs help, and moving work between people.',
-      tabs: ['planner', 'checkins', 'tasks', 'resourcing', 'team'] },
-    { key: 'workload', title: 'See the workload', icon: '▤',
-      say: 'How busy the team is, what is due, the projects, and how each week went.',
-      tabs: ['overview', 'weekly', 'tasks', 'projects', 'timesheets'] },
-    { key: 'results', title: 'Read the results', icon: '%',
-      say: 'The numbers at the end: budgets, efficiency, KPIs by grade and each person\'s growth.',
-      tabs: ['reports', 'budgets', 'growth', 'projects', 'overview'] },
-    { key: 'setup', title: 'Set up and bring in data', icon: '⇪',
-      say: 'Bring in the files, set grades and teams, the nightly kit, and how to use the app.',
-      tabs: ['bringin', 'team', 'timesheets', 'reference'] },
+    { key: 'plan', title: 'Plan the week', icon: '⇄',
+      ask: 'Who does what, and who needs help?',
+      say: 'Today\'s plan for everybody, who is over and who has room, and what to act on this week.',
+      tabs: ['planner', 'checkins', 'weekly'] },
+    { key: 'workload', title: 'See how we\'re doing', icon: '▤',
+      ask: 'Are we on track?',
+      say: 'The year so far, the jobs that need attention, and how each person is scoring.',
+      tabs: ['overview', 'projects', 'reports'] },
+    { key: 'setup', title: 'Set up', icon: '⇪',
+      ask: 'Is the data in, and is everyone set up?',
+      say: 'Bring in the files, keep them coming, and set grades, teams and sign-ins.',
+      tabs: ['bringin', 'team'] },
   ];
+  // The pages that share each path's tabs (focus.js), so the path keeps them.
+  const SHARED = { planner: ['tasks'], checkins: ['resourcing'], projects: ['budgets'],
+    reports: ['growth'], bringin: ['timesheets'], team: ['reference'] };
+  // Before 9 Oct there were four paths; "Read the results" became part of "See how we're doing".
+  const RENAMED = { results: 'workload' };
   // Always in the bar, whichever path: help, and the administrator's tab.
   const ALWAYS = ['guide', 'admin'];
   const KEY = 'selecao.path';
@@ -37,7 +46,7 @@
   const write = (key, value) => {
     try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { /* nothing kept */ }
   };
-  const byKey = (key) => PATHS.find((p) => p.key === key) || null;
+  const byKey = (key) => PATHS.find((p) => p.key === (RENAMED[key] || key)) || null;
 
   let current = byKey(read(KEY));
 
@@ -60,7 +69,8 @@
 
   /** Only the path's tabs in the bar; the phone's bar follows by itself. */
   function filterTabs() {
-    const keep = current ? new Set([...current.tabs, ...ALWAYS]) : null;
+    const keep = current
+      ? new Set([...current.tabs, ...current.tabs.flatMap((t) => SHARED[t] || []), ...ALWAYS]) : null;
     for (const tab of document.querySelectorAll('#tabs .tab')) {
       tab.classList.toggle('off-path', Boolean(keep) && !keep.has(tab.dataset.view));
     }
@@ -89,7 +99,7 @@
     }
   }
 
-  /* -- the welcome: four paths, on opening ------------------------------------ */
+  /* -- the welcome: the paths, on opening ------------------------------------- */
 
   function isNew() {
     // app.js's state is a global of its own, not a property of window.
@@ -105,6 +115,7 @@
       icon ? icon.cloneNode(true) : path.icon),
     make('span', { class: 'path-card-title' }, path.title),
     hint ? make('span', { class: 'pill pill-info' }, hint) : null,
+    make('span', { class: 'path-card-ask' }, path.ask),
     make('span', { class: 'path-card-say' }, path.say),
     make('span', { class: 'path-card-tabs' }, path.tabs.map(labelOf).join(' · ')));
   }

@@ -1,6 +1,6 @@
 /* Selecao+ — the look: each tab dressed in its path's colour.
  *
- * The four paths (paths.js) each get a colour of their own, and every tab
+ * The three paths (paths.js) each get a colour of their own, and every tab
  * takes the colour of the path it belongs to: its button, its header and its
  * panels. Each tab's header gets the tab's own icon and the path's name above
  * the title, so the tabs no longer all look alike and it is clear at a glance
@@ -12,18 +12,17 @@
 (function () {
   'use strict';
 
-  // The path each tab belongs to. A tab in two paths takes the one it is
-  // mostly used for.
+  // The path each tab belongs to (paths.js), and the pages that share its
+  // tab (focus.js) with it.
   const TONE = {
-    planner: 'plan', checkins: 'plan', resourcing: 'plan', team: 'plan',
-    overview: 'workload', weekly: 'workload', tasks: 'workload', projects: 'workload',
-    timesheets: 'workload',
-    reports: 'results', budgets: 'results', growth: 'results',
-    bringin: 'setup', reference: 'setup', guide: 'setup', admin: 'setup', paths: 'setup',
+    planner: 'plan', tasks: 'plan', checkins: 'plan', resourcing: 'plan', weekly: 'plan',
+    overview: 'workload', projects: 'workload', budgets: 'workload', reports: 'workload',
+    growth: 'workload',
+    bringin: 'setup', timesheets: 'setup', team: 'setup', reference: 'setup',
+    guide: 'setup', admin: 'setup', paths: 'setup',
   };
   const NAME = {
-    plan: 'Plan people', workload: 'See the workload', results: 'Read the results',
-    setup: 'Set up and bring in data',
+    plan: 'Plan the week', workload: 'See how we\'re doing', setup: 'Set up',
   };
   const toneOf = (view) => TONE[view] || 'workload';
 

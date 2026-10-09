@@ -2946,16 +2946,18 @@ function wire() {
 
 /* ------------------------------------------------------------- reports */
 
+// Reports answers "how is each person scoring?", so it opens on the
+// scorecard; the team's dials are Overview's answer and wait under Dashboard.
 const REPORT_VIEWS = [
-  ['dashboard', 'Dashboard'],
+  ['scorecard', 'Scorecard'],
   ['engineers', 'Engineer KPIs'],
   ['member', 'Team Member'],
-  ['scorecard', 'Scorecard'],
+  ['dashboard', 'Dashboard'],
   ['review', 'Management Review'],
 ];
 
 state.report = null;
-state.reportView = 'dashboard';
+state.reportView = 'scorecard';
 state.reportMember = null;
 
 function num(value, digits = 2) {

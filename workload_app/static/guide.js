@@ -18,7 +18,7 @@
   // where: the tab, as its button reads. go: [view, planner subtab] for the
   // manager page, or the id of a panel on the engineer's page.
   const MANAGER = {
-    intro: 'The app opens on four paths: plan people, see the workload, read the results, or set up. Each keeps only its own tabs; Show, above the tabs, changes it. New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
+    intro: 'The app opens on three questions: plan the week, see how we\'re doing, or set up. Each keeps only its own tabs; Show, above the tabs, changes it. Every tab opens on its answer, with the rest under Show more at the bottom, and some tabs hold two pages (Projects and Budgets, for one): switch between them in the tab\'s header. New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
       + 'below is all you need. Tap any box to go there.',
     setup: [
       { title: 'Bring in your files', do: 'Timesheets and budgets together, in one place',
@@ -34,49 +34,54 @@
       { title: 'Submissions and drawings', do: 'Confirm the due dates the timesheets suggest',
         where: 'Planner › Submissions', go: ['planner', 'submissions'] },
       { title: 'Budgets', do: 'Map people from other units once; check each job\'s share',
-        where: 'Budgets', go: ['budgets'] },
+        where: 'Projects › Budgets', go: ['budgets'] },
       { title: 'Keep it coming by itself', do: 'Set up the BISpark kit once; it sends the team\'s rows every 6 hours',
-        where: 'Timesheets', go: ['timesheets'] },
+        where: 'Bring in data › Timesheets', go: ['timesheets'] },
       { title: 'Notifications and goals', do: 'Turn on phone alerts; set each person\'s goals for the quarter',
-        where: 'Weekly, Growth', go: ['weekly'] },
+        where: 'Weekly, Reports › Growth', go: ['weekly'] },
     ],
     routine: [
       { lane: 'Every day', note: 'about 10 minutes, on the phone', steps: [
-        { title: 'Look at Overview', do: 'Anything red or a staffing ask comes first; tap the i beside a number to see what it means', where: 'Overview', go: ['overview'] },
+        { title: 'Look at Check-ins', do: 'The answer at the top says who needs a lighter week and who has room; What to do lists the rest', where: 'Check-ins', go: ['checkins'] },
         { title: 'See each person\'s day', do: 'The app lays out today from their real pace', where: 'Planner › Today', go: ['planner', 'today'] },
-        { title: 'Answer Stuck and Need help', do: 'Tap Seen, then sort it out with them', where: 'Check-ins', go: ['checkins'] },
+        { title: 'Answer Stuck and Need help', do: 'Tap Seen, then sort it out with them; the full list is under Show more', where: 'Check-ins', go: ['checkins'] },
       ] },
       { lane: 'Every week', note: 'Sunday to Thursday', steps: [
         { title: 'Sunday: set the week', do: 'Look at what is due in the next two weeks', where: 'Planner › Submissions', go: ['planner', 'submissions'] },
         { title: 'Sunday: copy of the plan', do: 'The app keeps a copy of the week\'s plan by itself; copy again after big changes', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
         { title: 'Thursday: kept and slipped', do: 'Plan against tasks done and timesheets; one tap on why each slip happened', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
-        { title: 'Thursday: look back', do: 'What was late, who had room, what to change', where: 'Weekly', go: ['weekly'] },
+        { title: 'Thursday: look back', do: 'Is the team on track? Overview answers it; Weekly\'s Show more has how last week went', where: 'Overview, Weekly', go: ['overview'] },
         { title: 'Ask for people early', do: 'Staffing ahead says how many, from when, for how long', where: 'Planner › More people', go: ['planner', 'people'] },
       ] },
       { lane: 'When something comes up', note: 'as it happens, in any order', chain: false, steps: [
         { title: 'A request lands', do: 'Quick add it; "What does it push?" shows what slips and the cost first', where: 'Planner › Today', go: ['planner', 'today'] },
         { title: 'Try a what-if', do: 'New work or a handover, kept to compare before you decide', where: 'Planner › Planning board', go: ['planner', 'handovers'] },
         { title: 'A new meeting', do: 'Add it once with who goes; it comes off their time', where: 'Planner › Today', go: ['planner', 'today'] },
-        { title: 'Month or quarter end', do: 'Budget against spend, KPIs by grade, reports', where: 'Budgets, Growth', go: ['budgets'] },
+        { title: 'Month or quarter end', do: 'Budget against spend, KPIs by grade, reports', where: 'Projects › Budgets, Reports › Growth', go: ['budgets'] },
       ] },
     ],
     find: [
       ['What does a % or number mean?', 'Tap the i beside it, on any tab', ['overview']],
+      ['There was more here before', 'Show more, at the bottom of the tab', ['overview']],
       ['Who is free next week?', 'Check-ins', ['checkins']],
       ['What is each person doing today?', 'Planner › Today', ['planner', 'today']],
       ['Who is stuck or needs help?', 'Check-ins', ['checkins']],
-      ['Is a job over its budget?', 'Budgets', ['budgets']],
+      ['Which jobs need attention?', 'Projects', ['projects']],
+      ['Is a job over its budget?', 'Projects › Budgets', ['budgets']],
       ['What is due, and what came back with A, B or C?', 'Planner › Submissions', ['planner', 'submissions']],
       ['Record a submission, its return and the next revision', 'Planner › Submissions, or the project on Projects', ['planner', 'submissions']],
-      ['Do we need more people?', 'Planner › More people', ['planner', 'people']],
+      ['Do we need more people?', 'Planner › More people, or Check-ins › Resourcing', ['planner', 'people']],
       ['Move work from one person to another', 'Planner › Planning board', ['planner', 'handovers']],
-      ['How did last week go?', 'Weekly', ['weekly']],
+      ['How did last week go?', 'Weekly › Show more', ['weekly']],
       ['Did we keep to the plan?', 'Planner › Plan vs actual', ['planner', 'review']],
-      ['How is each person growing?', 'Growth', ['growth']],
-      ['Have the timesheets come in?', 'Timesheets', ['timesheets']],
+      ['How is each person scoring?', 'Reports', ['reports']],
+      ['How is each person growing?', 'Reports › Growth', ['growth']],
+      ['Have the timesheets come in?', 'Bring in data, or Bring in data › Timesheets', ['bringin']],
       ['Bring in a new export', 'Bring in data', ['bringin']],
       ['A project\'s hours and progress', 'Projects', ['projects']],
-      ['Change someone\'s grade or team', 'Team', ['team']],
+      ['Change someone\'s grade or team', 'Team › Edit on their row', ['team']],
+      ['Tasks: who has what, until when', 'Planner › Tasks', ['tasks']],
+      ['Project types and rules of credit', 'Team › Reference', ['reference']],
     ],
   };
 
