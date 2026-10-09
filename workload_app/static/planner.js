@@ -956,9 +956,9 @@ function renderDay() {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => shareDay(true) }, 'Print'))),
     requestList(data),
     plan.span === 'week' ? weekTable(data, shown) : dayCards(data.days[0], shown),
-    meetingsPanel(data),
-    calendarPanel(),
-    awayPanel(data));
+    // Meetings and Away side by side, the same height.
+    el('div', { class: 'panel-pair' }, meetingsPanel(data), awayPanel(data)),
+    calendarPanel());
 }
 
 /* -- who is away ---------------------------------------------------------- */

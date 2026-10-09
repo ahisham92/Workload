@@ -63,11 +63,11 @@
 
   /* -- cards as wide as they need, no wider ------------------------------ */
   // Ahmed (9 Oct): boxes and cards stretched across the whole screen with
-  // little in them. So a grid of cards keeps each card at its own width,
-  // balances the rows (six cards are three and three, not five and one), and
-  // the panel around it is only as wide as its cards: the tab's colour shows
-  // beside it rather than an empty stretch of box. On a phone a card takes
-  // the width of the screen.
+  // little in them. So a grid of cards keeps each card at its own width, at
+  // most four to a row with each row centred (six are four and two), and the
+  // panel around it is only as wide as its cards, centred on the page: the
+  // tab's colour shows either side. On a phone a card takes the screen's
+  // width.
   const GRIDS = { 'pc-grid': 272, 'eng-grid': 340, 'day-grid': 320, 'ci-grid': 320,
     'gr-people': 300, 'unit-grid': 300, 'cards-3': 300, findings: 300, 'hero-strip': 300,
     'load-grid': 280, 'bi-kinds': 300, ideas: 300 };
@@ -86,25 +86,14 @@
     panel.classList.toggle('fits', !wide && !onGridParent(panel));
   }
 
+  /** Cards at their own width, at most four to a row, each row centred. */
   function balance(grid) {
     const key = Object.keys(GRIDS).find((c) => grid.classList.contains(c));
-    const items = Array.from(grid.children).filter((n) => !n.hidden);
-    if (!key || !items.length || !grid.offsetParent) return;
-    const style = getComputedStyle(grid);
+    if (!key) return;
     // A row that scrolls sideways (the people cards on a phone) keeps its own layout.
-    if (style.gridAutoFlow.startsWith('column')) { grid.style.gridTemplateColumns = ''; return; }
-    // The room there is: the panel's own room when the panel shrinks to fit.
-    const panel = grid.closest('.panel.fits');
-    const room = panel
-      ? panel.parentElement.clientWidth - (panel.offsetWidth - grid.clientWidth)
-      : grid.clientWidth;
-    const gap = parseFloat(style.columnGap) || 12;
-    const width = GRIDS[key];
-    const fits = Math.floor((room + gap) / (width + gap));
-    if (fits < 2) { grid.style.gridTemplateColumns = 'minmax(0, 1fr)'; return; }
-    const rows = Math.ceil(items.length / fits);
-    const cols = Math.ceil(items.length / rows);
-    grid.style.gridTemplateColumns = `repeat(${cols}, ${width}px)`;
+    const carousel = getComputedStyle(grid).gridAutoFlow.startsWith('column');
+    grid.classList.toggle('card-row', !carousel);
+    grid.style.setProperty('--card-w', `${GRIDS[key]}px`);
   }
 
   const sized = new ResizeObserver((entries) => entries.forEach((e) => balance(e.target)));
@@ -127,7 +116,9 @@
     const plain = Array.from(panel.children).every((child) =>
       child.matches('h3, p, .panel-head, .empty, .btn, .legend')
       || (child.children.length <= 1 && notes.some((n) => child.contains(n))));
-    const on = notes.length === 1 && plain && !busy;
+    // Beside another box (Meetings next to Away) it keeps its words: the pair is one height.
+    const paired = panel.parentElement && panel.parentElement.classList.contains('panel-pair');
+    const on = notes.length === 1 && plain && !busy && !paired;
     panel.classList.toggle('is-slim', on);
     const title = panel.querySelector('h3');
     for (const p of $$('p.muted', panel)) {
