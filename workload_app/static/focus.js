@@ -116,7 +116,7 @@
       const cpiTone = cpi === null ? 'ok' : (cpi >= 1 ? 'ok' : cpi >= 0.9 ? 'warn' : 'bad');
       const planTone = plan === null ? 'ok' : (plan >= 0.9 ? 'ok' : plan >= 0.75 ? 'warn' : 'bad');
       const parts = [];
-      if (u !== null) parts.push(`busy at ${pct(u)}`);
+      if (u !== null) parts.push(`busy on real work at ${pct(u)}`);
       if (cpi !== null) parts.push(`earning ${Number(cpi).toFixed(2)} for each hour spent`);
       if (plan !== null) parts.push(`${pct(plan)} on plan`);
       if (!parts.length) return null;
@@ -126,6 +126,7 @@
       if (planTone !== 'ok') { next = 'Behind plan: see which jobs are behind.'; act = ['Open Projects', 'projects']; }
       else if (cpiTone !== 'ok') { next = 'Costing more than it earns: see which jobs.'; act = ['Open Projects', 'projects']; }
       else if (busyTone !== 'ok') { next = u > 1.05 ? 'Too much overtime: see who needs a lighter week.' : 'Room to take more work: see who has it.'; act = ['Open Who needs help', 'checkins']; }
+      if (team.days_not_filled) next += ` ${team.days_not_filled} timesheet day${team.days_not_filled === 1 ? ' is' : 's are'} not filled in yet.`;
       return { say: `The team is ${parts.join(', ')}.`, tone, next, act };
     },
 
@@ -446,7 +447,7 @@
       ['This week with the team', 'Who needs help this week?'],
       ['Staffing ahead', 'Do we need more people soon?'],
       ['How the team is doing', 'Is the team busy, earning and on plan?'],
-      ['Each person, by grade and team', 'How full is each person\'s timesheet?'],
+      ['Each person, by grade and team', 'How busy is each person on real work?'],
       ['The team, month by month', 'How many hours did the team book each month?'],
       ['Workload by engineer', 'How is each person doing this year?'],
       ['Data check', 'Are the timesheets complete?'],

@@ -13,16 +13,22 @@
 /** The meanings: what it is, how it is worked out, what good looks like. */
 const MEANINGS = {
   utilisation: {
-    title: 'Utilisation',
-    what: 'How full someone’s timesheet is so far.',
-    how: 'Every hour they booked (projects, proposals, general and department codes, leave and holidays) divided by the hours a full timesheet holds for the working days so far. It counts up to today, or up to the last day the timesheets reach if they stop earlier, never the whole year.',
-    good: '85% to 105% is about right. Over 105% is overtime: too much on their plate. 70% to 85% is light. Under 70% means hours are missing from the timesheet, or there is not enough work for them.',
+    title: 'Busy on real work',
+    what: 'How much of the time someone was there to work went on projects and proposals.',
+    how: 'Hours on projects and proposals divided by the hours they were there to work: a full timesheet for the working days so far, less their leave and holidays. Hours on general and department codes are the gap. It counts up to today, or up to the last day the timesheets reach if they stop earlier, never the whole year. Days with nothing on the timesheet are shown apart, as days not filled in yet.',
+    good: '85% to 105% is about right. Over 105% is overtime: too much on their plate. 70% to 85% is light: they have room for more. Under 70%: they are spending their days on general and department codes, so find them work.',
   },
   bands: {
     title: 'The colours',
-    what: 'How full each person’s timesheet is, as a colour.',
-    how: 'Green (on plan) is 85% to 105% of a full timesheet. Amber (light) is 70% to 85%. Red is under 70% or over 105%.',
-    good: 'Green for everyone. Red over 105%: take work off them. Red under 70%: check their timesheet is in, then give them work.',
+    what: 'How busy each person was on real work, as a colour.',
+    how: 'Green (on plan) is 85% to 105% of the hours they were there to work. Amber (light) is 70% to 85%. Red is under 70% or over 105%.',
+    good: 'Green for everyone. Red over 105%: take work off them. Red under 70%: give them work.',
+  },
+  not_filled: {
+    title: 'Days not filled in yet',
+    what: 'Working days with nothing on someone’s timesheet so far.',
+    how: 'The hours a full timesheet holds for the working days so far, less every hour they booked (leave included), in whole days.',
+    good: 'None. If there are some, ask them to fill those days in: until they do, their real-work % counts only the days that are filled.',
   },
   cpi: {
     title: 'Efficiency (CPI)',
@@ -190,7 +196,7 @@ const MEANINGS = {
     title: 'Where the hours went',
     what: 'What the hours on the timesheets were booked to.',
     how: 'Project work: jobs in the register. Proposals: BISpark job types 2 and 3 (proposals). General and department: any other code, such as GENERAL.DEPT, training or admin. Leave and absence: the codes listed as non-project on Reference (leave, public holiday, excuse).',
-    good: 'All of it counts as time accounted for in utilisation. Only project work counts as project effort (Actual MM).',
+    good: 'Projects and proposals are the real work in “Busy on real work”. Leave and holidays come off the time there was to work. General and department hours are the gap. Only project work counts as project effort (Actual MM).',
   },
   load_heat: {
     title: 'The colours',
@@ -202,11 +208,12 @@ const MEANINGS = {
 
 /** Which names carry which meaning: an exact name, or a pattern. */
 const MEANING_NAMES = [
-  [/^(utilisation( vs capacity)?|busy)$/i, 'utilisation'],
+  [/^(utilisation( vs capacity)?|busy|busy on real work|real work)$/i, 'utilisation'],
+  [/^days not filled in yet$/i, 'not_filled'],
   [/^(plan adherence|on plan)$/i, 'plan_adherence'],
   [/^plan earned$/i, 'plan_earned'],
   [/^earning per hour spent$/i, 'cpi'],
-  [/^ring: hours used$/i, 'utilisation'],
+  [/^ring: (hours used|busy on real work)$/i, 'utilisation'],
   [/^(on plan|light|over, or far under|over 105% or under 70%)(\s|$)/i, 'bands'],
   [/^(efficiency \(cpi\)|cpi)$/i, 'cpi'],
   [/^(efficiency \(cpi, type-weighted\)|type-weighted cpi)$/i, 'type_cpi'],

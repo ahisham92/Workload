@@ -66,9 +66,10 @@
         el('h3', {}, title || 'How the team is doing'),
         el('p', { class: 'muted' }, 'The green band on each dial is where it should sit.')),
       el('div', { class: 'dl-row' },
-        dial({ label: 'Busy', value: t.utilisation, text: fmt.pct(t.utilisation), min: 0, max: 1.3,
+        dial({ label: 'Busy on real work', value: t.utilisation, text: fmt.pct(t.utilisation), min: 0, max: 1.3,
           band: [0.85, 1.05], toneName: tone.utilisation(t.utilisation),
-          sub: 'of a full timesheet so far; 85–105% is right' }),
+          sub: 'projects and proposals so far; 85–105% is right'
+            + (t.days_not_filled ? `; ${t.days_not_filled} day${t.days_not_filled === 1 ? '' : 's'} not filled in yet` : '') }),
         dial({ label: 'Earning per hour spent', value: t.cpi, text: fmt.ratio(t.cpi), min: 0.5, max: 1.5,
           band: [1, 1.5], toneName: tone.cpi(t.cpi),
           sub: t.cpi >= 1 ? 'earning more than it costs' : 'costing more than it earns' }),

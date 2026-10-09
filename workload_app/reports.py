@@ -16,9 +16,14 @@ The definitions are the workbook's own:
   quarters in proportion to the effort actually spent in each;
 * **capacity to date** -- the team's availability for the year, over the
   working days up to today (or the last day the timesheets reach, if earlier);
-* **utilisation** -- every hour on the timesheet (projects, proposals, general
-  and department codes, time off) against capacity to date, so a full
-  timesheet is 100%; the workbook counted project hours only;
+* **utilisation** ("busy on real work") -- project and proposal hours against
+  the time the person was there to work: capacity to date less their leave and
+  holidays. General and department codes are the gap, so somebody with no
+  work who still fills the day shows up; the workbook counted project hours
+  against all of capacity;
+* **timesheet filled** -- every hour on the timesheet against capacity to
+  date, and the working days that leaves unaccounted for: a check that the
+  timesheets are in, kept apart from how busy anybody is;
 * **per-engineer figures** -- each project's value multiplied by that engineer's
   share of it;
 * **type-weighted** figures -- earned value scaled by the portfolio weight of
@@ -232,9 +237,15 @@ def build(wb: Unit, kind: str = "year", year: Optional[int] = None,
     capacity = _capacity(wb, period, upto)
     booked = _booked(wb, index, period, upto)
     team = _team_totals(projects, capacity, booked, hours_per_mm)
+    days_booked = _days_booked(index)
+    empty = _empty_days(days_booked, period.start,
+                        min(period.end, upto) if period.end else None)
     per_engineer = _per_engineer(projects, engineers, capacity, hours_per_mm,
-                                 index, period, booked)
+                                 index, period, booked, empty)
     _add_rework(per_engineer, wb, engineers)
+    # The team's empty days are each person's added up.
+    team["days_not_filled"] = sum(per_engineer[name]["days_not_filled"]
+                                  for name in engineers if name in capacity)
     report = ReportSet(
         period=period, as_at=as_at, hours_per_mm=hours_per_mm,
         engineers=engineers, counted_to=upto, projects=projects, team=team,
@@ -245,7 +256,7 @@ def build(wb: Unit, kind: str = "year", year: Optional[int] = None,
         delivery_mix=_delivery_mix(index, hours_per_mm, period),
     )
     report.monthly = _monthly_scores(wb, index, projects, engineers, period,
-                                     as_at, hours_per_mm)
+                                     as_at, hours_per_mm, days_booked)
     report.heroes = _heroes(report.monthly, report.scorecard, period)
     report.champion = _champion(projects, period)
     return report
@@ -399,9 +410,9 @@ def _capacity(wb: Unit, period: Period, upto: _dt.date
 def _booked(wb: Unit, index: TimesheetIndex, period: Period, upto: _dt.date
             ) -> Dict[str, Dict[str, float]]:
     """Every hour on each person's timesheet in the period up to ``upto``,
-    by what it went on. This is what utilisation counts: projects, proposals,
-    general and department codes, and time off, so a full timesheet is 100%
-    and leave never makes anybody look idle."""
+    by what it went on: projects and proposals are the real work utilisation
+    counts, time off comes off the time there was to work, and everything
+    together says how full the timesheet is."""
     out: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {kind: 0.0 for kind in CHARGE_KINDS})
     start, end = period.start, period.end
@@ -416,6 +427,69 @@ def _booked(wb: Unit, index: TimesheetIndex, period: Period, upto: _dt.date
         person = out[row["engineer"]]
         person[charge_kind(row, non_project, project_numbers)] += row["hours"]
         person["overtime"] = person.get("overtime", 0.0) + row["overtime_hours"]
+    return out
+
+
+#: The kinds of hours that are real work: what "busy on real work" counts.
+REAL_WORK = ("projects", "proposals")
+
+
+def _busy(hours: Dict[str, float], capacity_mm: float, hours_per_mm: float,
+          empty_days: int = 0) -> Dict[str, Any]:
+    """How busy on real work, and how full the timesheet is.
+
+    ``utilisation`` is project and proposal hours over the time the person was
+    there to work: capacity less leave and holidays, so leave never counts
+    against anybody, and general or department hours show as the gap.
+    ``timesheet_filled`` is every hour over capacity, and ``days_not_filled``
+    the working days with nothing on the timesheet at all.
+    """
+    if not hours_per_mm:
+        return {"utilisation": None, "timesheet_filled": None,
+                "days_not_filled": empty_days}
+    real = sum(hours.get(kind, 0.0) for kind in REAL_WORK) / hours_per_mm
+    there = capacity_mm - hours.get("time_off", 0.0) / hours_per_mm
+    total = sum(hours.get(kind, 0.0) for kind in CHARGE_KINDS)
+    return {
+        "utilisation": _round(real / there) if there > 1e-9 else None,
+        "timesheet_filled": _round(_safe(total / hours_per_mm, capacity_mm)),
+        "days_not_filled": empty_days,
+    }
+
+
+def _days_booked(index: TimesheetIndex) -> Dict[str, set]:
+    """The days each person has anything on their timesheet."""
+    out: Dict[str, set] = defaultdict(set)
+    for row in index.rows:
+        if row["date"] is not None and row["hours"]:
+            out[row["engineer"]].add(row["date"])
+    return out
+
+
+def _empty_days(booked: Dict[str, set], start: Optional[_dt.date],
+                end: Optional[_dt.date]) -> Dict[str, int]:
+    """Each person's working days from ``start`` to ``end`` with nothing on
+    their timesheet: no project, no code, no leave.
+
+    A working day is one most of the team booked something on. That follows
+    the week the timesheets really keep (Sunday to Thursday or Monday to
+    Friday), skips the days everybody was off, and is not fooled by one
+    person's weekend overtime. Nobody is missing days from before the first
+    day they ever booked.
+    """
+    if start is None or end is None or end < start:
+        return {}
+    first = {name: min(dates) for name, dates in booked.items() if dates}
+    out = {name: 0 for name in first}
+    day = start
+    while day <= end:
+        there = [name for name, since in first.items() if since <= day]
+        filled = [name for name in there if day in booked[name]]
+        if there and len(filled) * 2 > len(there):
+            for name in there:
+                if day not in booked[name]:
+                    out[name] += 1
+        day += _dt.timedelta(days=1)
     return out
 
 
@@ -452,7 +526,7 @@ def _team_totals(projects, capacity, booked, hours_per_mm) -> Dict[str, Any]:
         "capacity_to_date_mm": _round(capacity_to_date, 2),
         "booked_mm": _round(booked_mm, 2),
         "hours": _hours_split(hours),
-        "utilisation": _round(_safe(booked_mm, capacity_to_date)),
+        **_busy(hours, capacity_to_date, hours_per_mm),
         "plan_adherence": _round(_safe(actual, planned_to_date)),
         "cpi": _round(_safe(earned, actual)),
         "spi": _round(_safe(earned, planned_to_date)),
@@ -483,7 +557,7 @@ def _add_rework(per_engineer: Dict[str, Dict[str, Any]], wb, engineers) -> None:
 
 
 def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period,
-                  timesheet) -> Dict[str, Dict[str, Any]]:
+                  timesheet, empty) -> Dict[str, Dict[str, Any]]:
     """Each project's figures multiplied by that engineer's share of it."""
     out: Dict[str, Dict[str, Any]] = {}
     total_actual = sum(p["actual_mm"] or 0.0 for p in projects)
@@ -526,7 +600,7 @@ def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period,
             "capacity_to_date_mm": _round(room["to_date"]),
             "booked_mm": _round(booked_mm),
             "hours": _hours_split(hours),
-            "utilisation": _round(_safe(booked_mm, room["to_date"])),
+            **_busy(hours, room["to_date"], hours_per_mm, empty.get(engineer, 0)),
             "plan_adherence": _round(_safe(actual, planned_to_date)),
             "cpi": _round(_safe(earned, actual)),
             "type_weighted_earned_mm": _round(type_weighted),
@@ -678,8 +752,8 @@ def _months_in(period: Period) -> List[Tuple[str, _dt.date, _dt.date]]:
     return out
 
 
-def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
-                    ) -> List[Dict[str, Any]]:
+def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm,
+                    days_booked) -> List[Dict[str, Any]]:
     """Run the scorecard month by month, so each finished month has a winner.
 
     Only months that have finished are scored: a month still in progress would
@@ -689,14 +763,22 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
     availability = {e.short_name: e for e in wb.engineers()}
     by_project = {p["number"]: p for p in projects}
 
-    # Bucket the timesheet once: month -> engineer -> job -> hours.
+    # Bucket the timesheet once: month -> engineer -> job -> hours, and the
+    # same hours by what they went on.
     buckets: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(float)))
+    kinds: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(float)))
+    non_project = wb.non_project_codes()
+    project_numbers = set(by_project)
     for row in index.rows:
         date = row["date"]
         if date is None:
             continue
-        buckets[f"{date.year:04d}-{date.month:02d}"][row["engineer"]][row["job_number"]] += row["hours"]
+        month = f"{date.year:04d}-{date.month:02d}"
+        buckets[month][row["engineer"]][row["job_number"]] += row["hours"]
+        kinds[month][row["engineer"]][
+            charge_kind(row, non_project, project_numbers)] += row["hours"]
 
     # Reports frozen on a day count that day as done: frozen on 30 September,
     # September is a finished month. On the live date, today is still going.
@@ -706,6 +788,7 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
         if last > as_at or (last == as_at and not frozen):
             continue                      # not finished yet, so not scored
         per: Dict[str, Dict[str, Any]] = {}
+        empty = _empty_days(days_booked, first, last)
         for name in engineers:
             jobs = buckets.get(label, {}).get(name, {})
             # Project work only, the way the period figures count it: leave
@@ -746,11 +829,9 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
                 "type_weighted_earned_mm": _round(type_weighted),
                 "type_weighted_cpi": _round(_safe(type_weighted, actual)),
                 "cpi": _round(_safe(earned, actual)),
-                # Every hour of the month counts here, as it does for the
-                # period: a full timesheet is 100%.
-                "utilisation": _round(_safe(
-                    sum(jobs.values()) / hours_per_mm if hours_per_mm else 0.0,
-                    capacity)),
+                # Busy on real work, as the period counts it.
+                **_busy(kinds.get(label, {}).get(name, {}), capacity,
+                        hours_per_mm, empty.get(name, 0)),
                 "plan_adherence": _round(_safe(actual, planned)),
                 "planned_mm": _round(planned),
                 "capacity_mm": _round(capacity),

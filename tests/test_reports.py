@@ -67,11 +67,12 @@ class TestAgainstTheWorkbook:
         ("profit_mm", -3.72),
         ("planned_to_date_mm", 32.72),
         # The workbook pro-rated capacity by calendar days and counted only
-        # project hours; Selecao+ counts working days so far, and every hour
-        # on the timesheet (proposals, general codes, time off), so a full
-        # timesheet is 100%. Excel said 24.16 and 0.7411.
+        # project hours against all of it; Selecao+ counts working days so
+        # far, and project and proposal hours against the time there was to
+        # work (leave taken out). Excel said 24.16 and 0.7411.
         ("capacity_to_date_mm", 24.14),
-        ("utilisation", 0.986),
+        ("utilisation", 0.981),
+        ("timesheet_filled", 0.986),
         ("plan_adherence", 0.5473),
     ])
     def test_team_totals_match(self, report, key, expected):
@@ -123,9 +124,9 @@ class TestScorecard:
         assert ranking == [(1, "Ahmed"), (2, "Kirolos"), (3, "Osama")]
 
     # The workbook's were 84.75, 83.86 and 75.99, with utilisation counting
-    # project hours only (see above); the ranking is the same.
+    # project hours against all of capacity (see above); the ranking is the same.
     @pytest.mark.parametrize("engineer,score", [
-        ("Ahmed", 90.2), ("Kirolos", 88.3), ("Osama", 80.8),
+        ("Ahmed", 90.1), ("Kirolos", 88.2), ("Osama", 80.7),
     ])
     def test_the_weighted_scores_match(self, report, engineer, score):
         assert report.scorecard["totals"][engineer] == pytest.approx(score, abs=0.1)
