@@ -1655,6 +1655,12 @@ async function renderNightly() {
   $('#btn-nightly-kit').disabled = !source.set;
   $('#btn-nightly-team').disabled = !source.set || !source.shared_folder;
   $('#btn-nightly-stop').hidden = !info;
+  // Each step shows a tick once it is done, so the next one is plain to see.
+  const done = [source.set, source.shared_folder, info, info && info.last_result];
+  done.forEach((ok, i) => {
+    const step = $(`#nightly-step-${i + 1}`);
+    if (step) step.classList.toggle('is-done', Boolean(ok));
+  });
   if (!info) {
     setChildren(box, el('div', { class: 'msg' }, source.set
       ? 'Ready. Download the kit for your PC and run setup.bat on it.'

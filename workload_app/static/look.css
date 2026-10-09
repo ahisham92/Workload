@@ -1,0 +1,265 @@
+/* Selecao+ — the look (look.js): each path has a colour, each tab a face.
+ *
+ * Plan people is violet, See the workload blue, Read the results orange (the
+ * logo's star) and Set up teal. A tab's header is a deep navy banner with its
+ * icon and its path's colour; its panels carry the same colour in their titles
+ * and a faint wash, so no two parts of the app look the same. Loaded last. */
+
+/* ------------------------------------------------------------ the colours */
+[data-tone="plan"], [data-path="plan"]     { --tone: #6d4bd8; --tone-2: #b04ad1; }
+[data-tone="workload"], [data-path="workload"] { --tone: #1f6fd1; --tone-2: #12a5c4; }
+[data-tone="results"], [data-path="results"]  { --tone: #e2581b; --tone-2: #e8a10c; }
+[data-tone="setup"], [data-path="setup"]    { --tone: #0d8f7f; --tone-2: #3d9be0; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) [data-tone="plan"], :root:not([data-theme="light"]) [data-path="plan"]     { --tone: #a28bff; --tone-2: #d77ff0; }
+  :root:not([data-theme="light"]) [data-tone="workload"], :root:not([data-theme="light"]) [data-path="workload"] { --tone: #62a6f2; --tone-2: #45c9e4; }
+  :root:not([data-theme="light"]) [data-tone="results"], :root:not([data-theme="light"]) [data-path="results"]  { --tone: #ff8a4c; --tone-2: #f4bb45; }
+  :root:not([data-theme="light"]) [data-tone="setup"], :root:not([data-theme="light"]) [data-path="setup"]    { --tone: #3cc7b4; --tone-2: #6fb6f0; }
+}
+:root[data-theme="dark"] [data-tone="plan"], :root[data-theme="dark"] [data-path="plan"]     { --tone: #a28bff; --tone-2: #d77ff0; }
+:root[data-theme="dark"] [data-tone="workload"], :root[data-theme="dark"] [data-path="workload"] { --tone: #62a6f2; --tone-2: #45c9e4; }
+:root[data-theme="dark"] [data-tone="results"], :root[data-theme="dark"] [data-path="results"]  { --tone: #ff8a4c; --tone-2: #f4bb45; }
+:root[data-theme="dark"] [data-tone="setup"], :root[data-theme="dark"] [data-path="setup"]    { --tone: #3cc7b4; --tone-2: #6fb6f0; }
+
+[data-tone], [data-path] {
+  --tone-soft: color-mix(in srgb, var(--tone) 11%, var(--surface));
+  --tone-line: color-mix(in srgb, var(--tone) 30%, var(--border));
+  --tone-ink: color-mix(in srgb, var(--tone) 82%, var(--text));
+}
+:root { --navy: #101B2D; --navy-2: #1a2a45; --lift: 0 1px 2px rgba(16, 24, 40, .05), 0 10px 28px -14px rgba(16, 24, 40, .22); }
+
+/* ------------------------------------------------------- the page itself */
+/* A glow at the top of the page in the colour of the tab on show. It sits
+   above the backdrop's fade (body::after), which would otherwise hide it. */
+#main::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(900px 460px at 0% -8%, color-mix(in srgb, var(--tone, var(--accent)) 14%, transparent), transparent 70%),
+    radial-gradient(760px 420px at 100% 0%, color-mix(in srgb, var(--tone-2, var(--accent)) 10%, transparent), transparent 70%);
+}
+
+/* The top bar in the logo's navy, so the app reads as one piece. */
+.topbar {
+  background: linear-gradient(100deg, var(--navy) 0%, var(--navy-2) 100%);
+  border-bottom: 0; color: #fff;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 6px 18px -10px rgba(16, 27, 45, .6);
+}
+.topbar .logo { box-shadow: 0 0 0 1px rgba(255, 255, 255, .18); }
+.topbar .brand-divider { background: rgba(255, 255, 255, .18); }
+.topbar .muted, .topbar .brand p { color: rgba(255, 255, 255, .66); }
+.topbar .btn { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .2); color: #fff; }
+.topbar .btn:hover { background: rgba(255, 255, 255, .16); }
+.topbar #save-state.pill-ok { background: rgba(89, 200, 150, .18); color: #7fe0b4; }
+
+/* The tabs: each lights up in its own path's colour. */
+.tabs { box-shadow: 0 4px 14px -10px rgba(16, 24, 40, .25); }
+.tab { border-radius: 10px 10px 0 0; transition: color .15s, background .15s; }
+.tab[data-tone]:hover { color: var(--tone-ink); }
+.tab[data-tone].is-active {
+  color: var(--tone-ink); border-bottom-color: var(--tone);
+  background: linear-gradient(to top, color-mix(in srgb, var(--tone) 12%, transparent), transparent);
+}
+.tab[data-tone] .tab-icon { color: var(--tone); }
+.path-chip[data-path] { border-color: var(--tone-line); }
+.path-chip[data-path]::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 7px; vertical-align: 1px; background: linear-gradient(135deg, var(--tone), var(--tone-2));
+}
+.path-chip[data-path].is-on { background: linear-gradient(120deg, var(--tone), var(--tone-2)); border-color: transparent; }
+.path-chip[data-path].is-on::before { background: #fff; }
+body[data-tone] .thumb-bar button.is-active { color: var(--tone); }
+body[data-tone] .thumb-bar button.is-active .tab-icon { background: color-mix(in srgb, var(--tone) 14%, transparent); }
+
+/* ----------------------------------------------------- each tab's header */
+.view[data-tone] .view-head, .view[data-tone] .report-head {
+  position: relative; overflow: hidden; isolation: isolate;
+  align-items: center; padding: 22px 24px; border: 0; border-radius: 18px;
+  color: #fff; margin-bottom: 18px;
+  background:
+    radial-gradient(70% 160% at 100% 0%, color-mix(in srgb, var(--tone-2) 55%, transparent) 0, transparent 62%),
+    radial-gradient(60% 150% at 0% 100%, color-mix(in srgb, var(--tone) 75%, transparent) 0, transparent 70%),
+    linear-gradient(125deg, var(--navy) 0%, var(--navy-2) 100%);
+  box-shadow: 0 14px 34px -18px color-mix(in srgb, var(--tone) 80%, transparent);
+}
+/* Rows of dots, like the logo, fading in from the right. */
+.view[data-tone] .view-head::after, .view[data-tone] .report-head::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(rgba(255, 255, 255, .22) 1.3px, transparent 1.6px);
+  background-size: 18px 18px;
+  -webkit-mask: linear-gradient(to left, #000 0%, transparent 55%);
+  mask: linear-gradient(to left, #000 0%, transparent 55%);
+}
+.view[data-tone] .view-head > div:not(.row):not(.view-actions),
+.view[data-tone] .report-head > div:not(.row) { flex: 1 1 260px; min-width: 0; }
+.vh-icon {
+  flex: none; width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--tone), var(--tone-2));
+  box-shadow: 0 8px 20px -8px var(--tone), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+.vh-icon .tab-icon { width: 28px; height: 28px; color: #fff; stroke: #fff; opacity: 1; stroke-width: 1.7; }
+.vh-eyebrow {
+  display: block; font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--tone) 45%, #fff); margin-bottom: 3px;
+}
+.view[data-tone] .view-head h2, .view[data-tone] .report-head h2 {
+  color: #fff; font-size: 25px; font-weight: 700; letter-spacing: -.02em;
+}
+.view[data-tone] .view-head .muted, .view[data-tone] .report-head .muted {
+  color: rgba(255, 255, 255, .78); font-size: 13.5px; margin-top: 4px;
+}
+.view[data-tone] .view-head .field > span, .view[data-tone] .report-head .field > span { color: rgba(255, 255, 255, .75); }
+.view[data-tone] .view-head .btn:not(.btn-primary), .view[data-tone] .report-head .btn:not(.btn-primary) {
+  background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .24); color: #fff;
+}
+.view[data-tone] .view-head .btn:not(.btn-primary):hover,
+.view[data-tone] .report-head .btn:not(.btn-primary):hover { background: rgba(255, 255, 255, .18); }
+.view[data-tone] .view-head .btn-primary, .view[data-tone] .report-head .btn-primary {
+  background: #fff; border-color: #fff; color: var(--navy); font-weight: 600;
+}
+.view[data-tone] .view-head select, .view[data-tone] .report-head select,
+.view[data-tone] .view-head input, .view[data-tone] .report-head input {
+  background: rgba(255, 255, 255, .95); color: var(--navy); border-color: transparent;
+}
+.view[data-tone] .view-head .pill, .view[data-tone] .report-head .pill { background: rgba(255, 255, 255, .14); color: #fff; }
+.view[data-tone] .view-head a:not(.btn) { color: #fff; }
+
+/* ------------------------------------------------------------- the panels */
+.view[data-tone] .panel {
+  border-radius: 16px; border-color: color-mix(in srgb, var(--tone) 12%, var(--border));
+  /* A thin line in the path's colours along the top, over a faint wash. */
+  background:
+    linear-gradient(90deg, var(--tone), var(--tone-2)) top / 100% 3px no-repeat,
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 8%, var(--surface)) 0, var(--surface) 120px);
+  box-shadow: var(--lift);
+}
+.view[data-tone] .panel:hover { box-shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 14px 32px -14px color-mix(in srgb, var(--tone) 35%, transparent); }
+.view[data-tone] .panel > h3, .view[data-tone] .panel > summary > b,
+.view[data-tone] .panel > .dl-head > h3, .view[data-tone] .panel > .panel-head h3 {
+  font-size: 15.5px; font-weight: 700; letter-spacing: -.01em;
+}
+/* A small bar in the path's colour before each panel's title. */
+.view[data-tone] .panel > h3::before, .view[data-tone] .panel > .dl-head > h3::before,
+.view[data-tone] .panel > div:first-child > h3:first-child::before {
+  content: ""; display: inline-block; width: 4px; height: 15px; border-radius: 3px;
+  margin-right: 9px; vertical-align: -2px;
+  background: linear-gradient(var(--tone), var(--tone-2));
+}
+.view[data-tone] .card {
+  border-color: color-mix(in srgb, var(--tone) 12%, var(--border));
+  background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 6%, var(--surface)) 0, var(--surface) 70%);
+  box-shadow: var(--lift);
+}
+.view[data-tone] .card::before { background: linear-gradient(90deg, var(--tone), var(--tone-2)); opacity: .9; }
+.view[data-tone] .card .label { color: var(--tone-ink); font-weight: 600; }
+.view[data-tone] .btn-primary {
+  background: linear-gradient(120deg, var(--tone), color-mix(in srgb, var(--tone) 70%, var(--tone-2)));
+  border-color: transparent; box-shadow: 0 6px 14px -8px var(--tone);
+}
+.view[data-tone] .btn-primary:hover { background: linear-gradient(120deg, var(--tone), color-mix(in srgb, var(--tone) 70%, var(--tone-2))); }
+.view[data-tone] .subtab.is-active { background: linear-gradient(120deg, var(--tone), var(--tone-2)); border-color: transparent; }
+.view[data-tone] .table-wrap thead th, .view[data-tone] .panel table thead th {
+  background: color-mix(in srgb, var(--tone) 7%, var(--surface));
+}
+
+/* ----------------------------------------------- the opening page: paths */
+.path-card[data-path] { position: relative; overflow: hidden; padding: 0 0 18px; gap: 10px; border-radius: 18px;
+  border-color: var(--tone-line); box-shadow: var(--lift); }
+.path-card[data-path]::before {
+  content: ""; display: block; align-self: stretch; height: 74px; margin-bottom: -40px;
+  background:
+    radial-gradient(rgba(255, 255, 255, .25) 1.2px, transparent 1.5px) 0 0 / 14px 14px,
+    linear-gradient(120deg, var(--tone), var(--tone-2));
+}
+.path-card[data-path] > * { margin-left: 18px; margin-right: 18px; }
+.path-card[data-path] .path-card-icon {
+  width: 56px; height: 56px; border-radius: 16px; position: relative;
+  background: var(--surface); color: var(--tone);
+  box-shadow: 0 8px 20px -8px var(--tone), 0 0 0 4px var(--surface);
+}
+.path-card[data-path] .path-card-icon .tab-icon { width: 28px; height: 28px; opacity: 1; stroke-width: 1.7; }
+.path-card[data-path] .path-card-title { font-size: 1.2rem; }
+.path-card[data-path] .path-card-tabs { color: var(--tone-ink); }
+.path-card[data-path]:hover, .path-card[data-path]:focus-visible, .path-card[data-path].is-last { border-color: var(--tone); }
+
+/* --------------------------------------------- set-up screens, as steps */
+.flow {
+  list-style: none; margin: 14px 0 6px; padding: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 26px;
+}
+.flow-node {
+  position: relative; display: flex; flex-direction: column; gap: 3px;
+  padding: 14px; border-radius: 14px; background: var(--tone-soft, var(--surface-2));
+  border: 1px solid var(--tone-line, var(--border));
+}
+.flow-node svg {
+  width: 34px; height: 34px; padding: 7px; border-radius: 10px; margin-bottom: 6px;
+  fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  background: linear-gradient(135deg, var(--tone), var(--tone-2));
+}
+.flow-node b { font-size: 13.5px; }
+.flow-node span { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.flow-node:not(:last-child)::after {
+  content: "→"; position: absolute; right: -21px; top: 50%; transform: translateY(-50%);
+  color: var(--tone); font-weight: 700; font-size: 16px;
+}
+.steps { list-style: none; margin: 16px 0 10px; padding: 0; display: grid; gap: 12px; }
+.step {
+  position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px;
+  padding: 14px 16px; border-radius: 14px; background: var(--surface);
+  border: 1px solid var(--tone-line, var(--border));
+}
+.step:not(:last-child)::after {
+  /* The line joining one step's number to the next. */
+  content: ""; position: absolute; left: 35px; top: 56px; bottom: -14px; width: 2px;
+  background: linear-gradient(var(--tone-line, var(--border)), transparent);
+}
+.step-num {
+  width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; font-size: 16px; color: #fff;
+  background: linear-gradient(135deg, var(--tone, var(--accent)), var(--tone-2, var(--accent)));
+  box-shadow: 0 6px 14px -6px var(--tone, var(--accent));
+}
+.step.is-done { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.step.is-done .step-num { background: var(--ok); box-shadow: none; font-size: 0; }
+.step.is-done .step-num::before { content: "✓"; font-size: 18px; }
+.step-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.step-title { font-weight: 700; font-size: 14.5px; }
+.step-hint { color: var(--muted); font-size: 12.5px; margin: 0 0 4px; }
+.step-body textarea, .step-body input[type="text"] { width: 100%; }
+.step-body .row { margin: 4px 0 0; }
+
+/* ---------------------------------------------------------------- phones */
+@media (max-width: 700px) {
+  .view[data-tone] .view-head, .view[data-tone] .report-head { padding: 16px; border-radius: 16px; gap: 12px; align-items: flex-start; }
+  .vh-icon { width: 44px; height: 44px; border-radius: 13px; }
+  .vh-icon .tab-icon { width: 23px; height: 23px; }
+  .view[data-tone] .view-head h2, .view[data-tone] .report-head h2 { font-size: 21px; }
+  .flow { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .flow-node:not(:last-child)::after { display: none; }
+  .step { grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .step-num { width: 34px; height: 34px; font-size: 14px; }
+  .step:not(:last-child)::after { left: 28px; top: 48px; }
+}
+@media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
+@media print {
+  .view[data-tone] .view-head, .view[data-tone] .report-head { background: none; color: #000; box-shadow: none; padding: 0; }
+  .view[data-tone] .view-head h2, .view[data-tone] .view-head .muted { color: #000; }
+  .view-head::after, .vh-icon, .vh-eyebrow { display: none; }
+  #main::before { display: none; }
+}
+
+/* The guide's pictures sit inside its own panel, without one of their own. */
+.view[data-tone] .hg-holder .panel { background: transparent; box-shadow: none; border: 0; }
+
+/* Budgets' "how to bring them in": the same numbered steps as the kit. */
+.view[data-tone] ol.bu-steps { list-style: none; counter-reset: bu; padding: 0; margin: 12px 0; display: grid; gap: 10px; }
+.view[data-tone] ol.bu-steps > li {
+  counter-increment: bu; position: relative; padding: 12px 14px 12px 60px; min-height: 52px;
+  border-radius: 14px; border: 1px solid var(--tone-line); background: var(--surface);
+}
+.view[data-tone] ol.bu-steps > li::before {
+  content: counter(bu); position: absolute; left: 12px; top: 10px;
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--tone), var(--tone-2));
+  box-shadow: 0 6px 14px -6px var(--tone);
+}
