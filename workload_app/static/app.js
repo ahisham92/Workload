@@ -84,7 +84,7 @@ const tone = {
   /** Earned per man-month spent. Below 1.00 means costing more than it earns. */
   cpi: (v) => (v === null || v === undefined ? ''
     : v >= 1 ? 'ok' : v >= 0.8 ? 'warn' : 'bad'),
-  /** Busy-ness against capacity — over is as much a problem as under. */
+  /** Busy on real work — over is as much a problem as under. */
   utilisation: (v) => (v === null || v === undefined ? ''
     : v > 1.05 ? 'bad' : v >= 0.85 ? 'ok' : v >= 0.7 ? 'warn' : 'bad'),
   /** Distance from a target of 1.00, either side. */
@@ -1202,8 +1202,9 @@ function renderOverview() {
       `${fmt.hours(t.actual_mm * report.hours_per_man_month)} hours`],
     ['Earned MM', num(t.earned_mm), '', 'value delivered'],
     ['Profit / (loss)', num(t.profit_mm), tone.amount(t.profit_mm), 'earned − actual'],
-    ['Utilisation', fmt.pct(t.utilisation), tone.utilisation(t.utilisation),
-      `of a full timesheet ${countedTo(report).short}; 85–105% is right`],
+    ['Busy on real work', fmt.pct(t.utilisation), tone.utilisation(t.utilisation),
+      `projects and proposals ${countedTo(report).short}; 85–105% is right`
+      + notFilled(t, '; ')],
     ['Efficiency (CPI)', fmt.ratio(t.cpi), tone.cpi(t.cpi),
       t.cpi >= 1 ? 'earning above cost; 1.00 or more is good' : 'earning below cost; 1.00 or more is good'],
     ['Active projects', fmt.int(t.projects_active), '',
@@ -1298,6 +1299,24 @@ function countedTo(report) {
   return { short: `up to ${dateText(upto, { day: 'numeric', month: 'short' })}`, stale: true, day: upto };
 }
 
+/** The working days a timesheet still has empty, in words, or ''. */
+function notFilled(e, lead = '') {
+  const days = (e && e.days_not_filled) || 0;
+  return days ? `${lead}${days} day${days === 1 ? '' : 's'} not filled in yet` : '';
+}
+
+/** Who has empty days on their timesheet, as a warning line, or null.
+ *  Kept apart from the % so missing days never pass for an idle week. */
+function unfilledNote(report) {
+  const names = (report.engineers || []).filter((n) =>
+    ((report.per_engineer || {})[n] || {}).days_not_filled);
+  if (!names.length) return null;
+  const list = names.map((n) => `${n} ${notFilled(report.per_engineer[n]).replace(' not filled in yet', '')}`);
+  return el('p', { class: 'msg msg-warn', style: 'margin-top:6px' },
+    `Timesheets not filled in yet: ${list.join(', ')}. `
+    + 'Ask them to fill these days in; the % above counts only the days that are filled.');
+}
+
 /** One person's hours in the period, by what they went on. */
 function hoursSplit(h) {
   if (!h) return '';
@@ -1308,7 +1327,7 @@ function hoursSplit(h) {
 }
 
 /** The team in formation: one row per grade, the most senior at the back,
- *  each person ringed by how full their timesheet is so far.
+ *  each person ringed by how busy they were on real work so far.
  *  Choosing someone opens their own report. */
 function renderFormation(report) {
   const host = $('#formation');
@@ -1338,7 +1357,8 @@ function renderFormation(report) {
       value: util, tone: toneName, group: p.team_id || null,
       caption: util === null || util === undefined ? '—' : `${Math.round(util * 100)}%`,
       tip: `<b>${esc(name)}</b><br>${esc([p.grade_label, p.team_name].filter(Boolean).join(' · ') || 'No grade or team yet')}`
-        + `<br>${fmt.pct(util)} of a full timesheet ${esc(upto.short)}`
+        + `<br>${fmt.pct(util)} busy on real work ${esc(upto.short)}`
+        + (e.days_not_filled ? `<br>${esc(notFilled(e))}` : '')
         + (e.hours ? `<br>${esc(hoursSplit(e.hours))}` : '')
         + `<br>${num(e.actual_mm)} MM on projects · ${num(e.earned_mm)} MM earned · CPI ${fmt.ratio(e.cpi)}`,
     };
@@ -1362,10 +1382,11 @@ function renderFormation(report) {
       el('div', {},
         el('h3', {}, 'Each person, by grade and team', meaningButton('utilisation')),
         el('p', { class: 'muted' },
-          `The % is how full each person's timesheet is in ${periodName(report.period)}, ${upto.short}: `
-          + 'every hour booked, leave included, against a full timesheet for the working days so far. '
-          + '100% is full; over 100% is overtime. Most senior at the back, teammates joined. '
-          + 'Choose someone to open their profile.'),
+          `The % is how busy each person was on real work in ${periodName(report.period)}, ${upto.short}: `
+          + 'hours on projects and proposals against the hours they were there to work (leave and holidays taken out). '
+          + 'Hours on general and department codes are the gap. Over 100% is overtime. '
+          + 'Most senior at the back, teammates joined. Choose someone to open their profile.'),
+        unfilledNote(report),
         upto.stale ? el('p', { class: 'msg msg-warn', style: 'margin-top:6px' },
           `The timesheets stop on ${dateText(upto.day, { day: 'numeric', month: 'short', year: 'numeric' })}, `
           + 'so the days since are not counted yet. Bring in the latest timesheets to bring it up to date.') : null),
@@ -1450,7 +1471,7 @@ function trim(text, limit) {
  *  unit wrote itself that they do not already cover. */
 function renderDefinitions(definitions) {
   const own = ['utilisation', 'capacity', 'planned_mm', 'actual_mm', 'earned_mm',
-    'profit', 'cpi', 'plan_adherence', 'hours_kind'].map((key) => MEANINGS[key]);
+    'profit', 'cpi', 'plan_adherence', 'hours_kind', 'not_filled'].map((key) => MEANINGS[key]);
   const extra = definitions.filter((d) =>
     !meaningFor(String(d.field || '').replace(/\s*(—\s*)?in period$/i, '')));
   setChildren($('#definitions-body'),
@@ -1503,8 +1524,8 @@ function engineerBlock(name, report, overview) {
         name,
         won ? el('span', { class: 'pill pill-info', title: 'months won in this period' },
           `🏅 ${won}`) : null),
-      el('span', { class: `pill ${pill}`, title: 'how full their timesheet is so far; 85–105% is right' },
-        `${fmt.pct(util)} utilised`)),
+      el('span', { class: `pill ${pill}`, title: 'hours on projects and proposals against the hours they were there to work; 85–105% is right' },
+        `${fmt.pct(util)} busy on real work`)),
 
     el('div', { class: 'meter' },
       el('span', {
@@ -1528,7 +1549,8 @@ function engineerBlock(name, report, overview) {
     el('div', { class: 'muted', style: 'margin-top:6px' },
       `${fmt.hours(hours.total_hours)} h booked in total`
       + (hours.absence_hours ? ` · ${fmt.hours(hours.absence_hours)} h absence` : '')
-      + (hours.overtime_hours ? ` · ${fmt.hours(hours.overtime_hours)} h overtime` : '')));
+      + (hours.overtime_hours ? ` · ${fmt.hours(hours.overtime_hours)} h overtime` : '')
+      + notFilled(e, ' · ')));
 }
 
 function renderDataCheck(check) {
@@ -3054,7 +3076,8 @@ function renderDashboard(data) {
       ['Actual MM', num(t.actual_mm), 'what was burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
       ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
-      ['Utilisation', fmt.pct(t.utilisation), `of a full timesheet ${countedTo(data).short}; 85–105% is right`,
+      ['Busy on real work', fmt.pct(t.utilisation),
+        `projects and proposals ${countedTo(data).short}; 85–105% is right${notFilled(t, '; ')}`,
         tone.utilisation(t.utilisation)],
       ['Efficiency (CPI)', fmt.ratio(t.cpi),
         t.cpi >= 1 ? 'earning above cost' : 'earning below cost', tone.cpi(t.cpi)],
@@ -3129,7 +3152,8 @@ function renderEngineerKpis(data) {
     ['Earned MM', 'earned_mm', num, null],
     ['Profit / (loss) MM', 'profit_mm', num, tone.amount],
     ['Capacity MM to date', 'capacity_to_date_mm', num, null],
-    ['Utilisation', 'utilisation', fmt.pct, tone.utilisation],
+    ['Busy on real work', 'utilisation', fmt.pct, tone.utilisation],
+    ['Days not filled in yet', 'days_not_filled', fmt.int, null],
     ['Plan adherence', 'plan_adherence', fmt.pct, tone.target],
     ['Efficiency (CPI)', 'cpi', fmt.ratio, tone.cpi],
     ['Type-weighted earned MM', 'type_weighted_earned_mm', num, null],
@@ -3234,7 +3258,7 @@ function teamValue(data, key) {
   const names = data.engineers;
   const sum = (k) => names.reduce((a, n) => a + (per[n][k] || 0), 0);
   const projects = () => new Set(names.flatMap((n) => per[n].projects.map((p) => p.number))).size;
-  if (['utilisation', 'plan_adherence', 'cpi'].includes(key)) return data.team[key];
+  if (['utilisation', 'plan_adherence', 'cpi', 'days_not_filled'].includes(key)) return data.team[key];
   if (key === 'type_weighted_cpi') {
     return sum('actual_mm') ? sum('type_weighted_earned_mm') / sum('actual_mm') : null;
   }
@@ -3279,8 +3303,9 @@ function renderTeamMember(data) {
     kpiCards([
       ['Actual MM', num(person.actual_mm), `${person.projects_worked} project(s) worked`],
       ['Earned MM', num(person.earned_mm), 'value delivered'],
-      ['Utilisation', fmt.pct(person.utilisation),
-        person.hours ? hoursSplit(person.hours) : `of a full timesheet ${countedTo(data).short}`,
+      ['Busy on real work', fmt.pct(person.utilisation),
+        (person.hours ? hoursSplit(person.hours) : `projects and proposals ${countedTo(data).short}`)
+          + notFilled(person, ' · '),
         tone.utilisation(person.utilisation)],
       ['Efficiency (CPI)', fmt.ratio(person.cpi), 'earned ÷ actual',
         tone.cpi(person.cpi)],
@@ -3378,7 +3403,8 @@ function renderReview(data) {
       ['Actual MM', num(t.actual_mm), 'what we actually burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
       ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
-      ['Utilisation', fmt.pct(t.utilisation), `of a full timesheet ${countedTo(data).short}`,
+      ['Busy on real work', fmt.pct(t.utilisation),
+        `projects and proposals ${countedTo(data).short}${notFilled(t, '; ')}`,
         tone.utilisation(t.utilisation)],
       ['Plan adherence', fmt.pct(t.plan_adherence), 'actual vs planned to date',
         tone.target(t.plan_adherence)],
@@ -3403,7 +3429,8 @@ function renderReview(data) {
         ['Planned MM to date', 'planned_to_date_mm', num, null],
         ['Earned MM', 'earned_mm', num, null],
         ['Profit / (loss) MM', 'profit_mm', num, tone.amount],
-        ['Utilisation', 'utilisation', fmt.pct, tone.utilisation],
+        ['Busy on real work', 'utilisation', fmt.pct, tone.utilisation],
+        ['Days not filled in yet', 'days_not_filled', fmt.int, null],
         ['Plan adherence', 'plan_adherence', fmt.pct, tone.target],
         ['Type-weighted CPI', 'type_weighted_cpi', fmt.ratio, tone.cpi],
         ['Average type factor', 'average_type_factor', (v) => num(v, 2), null],

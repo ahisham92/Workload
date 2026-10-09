@@ -76,7 +76,7 @@
   function shortFactor(text) {
     const t = String(text || '');
     if (/cpi|efficien/i.test(t)) return 'Efficiency';
-    if (/utili/i.test(t)) return 'Hours used';
+    if (/utili|real work/i.test(t)) return 'Real work';
     if (/adherence/i.test(t)) return 'Plan kept';
     if (/earned/i.test(t)) return 'Earned';
     if (/actual/i.test(t)) return 'Booked';
@@ -173,8 +173,8 @@
     el('div', { class: 'pc-stats' },
       statRow('Efficiency', fmt.ratio(e.cpi), (e.cpi || 0) / 1.4, tone.cpi(e.cpi),
         'Earned per man-month spent (CPI)'),
-      statRow('Hours used', pct(e.utilisation), (e.utilisation || 0) / 1.2, tone.utilisation(e.utilisation),
-        'Hours booked against the hours they had'),
+      statRow('Real work', pct(e.utilisation), (e.utilisation || 0) / 1.2, tone.utilisation(e.utilisation),
+        'Busy on real work: project and proposal hours against the hours they were there to work'),
       statRow('Plan kept', pct(e.plan_adherence), (e.plan_adherence || 0) / 1.2, tone.target(e.plan_adherence),
         'Booked against what the plan said, to date'),
       statRow('Earned', `${num(e.earned_mm, 1)} MM`, maxima.earned ? (e.earned_mm || 0) / maxima.earned : 0, '',
@@ -228,7 +228,7 @@
       return ra - rb || a.localeCompare(b);
     });
     const period = state.report && state.report.period ? state.report.period.label : '';
-    // Hours used counts only to the last timesheet day, so the caption says so.
+    // Real work counts only to the last timesheet day, so the caption says so.
     const upto = state.report && typeof countedTo === 'function' ? countedTo(state.report) : null;
     const counted = !upto ? '' : upto.stale ? `, counted ${upto.short} (the last timesheet day)` : ' so far';
     setChildren(host,
@@ -240,7 +240,7 @@
             + 'how loaded they are and what they are on next. Ordered by score. Open a card for '
             + 'the whole picture.')),
         el('span', { class: 'legend' },
-          el('span', { class: 'legend-item' }, el('span', { class: 'swatch ring-swatch ring-ok' }), 'ring: hours used'))),
+          el('span', { class: 'legend-item' }, el('span', { class: 'swatch ring-swatch ring-ok' }), 'ring: busy on real work'))),
       el('div', { class: 'pc-grid' }, order.map((n) => card(n, maxima))));
   }
 
@@ -367,7 +367,7 @@
           el('span', {}, p.rank ? `score · ${p.rank} of ${p.of} (${p.among})` : 'score'))),
       el('div', { class: 'pf-tiles' },
         tile('Efficiency', fmt.ratio(e.cpi), tone.cpi(e.cpi)),
-        tile('Hours used', pct(e.utilisation), tone.utilisation(e.utilisation)),
+        tile('Busy on real work', pct(e.utilisation), tone.utilisation(e.utilisation)),
         tile('Plan kept', pct(e.plan_adherence), tone.target(e.plan_adherence)),
         tile('Booked', `${num(e.actual_mm, 1)} MM`, ''),
         tile('Earned', `${num(e.earned_mm, 1)} MM`, tone.amount(e.profit_mm)),

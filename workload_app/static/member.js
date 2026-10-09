@@ -220,8 +220,9 @@ function renderCards(data) {
     ['Earned MM', num(me.earned_mm), '', 'value you delivered'],
     ['Profit / (loss)', num(me.profit_mm), tone.amount(me.profit_mm),
       'earned − actual'],
-    ['Utilisation', fmt.pct(me.utilisation), tone.utilisation(me.utilisation),
-      `of ${num(me.capacity_to_date_mm)} MM capacity to date`],
+    ['Busy on real work', fmt.pct(me.utilisation), tone.utilisation(me.utilisation),
+      'your project and proposal hours against the hours you were there to work'
+      + (me.days_not_filled ? `; ${me.days_not_filled} day${me.days_not_filled === 1 ? '' : 's'} not filled in yet` : '')],
     ['Efficiency (CPI)', fmt.ratio(me.cpi), tone.cpi(me.cpi),
       me.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
     ['Plan adherence', fmt.pct(me.plan_adherence), tone.target(me.plan_adherence),
@@ -276,7 +277,7 @@ function statusPill(status) {
 
 function renderMonths(data) {
   setChildren($('#member-months'), table(
-    ['Month', 'Actual MM', 'Earned MM', 'Utilisation', 'CPI', 'Score'],
+    ['Month', 'Actual MM', 'Earned MM', 'Busy on real work', 'CPI', 'Score'],
     data.months.map((m) => [
       el('span', {}, m.label, m.won ? el('span', { title: 'best in the team that month' }, ' 🏅') : null),
       num(m.actual_mm),
