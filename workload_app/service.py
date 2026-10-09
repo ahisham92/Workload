@@ -26,6 +26,7 @@ from . import budgets as budgets_module
 from . import bringin
 from . import busy_calendar
 from . import meetings as meetings_module
+from . import revisions as revisions_module
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                growth as growth_module, management as management_module,
                drawing_list as drawing_list_module,
@@ -1035,6 +1036,7 @@ class WorkloadService:
                 data.update({k: v for k, v in proposal["change"].items()
                              if k != "step_name"})
                 wb.update_deliverable(proposal["row"], data)
+                wb.absorb_dates(proposal["row"], proposal["change"])
             return {"applied": len(proposals), "save": self._commit(),
                     "proposals": self._list_proposals(wb)}
 
@@ -2312,6 +2314,70 @@ class WorkloadService:
             result["from_list"] = self._list_proposals(wb)
             return result
 
+    # -- every sending of every deliverable (revisions.py) ------------------
+    def submission_register(self, query: Optional[Dict[str, Any]] = None
+                            ) -> Dict[str, Any]:
+        """Each deliverable's submissions and revisions, and where it stands.
+        ``?project=`` narrows it to one project."""
+        with self._lock:
+            wb = self.workbook
+            wanted = ((query or {}).get("project") or [None])[0]
+            today = _today()
+            issues = wb.issues()
+            projects = {p.number: p for p in wb.projects()}
+            deliverables = wb.deliverables()
+            listed = self._listed(deliverables)
+            steps = {(s.type_code, s.step_no): s.step_name for s in wb.credit_steps()}
+            items = []
+            for position, d in enumerate(deliverables):
+                project = projects.get(d.project_number)
+                if project is None or (wanted and d.project_number != wanted):
+                    continue
+                mine = issues.get(d.row, [])
+                if not wanted and not mine and project.status in (
+                        "Finalized", "Cancelled", "Proposal"):
+                    continue
+                state = revisions_module.describe(mine, today)
+                entry = listed.get(d.row)
+                items.append({
+                    "row": d.row, "project_number": d.project_number,
+                    "project_name": project.name or d.project_number,
+                    "name": d.name, "type_code": d.type_code,
+                    "step_name": steps.get((d.type_code, d.step_no), ""),
+                    "status_date": iso(d.status_date),
+                    "list": {k: entry[k] for k in ("total", "issued", "code_a",
+                                                   "code_b", "code_c")} if entry else None,
+                    **state,
+                })
+            counts = {k: 0 for k in revisions_module.STATUSES}
+            for item in items:
+                counts[item["status"]] += 1
+            return {"today": today.isoformat(), "items": items, "counts": counts,
+                    "statuses": revisions_module.STATUSES,
+                    "codes": revisions_module.CODES,
+                    "purposes": list(revisions_module.PURPOSES)}
+
+    def start_submission(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Start a deliverable's submission, or its next revision."""
+        with self._lock:
+            body = dict(body or {})
+            try:
+                row = int(body.pop("row"))
+            except (KeyError, TypeError, ValueError):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "Choose the deliverable by its row.")
+            issue = self.workbook.start_issue(row, body, today=_today())
+            return {"issue": issue, "save": self._commit()}
+
+    def update_submission(self, issue_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            issue = self.workbook.update_issue(_issue_id(issue_id), body or {})
+            return {"issue": issue, "save": self._commit()}
+
+    def remove_submission(self, issue_id: Any) -> Dict[str, Any]:
+        with self._lock:
+            result = self.workbook.delete_issue(_issue_id(issue_id))
+            return {**result, "save": self._commit()}
+
     def confirm_submissions(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Write the confirmed dates, and put each run-up on the task list."""
         with self._lock:
@@ -2342,6 +2408,7 @@ class WorkloadService:
                 data = by_row[row].to_dict()
                 data["status_date"] = date.isoformat()
                 wb.update_deliverable(row, data)
+                wb.absorb_dates(row, {"status_date": date.isoformat()})
             prepared = 0
             if body.get("prepare", True):
                 for row, _date in chosen:
@@ -2831,3 +2898,10 @@ def _duplicates(existing: Sequence[Dict[str, Any]],
                 round(float(row.get("hours") or 0.0), 4))
     seen = {key(row) for row in existing}
     return sum(1 for row in incoming if key(row) in seen)
+
+
+def _issue_id(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ApiError(HTTPStatus.NOT_FOUND, "There is no such submission.")
