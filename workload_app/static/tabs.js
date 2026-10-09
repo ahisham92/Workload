@@ -68,7 +68,7 @@
       el('div', { class: 'dl-row' },
         dial({ label: 'Busy', value: t.utilisation, text: fmt.pct(t.utilisation), min: 0, max: 1.3,
           band: [0.85, 1.05], toneName: tone.utilisation(t.utilisation),
-          sub: `of ${num(t.capacity_to_date_mm)} MM of hours so far` }),
+          sub: 'of a full timesheet so far; 85–105% is right' }),
         dial({ label: 'Earning per hour spent', value: t.cpi, text: fmt.ratio(t.cpi), min: 0.5, max: 1.5,
           band: [1, 1.5], toneName: tone.cpi(t.cpi),
           sub: t.cpi >= 1 ? 'earning more than it costs' : 'costing more than it earns' }),
