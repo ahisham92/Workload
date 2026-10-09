@@ -1,4 +1,4 @@
-/* Selecao+ — one question, one answer, the rest under Show more.
+/* Selecao+ — one question, one answer, only the extras under Show more.
  *
  * Ahmed (9 Oct): too many paths and tabs, and too much on each. Every tab
  * should answer the question the person came with; anything more waits under
@@ -13,7 +13,9 @@
  *   - each page's header asks its question, and an answer card under it
  *     answers it in one sentence from what the page already loaded, with the
  *     one thing to do next;
- *   - the page shows what answers the question; everything else on it is
+ *   - each part of a page is headed by the question it answers, and the
+ *     important parts stay open (Ahmed, 9 Oct: "important details should be
+ *     shown by default"); only the extras on it are
  *     folded under one "Show more" at the bottom, which names what it holds.
  *
  * Nothing is removed and nothing new is asked of the server: the answers are
@@ -397,28 +399,150 @@
   }
 
   /* -- Show more ----------------------------------------------------------------
-   * The blocks of a page are its own children, and the children of the boxes the
-   * page draws into. keep(block, i, blocks) says which stay in view; the rest
-   * fold away until Show more. */
+   * Ahmed (9 Oct): the important details stay open; only the extras wait under
+   * Show more. The blocks of a page are its own children, and the children of
+   * the boxes the page draws into; extra(block) names the ones that fold away. */
 
-  const TEXT = '.report-title, h3, h4, p';
-  const FOLD = {
-    overview: { keep: (b) => b.matches('#overview-start, #overview-pulse') },
-    planner: { bodies: ['#planner-body'], keep: (b) => !b.matches('.panel-pair') },
-    tasks: { bodies: ['#task-load'], keep: (b) => !b.parentElement.matches('#task-load') || b.matches('#tasks-timeline') },
-    checkins: { bodies: ['#checkins-body'], keep: (b) => b.matches('#checkins-scape') },
-    // The answer card says what "What to do about it" says; the teams table stays.
-    resourcing: { bodies: ['#resourcing-body'], keep: (b) => b.matches('#map-body') || /^Teams$/.test(((b.querySelector('h3') || {}).textContent || '').trim()) },
-    weekly: { bodies: ['#weekly-body'], keep: (b) => b.matches('#weekly-push') || (b.matches('section.panel:not(.wk-head)') && b === b.parentElement.querySelector(':scope > section.panel:not(.wk-head)')) },
-    projects: { bodies: ['#projects-list'], keep: (b) => !b.matches('#projects-summary') },
-    budgets: { bodies: ['#budgets-body'], keep: (b, i) => i < 2 },
-    // Each report keeps its title, its words and its first chart or table.
-    reports: { bodies: ['#report-body', '#report-body > div'], keep: (b, i, all) => b.matches(TEXT) || i === all.findIndex((x) => !x.matches(TEXT)) },
-    growth: { bodies: ['#growth-body'], keep: (b) => b.matches('.gr-todo') || Boolean(b.querySelector('.gr-grades')) },
-    team: { bodies: ['#team-body'], keep: (b) => b.matches('.table-wrap, p') },
-    timesheets: { keep: (b) => b.matches('#ts-heat, #ts-nightly') },
-    reference: { bodies: ['#reference-body'], keep: (b, i) => i < 2 },
+  // A section's title: a heading, or a chart's caption.
+  const HEADS = 'h3, h4, figcaption > b';
+  /** A block's title: its first heading's own words. */
+  function titleOf(block) {
+    const found = block.matches(HEADS) ? block : block.querySelector(HEADS);
+    if (!found) return '';
+    const h = found.cloneNode(true);
+    for (const extra of h.querySelectorAll('button, .info, .muted, small, span')) extra.remove();
+    return h.textContent.replace(/\s+/g, ' ').trim();
+  }
+  const titled = (b, ...starts) => {
+    const title = titleOf(b);
+    return Boolean(title) && starts.some((start) => title.startsWith(start));
   };
+
+  const FOLD = {
+    overview: { extra: (b) => b.matches('#overview-cards, #hero-strip, #definitions-panel, .split')
+      || titled(b, 'Workload by engineer', 'How is each person doing this year?') },
+    checkins: { bodies: ['#checkins-body'], extra: (b) => b.matches('.cards')
+      || titled(b, 'Leading the team', 'How much time do the leads', 'Each person', 'How have the last 8 weeks') },
+    resourcing: { bodies: ['#resourcing-body'], extra: (b) => titled(b, 'People', 'Who is in which team',
+      'Which teams carry which projects', 'Which team carries which job') },
+    weekly: { bodies: ['#weekly-body'], extra: (b) => titled(b, 'People to ask for', 'Do we need to ask for more people') },
+    projects: { bodies: ['#projects-list'], extra: (b) => b.matches('#projects-summary') },
+    // Each report keeps its first three charts and tables; the rest are the detail.
+    reports: { bodies: ['#report-body', '#report-body > div'], extra: (b, i, all) => !b.matches(TEXT)
+      && all.filter((x) => !x.matches(TEXT)).indexOf(b) >= 3 },
+    team: { bodies: ['#team-body'], extra: (b) => b.matches('.msg')
+      || titled(b, 'Hours booked against hours available', 'How much of their hours') },
+    timesheets: { extra: (b) => b.matches('#ts-cards')
+      || titled(b, 'Where the hours went', 'What were the hours spent on', 'Import exports', 'Have an export file') },
+  };
+  const TEXT = '.report-title, h3, h4, p';
+
+  /* -- every section asks the question it answers ------------------------------- */
+  // A section's title, as it was, and the question it now asks. Each one is
+  // matched by how the title starts, since some end with a date or a count.
+  const ASK = {
+    overview: [
+      ['Start here', 'New here? Where do I start?'],
+      ['This week with the team', 'Who needs help this week?'],
+      ['Staffing ahead', 'Do we need more people soon?'],
+      ['How the team is doing', 'Is the team busy, earning and on plan?'],
+      ['Each person, by grade and team', 'How full is each person\'s timesheet?'],
+      ['The team, month by month', 'How many hours did the team book each month?'],
+      ['Workload by engineer', 'How is each person doing this year?'],
+      ['Data check', 'Are the timesheets complete?'],
+      ['Things to fix', 'Is anything wrong in the projects?'],
+    ],
+    planner: [
+      ['Meetings', 'What meetings are coming, and who goes?'],
+      ['Days off: leave and holidays', 'Who is off, and when?'],
+    ],
+    tasks: [
+      ['Who is doing what, until when', 'Who is doing what, until when?'],
+      ['Who is loaded, and who is not', 'Who has too much task work, and who too little?'],
+    ],
+    checkins: [
+      ['Who is over, who has room: the next two weeks', 'Who is over, and who has room, in the next two weeks?'],
+      ['What to do', 'What should I do about it?'],
+      ['Leading the team', 'How much time do the leads give their people?'],
+      ['Free hours, the next two weeks', 'Who has free hours in the next two weeks?'],
+      ['Each person', 'How have the last 8 weeks been for each person?'],
+      ['Everything to ask', 'What should I ask each person?'],
+    ],
+    resourcing: [
+      ['What to do about it', 'What should change in the teams?'],
+      ['Teams', 'How full is each team?'],
+      ['Hours booked by team, month by month', 'How many hours did each team book each month?'],
+      ['People', 'Who is in which team?'],
+      ['Which teams carry which projects', 'Which team carries which job?'],
+    ],
+    weekly: [
+      ['What to do this week', 'What should I do this week?'],
+      ['Last week, person by person', 'How did last week go for each person?'],
+      ['This week', 'What is due this week, and who can take more?'],
+      ['People to ask for', 'Do we need to ask for more people?'],
+      ['Notifications on your phone', 'Can my phone tell me when something needs me?'],
+    ],
+    projects: [
+      ['Every project at a glance', 'How far along is each job, and is it earning?'],
+      ['Projects by status', 'How many jobs are in each state?'],
+    ],
+    budgets: [
+      ['Bring in your budgets from BISpark', 'How do I bring in the budgets?'],
+    ],
+    reports: [
+      ['Weighted score', 'Who scores highest, out of 100?'],
+      ['Top-weighted factors', 'What is each score made of?'],
+      ['Ranking', 'Where does each person rank?'],
+      ['How the score is made up', 'How is the score worked out?'],
+      ['How the team is doing', 'Is the team busy, earning and on plan?'],
+      ['Portfolio by status', 'How do the jobs add up by state?'],
+      ['Project detail', 'How is each job doing?'],
+    ],
+    growth: [
+      ['What to do', 'What should I do for the team\'s growth?'],
+      ['KPIs by grade', 'How is each person scoring against their own grade?'],
+      ['Goals and development time', 'What is each person working towards this quarter?'],
+    ],
+    bringin: [
+      ['What the app holds now', 'What is in the app now?'],
+      ['Keeping it up to date', 'How do I keep it up to date?'],
+    ],
+    timesheets: [
+      ['Each person\'s months at a glance', 'How much of each month did each person book?'],
+      ['Where the hours went', 'What were the hours spent on?'],
+      ['Every night, on its own', 'How do the timesheets come in by themselves?'],
+      ['Import exports', 'Have an export file to add by hand?'],
+    ],
+    team: [
+      ['The team at a glance', 'How is each person doing?'],
+      ['Hours booked against hours available', 'How much of their hours has each person booked?'],
+    ],
+    reference: [
+      ['Project types', 'What kinds of job are there?'],
+      ['Rules of credit', 'How is progress credited on each kind of job?'],
+      ['Scorecard factors', 'What is the ranking built from?'],
+    ],
+  };
+
+  /** Each section's title becomes the question it answers; the old title stays as its tooltip. */
+  function ask(view) {
+    const pairs = ASK[view];
+    const section = viewEl(view);
+    if (!pairs || !section) return;
+    for (const h of section.querySelectorAll(HEADS)) {
+      if (h.closest('.view-head, .report-head, .answer, .fold-more') || h.dataset.asked) continue;
+      const text = Array.from(h.childNodes).find((n) => n.nodeType === 3 && n.textContent.trim());
+      if (!text) continue;
+      const was = text.textContent.trim();
+      const pair = pairs.find(([start]) => was.startsWith(start));
+      if (!pair) continue;
+      h.dataset.asked = '1';
+      h.title = h.title || was;
+      text.textContent = `${pair[1]} `;
+      h.classList.add('is-question');
+    }
+  }
+
   // The page's frame, never folded: its header, answer, page switches and the button itself.
   const FRAME = '.view-head, .report-head, .answer, .fold-more, .subtabs, .print-only, script, #project-detail';
 
@@ -444,7 +568,7 @@
     const h = found.cloneNode(true);
     for (const extra of h.querySelectorAll('button, .info, .muted, small, span')) extra.remove();
     const text = h.textContent.replace(/\s+/g, ' ').trim();
-    return text.length > 40 ? `${text.slice(0, 38).replace(/\s+\S*$/, '')}…` : text;
+    return text.length > 56 ? `${text.slice(0, 54).replace(/\s+\S*$/, '')}…` : text;
   }
 
   function fold(view) {
@@ -455,7 +579,7 @@
     const extras = [];
     blocks.forEach((b, i) => {
       let keep = true;
-      try { keep = rule.keep(b, i, blocks); } catch (_) { keep = true; }
+      try { keep = !rule.extra(b, i, blocks); } catch (_) { keep = true; }
       b.classList.toggle('fold-extra', !keep);
       if (!keep && !b.hidden && !b.matches('.print-only')) extras.push(b);
     });
@@ -508,6 +632,7 @@
       if (!view) return;
       dressHead(view);
       drawAnswer(view);
+      ask(view);
       fold(view);
     });
   }

@@ -83,3 +83,17 @@ def test_the_guide_says_where_shared_pages_now_live():
                   "Planner › Tasks", "Team › Scoring rules", "Show more"):
         assert words in GUIDE, words
     assert "four paths" not in GUIDE
+
+
+def test_each_part_of_a_tab_is_headed_by_its_question():
+    ask = FOCUS[FOCUS.index("const ASK = {"):]
+    ask = ask[:ask.index("\n  };")]
+    views = set(re.findall(r"^    ([a-z]+): \[", ask, re.M))
+    assert {"overview", "planner", "checkins", "weekly", "projects", "reports", "team", "timesheets"} <= views
+    for question in re.findall(r"\['[^']*(?:\\'[^']*)*', '((?:[^'\\]|\\.)+)'\]", ask):
+        assert question.endswith("?"), question
+
+
+def test_only_extras_fold_the_important_parts_stay_open():
+    fold = _block(FOCUS, "const FOLD = {")
+    assert "extra:" in fold and "keep:" not in fold
