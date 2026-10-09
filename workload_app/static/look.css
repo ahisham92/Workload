@@ -296,3 +296,32 @@ body[data-tone] .tabs, body[data-tone] .path-bar {
   border-bottom-color: color-mix(in srgb, var(--tone) 14%, var(--surface-2-base));
 }
 body[data-tone] .thumb-bar { background: color-mix(in srgb, var(--tone) 6%, var(--surface-base)); }
+
+/* ---------------------------------------- boxes no taller than needed */
+/* Ahmed (9 Oct): tall boxes with little in them. Panels sit closer, with
+   less padding, and an empty one (look.js marks it .is-slim) is one slim
+   bar: title, button, and the line saying it is empty. */
+.view[data-tone] .panel { padding: 14px 16px; margin-bottom: 12px; }
+.view[data-tone] .panel > h3 + .muted, .view[data-tone] .panel-head .muted { margin-bottom: 6px; }
+.view[data-tone] .panel-head { margin-bottom: 8px; }
+.view[data-tone] .cards { margin-bottom: 12px; }
+.view[data-tone] .split { gap: 12px; }
+.view[data-tone] .empty { padding: 10px 4px; }
+.view[data-tone] .panel.is-slim {
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 2px;
+  padding: 10px 16px;
+}
+.panel.is-slim > *, .panel.is-slim .panel-head > div { margin: 0; }
+.panel.is-slim .panel-head { display: contents; }
+.panel.is-slim .panel-head > div { display: contents; }
+.panel.is-slim .slim-hide { display: none; }
+.panel.is-slim .slim-note { margin: 0; padding: 0; text-align: left; font-size: 12.5px; color: var(--muted); flex: 1 1 auto; }
+.panel.is-slim h3 { cursor: help; }
+.panel.is-slim .btn, .panel.is-slim .panel-head > .btn { margin-left: auto; }
+@media (max-width: 700px) {
+  .view[data-tone] .panel { padding: 12px; margin-bottom: 10px; }
+}
+.panel.is-slim .slim-note { order: 1; }
+.panel.is-slim .btn, .panel.is-slim .row, .panel.is-slim .view-actions { order: 2; }
+/* A person's day is as tall as their day, not as the busiest one's. */
+.view[data-tone] .day-grid { align-items: start; margin-bottom: 12px; }
