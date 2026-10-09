@@ -307,9 +307,9 @@ async function newUnit() {
   chooserError([]);
   setChildren($('#chooser-error'), el('p', { class: 'muted' },
     el('span', { class: 'spin' }),
-    ` Reading ${files.length} export(s) and setting the unit up…`));
+    ` Reading ${files.length} file(s) and setting the unit up…`));
   try {
-    const result = await voyage.during('Uploading the timesheets', async () => {
+    const result = await voyage.during('Uploading your files', async () => {
       const made = await api('/api/units/from-timesheets', {
         method: 'POST',
         body: { name, files: await filesBase64(files) },
@@ -325,6 +325,11 @@ async function newUnit() {
     // team still counts, and the data check on Timesheets keeps saying so.
     if ((made.people_outside_workbook || []).length) {
       toast(outsideNote(made.people_outside_workbook), 'bad');
+    }
+    // Budgets and a drawing list chosen with the exports came in after them.
+    for (const step of result.brought_in || []) {
+      toast(`${step.kind === 'budgets' ? 'Budgets' : 'Drawing list'}: ${step.said}`,
+        step.ok ? 'ok' : 'bad');
     }
   } catch (error) {
     chooserError(error.errors || [error.message]);
@@ -2620,6 +2625,7 @@ async function refreshAll() {
   if (state.tasks) await loadTasks();
   if (window.planner) window.planner.afterRefresh();
   if (window.checkins) window.checkins.summary();
+  if (window.bringin) window.bringin.startHere();
 }
 
 async function setupReports(prefetched) {
@@ -2656,6 +2662,7 @@ function switchView(view) {
   if (view === 'growth' && window.growth) window.growth.load();
   if (view === 'budgets' && window.budgets) window.budgets.load();
   if (view === 'guide' && window.guide) window.guide.load();
+  if (view === 'bringin' && window.bringin) window.bringin.load();
   if (view === 'team' && window.showcase) window.showcase.teamCards();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);
   for (const section of $$('.view')) {
