@@ -14,8 +14,11 @@ The definitions are the workbook's own:
 * **actual MM** -- timesheet hours in the quarter, over hours per man-month;
 * **earned MM** in a quarter -- the project's total earned value, split across
   quarters in proportion to the effort actually spent in each;
-* **capacity to date** -- the team's availability for the year, pro-rated to the
-  as-at date;
+* **capacity to date** -- the team's availability for the year, over the
+  working days up to today (or the last day the timesheets reach, if earlier);
+* **utilisation** -- every hour on the timesheet (projects, proposals, general
+  and department codes, time off) against capacity to date, so a full
+  timesheet is 100%; the workbook counted project hours only;
 * **per-engineer figures** -- each project's value multiplied by that engineer's
   share of it;
 * **type-weighted** figures -- earned value scaled by the portfolio weight of
@@ -30,7 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import config as cfg, progress
-from .metrics import TimesheetIndex, is_proposal_code, project_rows
+from .metrics import (CHARGE_KINDS, TimesheetIndex, charge_kind, counted_to,
+                      is_proposal_code, project_rows)
 from .model import iso, today
 from .unit import Unit
 
@@ -81,6 +85,14 @@ class Quarter:
             return 0.0
         done = (min(as_at, self.end) - self.start).days + 1
         return max(0.0, min(1.0, done / total))
+
+    def worked_fraction(self, as_at: _dt.date, work_days: Sequence[int]) -> float:
+        """How much of this quarter's working days have gone by ``as_at``,
+        that day included: utilisation never counts days still to come."""
+        days = [self.start + _dt.timedelta(days=i)
+                for i in range((self.end - self.start).days + 1)]
+        working = [d for d in days if d.weekday() in work_days] or days
+        return sum(1 for d in working if d <= as_at) / len(working)
 
 
 @dataclass
@@ -161,6 +173,7 @@ class ReportSet:
     as_at: _dt.date
     hours_per_mm: float
     engineers: List[str]
+    counted_to: Optional[_dt.date] = None
     projects: List[Dict[str, Any]] = field(default_factory=list)
     team: Dict[str, Any] = field(default_factory=dict)
     per_engineer: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -176,6 +189,7 @@ class ReportSet:
         return {
             "period": self.period.to_dict(),
             "as_at": iso(self.as_at),
+            "counted_to": iso(self.counted_to),
             "hours_per_man_month": self.hours_per_mm,
             "engineers": self.engineers,
             "projects": self.projects,
@@ -214,14 +228,16 @@ def build(wb: Unit, kind: str = "year", year: Optional[int] = None,
         for row in lifetime.values()
     ]
 
-    capacity = _capacity(wb, period, as_at)
-    team = _team_totals(projects, capacity)
+    upto = counted_to(wb, index)
+    capacity = _capacity(wb, period, upto)
+    booked = _booked(wb, index, period, upto)
+    team = _team_totals(projects, capacity, booked, hours_per_mm)
     per_engineer = _per_engineer(projects, engineers, capacity, hours_per_mm,
-                                 index, period)
+                                 index, period, booked)
     _add_rework(per_engineer, wb, engineers)
     report = ReportSet(
         period=period, as_at=as_at, hours_per_mm=hours_per_mm,
-        engineers=engineers, projects=projects, team=team,
+        engineers=engineers, counted_to=upto, projects=projects, team=team,
         per_engineer=per_engineer,
         by_status=_by_status(projects),
         scorecard=_scorecard(per_engineer, engineers, wb.scorecard_factors()),
@@ -359,10 +375,12 @@ def _hours_in(index: TimesheetIndex, number: str, period: Period,
 
 # -- team and people -------------------------------------------------------
 
-def _capacity(wb: Unit, period: Period, as_at: _dt.date
+def _capacity(wb: Unit, period: Period, upto: _dt.date
               ) -> Dict[str, Dict[str, float]]:
-    """Capacity per engineer for the period, and pro-rated to the as-at date."""
+    """Capacity per engineer for the period, and to date: the working days
+    up to ``upto``, never the whole period."""
     months = MONTHS_PER_QUARTER
+    work_days = wb.task_settings()["work_days"]
     out: Dict[str, Dict[str, float]] = {}
     for engineer in wb.engineers():
         full = 0.0
@@ -373,12 +391,42 @@ def _capacity(wb: Unit, period: Period, as_at: _dt.date
             availability = engineer.availability.get(quarter.year or 0, 1.0)
             value = availability * months
             full += value
-            to_date += value * quarter.elapsed_fraction(as_at)
+            to_date += value * quarter.worked_fraction(upto, work_days)
         out[engineer.short_name] = {"full": full, "to_date": to_date}
     return out
 
 
-def _team_totals(projects, capacity) -> Dict[str, Any]:
+def _booked(wb: Unit, index: TimesheetIndex, period: Period, upto: _dt.date
+            ) -> Dict[str, Dict[str, float]]:
+    """Every hour on each person's timesheet in the period up to ``upto``,
+    by what it went on. This is what utilisation counts: projects, proposals,
+    general and department codes, and time off, so a full timesheet is 100%
+    and leave never makes anybody look idle."""
+    out: Dict[str, Dict[str, float]] = defaultdict(
+        lambda: {kind: 0.0 for kind in CHARGE_KINDS})
+    start, end = period.start, period.end
+    if start is None or end is None:
+        return out
+    end = min(end, upto)
+    non_project = wb.non_project_codes()
+    project_numbers = {p.number for p in wb.projects()}
+    for row in index.rows:
+        if row["date"] is None or not start <= row["date"] <= end:
+            continue
+        person = out[row["engineer"]]
+        person[charge_kind(row, non_project, project_numbers)] += row["hours"]
+        person["overtime"] = person.get("overtime", 0.0) + row["overtime_hours"]
+    return out
+
+
+def _hours_split(hours: Dict[str, float]) -> Dict[str, Any]:
+    split = {kind: _round(hours.get(kind, 0.0), 1) for kind in CHARGE_KINDS}
+    split["total"] = _round(sum(hours.get(kind, 0.0) for kind in CHARGE_KINDS), 1)
+    split["overtime"] = _round(hours.get("overtime", 0.0), 1)   # of the total
+    return split
+
+
+def _team_totals(projects, capacity, booked, hours_per_mm) -> Dict[str, Any]:
     # The headline block on the Dashboard is "all projects regardless of
     # status"; only the status table below it is narrowed to what is live in
     # the period, so the two are counted differently on purpose.
@@ -389,6 +437,11 @@ def _team_totals(projects, capacity) -> Dict[str, Any]:
     earned = sum(p["earned_mm"] or 0.0 for p in projects)
     capacity_to_date = sum(c["to_date"] for c in capacity.values())
     capacity_full = sum(c["full"] for c in capacity.values())
+    hours = {kind: sum(b.get(kind, 0.0) for name, b in booked.items()
+                       if name in capacity)
+             for kind in (*CHARGE_KINDS, "overtime")}
+    booked_mm = (sum(hours[kind] for kind in CHARGE_KINDS) / hours_per_mm
+                 if hours_per_mm else 0.0)
     return {
         "planned_mm": _round(planned, 2),
         "planned_to_date_mm": _round(planned_to_date, 2),
@@ -397,7 +450,9 @@ def _team_totals(projects, capacity) -> Dict[str, Any]:
         "profit_mm": _round(earned - actual, 2),
         "capacity_mm": _round(capacity_full, 2),
         "capacity_to_date_mm": _round(capacity_to_date, 2),
-        "utilisation": _round(_safe(actual, capacity_to_date)),
+        "booked_mm": _round(booked_mm, 2),
+        "hours": _hours_split(hours),
+        "utilisation": _round(_safe(booked_mm, capacity_to_date)),
         "plan_adherence": _round(_safe(actual, planned_to_date)),
         "cpi": _round(_safe(earned, actual)),
         "spi": _round(_safe(earned, planned_to_date)),
@@ -427,8 +482,8 @@ def _add_rework(per_engineer: Dict[str, Dict[str, Any]], wb, engineers) -> None:
             })
 
 
-def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period
-                  ) -> Dict[str, Dict[str, Any]]:
+def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period,
+                  timesheet) -> Dict[str, Dict[str, Any]]:
     """Each project's figures multiplied by that engineer's share of it."""
     out: Dict[str, Dict[str, Any]] = {}
     total_actual = sum(p["actual_mm"] or 0.0 for p in projects)
@@ -456,6 +511,9 @@ def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period
                     "status": project["status"], "actual_mm": _round(booked),
                 })
         room = capacity.get(engineer, {"full": 0.0, "to_date": 0.0})
+        hours = timesheet.get(engineer, {})
+        booked_mm = (sum(hours.get(kind, 0.0) for kind in CHARGE_KINDS) / hours_per_mm
+                     if hours_per_mm else 0.0)
         worked.sort(key=lambda item: -(item["actual_mm"] or 0))
         out[engineer] = {
             "planned_mm": _round(planned),
@@ -466,7 +524,9 @@ def _per_engineer(projects, engineers, capacity, hours_per_mm, index, period
             "remaining_mm": _round(remaining),
             "capacity_mm": _round(room["full"]),
             "capacity_to_date_mm": _round(room["to_date"]),
-            "utilisation": _round(_safe(actual, room["to_date"])),
+            "booked_mm": _round(booked_mm),
+            "hours": _hours_split(hours),
+            "utilisation": _round(_safe(booked_mm, room["to_date"])),
             "plan_adherence": _round(_safe(actual, planned_to_date)),
             "cpi": _round(_safe(earned, actual)),
             "type_weighted_earned_mm": _round(type_weighted),
@@ -686,7 +746,11 @@ def _monthly_scores(wb, index, projects, engineers, period, as_at, hours_per_mm
                 "type_weighted_earned_mm": _round(type_weighted),
                 "type_weighted_cpi": _round(_safe(type_weighted, actual)),
                 "cpi": _round(_safe(earned, actual)),
-                "utilisation": _round(_safe(actual, capacity)),
+                # Every hour of the month counts here, as it does for the
+                # period: a full timesheet is 100%.
+                "utilisation": _round(_safe(
+                    sum(jobs.values()) / hours_per_mm if hours_per_mm else 0.0,
+                    capacity)),
                 "plan_adherence": _round(_safe(actual, planned)),
                 "planned_mm": _round(planned),
                 "capacity_mm": _round(capacity),

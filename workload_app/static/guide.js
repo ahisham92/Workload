@@ -40,7 +40,7 @@
     ],
     routine: [
       { lane: 'Every day', note: 'about 10 minutes, on the phone', steps: [
-        { title: 'Look at Overview', do: 'Anything red or a staffing ask comes first', where: 'Overview', go: ['overview'] },
+        { title: 'Look at Overview', do: 'Anything red or a staffing ask comes first; tap the i beside a number to see what it means', where: 'Overview', go: ['overview'] },
         { title: 'See each person\'s day', do: 'The app lays out today from their real pace', where: 'Planner › Today', go: ['planner', 'today'] },
         { title: 'Answer Stuck and Need help', do: 'Tap Seen, then sort it out with them', where: 'Check-ins', go: ['checkins'] },
       ] },
@@ -59,6 +59,7 @@
       ] },
     ],
     find: [
+      ['What does a % or number mean?', 'Tap the i beside it, on any tab', ['overview']],
       ['Who is free next week?', 'Check-ins', ['checkins']],
       ['What is each person doing today?', 'Planner › Today', ['planner', 'today']],
       ['Who is stuck or needs help?', 'Check-ins', ['checkins']],

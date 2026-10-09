@@ -123,6 +123,49 @@ def is_proposal_code(code: str) -> bool:
     return "proposal" in code.lower()
 
 
+#: What a timesheet row's hours were spent on, as the utilisation counts it.
+#: Everything on the timesheet counts as time accounted for; the kinds only
+#: say where it went.
+CHARGE_KINDS = ("projects", "proposals", "general", "time_off")
+
+
+def charge_kind(row: Dict[str, Any], non_project: Any, project_numbers: Any) -> str:
+    """Projects, proposals, general/department work, or time off.
+
+    Time off is a code the unit lists as non-project (leave, public holiday,
+    excuse); proposals go by BISpark's job type; a job in the register is
+    project work; anything else -- a general or department code, training,
+    admin -- is general.
+    """
+    code = row["job_number"]
+    if code in non_project:
+        return "time_off"
+    if str(row.get("job_type") or "").startswith(("2-Proposals", "3-Proposals")):
+        return "proposals"
+    if code in project_numbers:
+        return "projects"
+    return "general"
+
+
+def counted_to(wb: Unit, index: "TimesheetIndex") -> _dt.date:
+    """The day utilisation is counted to.
+
+    Frozen reports count to the day they are frozen on. Otherwise today, or the
+    last day anybody booked work if the timesheets stop before today: days
+    nobody has imported yet are not hours nobody worked. Leave booked ahead
+    does not move it forward.
+    """
+    frozen = wb.as_at()
+    if frozen:
+        return frozen
+    now = today()
+    off = wb.non_project_codes()
+    last = max((r["date"] for r in index.rows
+                if r["date"] and r["date"] <= now and r["job_number"] not in off),
+               default=None)
+    return last or now
+
+
 # --------------------------------------------------------------------------
 # project level
 # --------------------------------------------------------------------------
@@ -328,7 +371,7 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
 
     # The month we are in is judged on the working days so far, not on the
     # whole month, and leave booked ahead is not time worked yet.
-    as_at = wb.as_at() or today()
+    as_at = counted_to(wb, index)
     work_days = wb.task_settings()["work_days"]
 
     for row in index.rows:
@@ -338,15 +381,8 @@ def engineer_workload(wb: Unit, index: TimesheetIndex,
             continue
         month = row["date"].strftime("%Y-%m")
         person = row["engineer"]
-        code = row["job_number"]
-        if code in non_project:
-            bucket = "absence"
-        elif row["job_type"].startswith(("2-Proposals", "3-Proposals")):
-            bucket = "proposals"
-        elif code in project_numbers:
-            bucket = "projects"
-        else:
-            bucket = "other"
+        kind = charge_kind(row, non_project, project_numbers)
+        bucket = {"time_off": "absence", "general": "other"}.get(kind, kind)
         for sums in (months[person][month], totals[person]):
             sums[bucket] += row["hours"]
             sums["total"] += row["hours"]

@@ -1196,9 +1196,9 @@ function renderOverview() {
     ['Earned MM', num(t.earned_mm), '', 'value delivered'],
     ['Profit / (loss)', num(t.profit_mm), tone.amount(t.profit_mm), 'earned − actual'],
     ['Utilisation', fmt.pct(t.utilisation), tone.utilisation(t.utilisation),
-      `of ${num(t.capacity_to_date_mm)} MM capacity to date`],
+      `of a full timesheet ${countedTo(report).short}; 85–105% is right`],
     ['Efficiency (CPI)', fmt.ratio(t.cpi), tone.cpi(t.cpi),
-      t.cpi >= 1 ? 'earning above cost' : 'earning below cost'],
+      t.cpi >= 1 ? 'earning above cost; 1.00 or more is good' : 'earning below cost; 1.00 or more is good'],
     ['Active projects', fmt.int(t.projects_active), '',
       `${t.projects_not_started} not started · ${t.projects_live} live in the period`],
   ];
@@ -1283,8 +1283,25 @@ function initials(name) {
   return words.slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 }
 
+/** How far the period's utilisation counts, in words: "so far", or the day
+ *  the timesheets stop when that is before today (and the report is live). */
+function countedTo(report) {
+  const upto = report.counted_to;
+  if (!upto || upto >= report.as_at) return { short: 'so far', stale: false };
+  return { short: `up to ${dateText(upto, { day: 'numeric', month: 'short' })}`, stale: true, day: upto };
+}
+
+/** One person's hours in the period, by what they went on. */
+function hoursSplit(h) {
+  if (!h) return '';
+  return [['projects', 'projects'], ['proposals', 'proposals'],
+    ['general', 'general and department'], ['time_off', 'leave and holidays']]
+    .filter(([key]) => h[key]).map(([key, label]) => `${fmt.hours(h[key])} h ${label}`)
+    .join(' · ') + (h.overtime ? ` (${fmt.hours(h.overtime)} h of it overtime)` : '');
+}
+
 /** The team in formation: one row per grade, the most senior at the back,
- *  each person ringed by how much of their capacity the period used.
+ *  each person ringed by how full their timesheet is so far.
  *  Choosing someone opens their own report. */
 function renderFormation(report) {
   const host = $('#formation');
@@ -1300,6 +1317,7 @@ function renderFormation(report) {
     return (people.get(someone) || {}).grade_label || g;
   };
   const teamOf = (name) => (people.get(name) || {}).team_name || '';
+  const upto = countedTo(report);
   const byTeam = (a, b) => teamOf(a).localeCompare(teamOf(b)) || a.localeCompare(b);
 
   const node = (name) => {
@@ -1313,8 +1331,9 @@ function renderFormation(report) {
       value: util, tone: toneName, group: p.team_id || null,
       caption: util === null || util === undefined ? '—' : `${Math.round(util * 100)}%`,
       tip: `<b>${esc(name)}</b><br>${esc([p.grade_label, p.team_name].filter(Boolean).join(' · ') || 'No grade or team yet')}`
-        + `<br>${fmt.pct(util)} of capacity · CPI ${fmt.ratio(e.cpi)}`
-        + `<br>${num(e.actual_mm)} MM booked · ${num(e.earned_mm)} MM earned`,
+        + `<br>${fmt.pct(util)} of a full timesheet ${esc(upto.short)}`
+        + (e.hours ? `<br>${esc(hoursSplit(e.hours))}` : '')
+        + `<br>${num(e.actual_mm)} MM on projects · ${num(e.earned_mm)} MM earned · CPI ${fmt.ratio(e.cpi)}`,
     };
   };
   const rows = grades.map((g) => ({
@@ -1334,13 +1353,17 @@ function renderFormation(report) {
   setChildren(host,
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, 'Team formation'),
+        el('h3', {}, 'Team formation', meaningButton('utilisation')),
         el('p', { class: 'muted' },
-          'Everyone in the unit by grade, the most senior at the back. The ring is how much '
-          + `of their capacity ${periodName(report.period)} used; teammates are joined. `
-          + 'Choose someone to open their profile.')),
+          `The % is how full each person's timesheet is in ${periodName(report.period)}, ${upto.short}: `
+          + 'every hour booked, leave included, against a full timesheet for the working days so far. '
+          + '100% is full; over 100% is overtime. Most senior at the back, teammates joined. '
+          + 'Choose someone to open their profile.'),
+        upto.stale ? el('p', { class: 'msg msg-warn', style: 'margin-top:6px' },
+          `The timesheets stop on ${dateText(upto.day, { day: 'numeric', month: 'short', year: 'numeric' })}, `
+          + 'so the days since are not counted yet. Bring in the latest timesheets to bring it up to date.') : null),
       el('span', { class: 'legend formation-key' },
-        ...[['ok', 'on plan'], ['warn', 'light'], ['bad', 'over, or far under']].map(
+        ...[['ok', 'on plan 85–105%'], ['warn', 'light 70–85%'], ['bad', 'over 105% or under 70%']].map(
           ([key, label]) => el('span', { class: 'legend-item' },
             el('span', { class: `swatch ring-swatch ring-${key}` }), label)))),
     charts.formation(rows, {
@@ -1416,12 +1439,24 @@ function trim(text, limit) {
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 }
 
+/** The measures in plain words: the app's own meanings first, then any the
+ *  unit wrote itself that they do not already cover. */
 function renderDefinitions(definitions) {
-  setChildren($('#definitions-body'), 
-    el('div', { class: 'defs' }, definitions.map((d) => el('div', { class: 'def' },
-      el('b', {}, d.field),
-      el('p', {}, d.means),
-      d.how ? el('p', { class: 'how' }, d.how) : null))));
+  const own = ['utilisation', 'capacity', 'planned_mm', 'actual_mm', 'earned_mm',
+    'profit', 'cpi', 'plan_adherence', 'hours_kind'].map((key) => MEANINGS[key]);
+  const extra = definitions.filter((d) =>
+    !meaningFor(String(d.field || '').replace(/\s*(—\s*)?in period$/i, '')));
+  setChildren($('#definitions-body'),
+    el('div', { class: 'defs' },
+      own.map((m) => el('div', { class: 'def' },
+        el('b', {}, m.title),
+        el('p', {}, m.what),
+        el('p', { class: 'how' }, m.how),
+        m.good ? el('p', { class: 'how' }, `Good: ${m.good}`) : null)),
+      extra.map((d) => el('div', { class: 'def' },
+        el('b', {}, d.field),
+        el('p', {}, d.means),
+        d.how ? el('p', { class: 'how' }, d.how) : null))));
 }
 
 /** One engineer's standing in the period, in the workbook's own measures.
@@ -1461,7 +1496,8 @@ function engineerBlock(name, report, overview) {
         name,
         won ? el('span', { class: 'pill pill-info', title: 'months won in this period' },
           `🏅 ${won}`) : null),
-      el('span', { class: `pill ${pill}` }, `${fmt.pct(util)} utilised`)),
+      el('span', { class: `pill ${pill}`, title: 'how full their timesheet is so far; 85–105% is right' },
+        `${fmt.pct(util)} utilised`)),
 
     el('div', { class: 'meter' },
       el('span', {
@@ -1472,7 +1508,7 @@ function engineerBlock(name, report, overview) {
     el('div', { class: 'measures' },
       measure('Actual MM', num(e.actual_mm), 'Effort really spent in this period'),
       measure('Capacity MM', num(e.capacity_to_date_mm),
-        'Availability × months, pro-rated to the as-at date'),
+        'A full timesheet for the working days so far, in man-months'),
       measure('Earned MM', num(e.earned_mm), 'Value delivered, budget × progress'),
       measure('CPI', fmt.ratio(e.cpi), 'Earned ÷ actual. Above 1.00 is good',
         tone.cpi(e.cpi)),
@@ -1706,7 +1742,7 @@ function renderTimesheetMix(overview) {
   const kinds = [
     ['projects', 'Project work', 'var(--series-1)'],
     ['proposals', 'Proposals', 'var(--series-4)'],
-    ['other', 'Other', 'var(--series-5)'],
+    ['other', 'General and department', 'var(--series-5)'],
     ['absence', 'Leave and absence', 'var(--series-3)'],
   ];
   setChildren(host, charts.stackedColumns(
@@ -2884,7 +2920,7 @@ function renderDashboard(data) {
       ['Actual MM', num(t.actual_mm), 'what was burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
       ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
-      ['Utilisation', fmt.pct(t.utilisation), `vs ${num(t.capacity_to_date_mm)} MM capacity to date`,
+      ['Utilisation', fmt.pct(t.utilisation), `of a full timesheet ${countedTo(data).short}; 85–105% is right`,
         tone.utilisation(t.utilisation)],
       ['Efficiency (CPI)', fmt.ratio(t.cpi),
         t.cpi >= 1 ? 'earning above cost' : 'earning below cost', tone.cpi(t.cpi)],
@@ -3110,7 +3146,7 @@ function renderTeamMember(data) {
       ['Actual MM', num(person.actual_mm), `${person.projects_worked} project(s) worked`],
       ['Earned MM', num(person.earned_mm), 'value delivered'],
       ['Utilisation', fmt.pct(person.utilisation),
-        `of ${num(person.capacity_to_date_mm)} MM capacity`,
+        person.hours ? hoursSplit(person.hours) : `of a full timesheet ${countedTo(data).short}`,
         tone.utilisation(person.utilisation)],
       ['Efficiency (CPI)', fmt.ratio(person.cpi), 'earned ÷ actual',
         tone.cpi(person.cpi)],
@@ -3208,7 +3244,7 @@ function renderReview(data) {
       ['Actual MM', num(t.actual_mm), 'what we actually burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
       ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
-      ['Utilisation', fmt.pct(t.utilisation), 'actual vs capacity to date',
+      ['Utilisation', fmt.pct(t.utilisation), `of a full timesheet ${countedTo(data).short}`,
         tone.utilisation(t.utilisation)],
       ['Plan adherence', fmt.pct(t.plan_adherence), 'actual vs planned to date',
         tone.target(t.plan_adherence)],
