@@ -213,3 +213,67 @@ class TestWeeks:
         assert checkins.week_start(dt.date(2026, 10, 3), config) == dt.date(2026, 9, 27)
         assert checkins.week_start(dt.date(2026, 10, 7),
                                    {"work_days": [0, 1, 2, 3, 4]}) == dt.date(2026, 10, 5)
+
+
+class TestSubmissionPreparation:
+    """A submission's daily preparation steps are asked about as one line."""
+
+    @staticmethod
+    def steps(*, done=0, blocked=False):
+        from workload_app.tasks import Task
+        days = [dt.date(2026, 10, d) for d in (4, 5, 6, 7, 8, 11)]
+        out = []
+        for i, day in enumerate(days, start=1):
+            out.append(Task(
+                id=i, name=f"Berth 9 drawings — submission day {i} of 6",
+                project_number="25-0100", deliverable_row=7,
+                deliverable_name="Berth 9 drawings", assignees=["Kirolos"],
+                required_hours=2.0, start=day, due=day, kind="Submission",
+                series="submission:7",
+                status=("Done" if i <= done else
+                        "Blocked" if blocked and i == done + 1 else "Not started")))
+        return out
+
+    def points(self, tasks, today=TODAY):
+        return checkins._submission_points("Kirolos", tasks, today, today + dt.timedelta(days=5))
+
+    def test_behind_is_one_line_not_one_per_day(self):
+        points = self.points(self.steps())
+        assert len(points) == 1
+        text = points[0]["text"]
+        assert "day 1 of 6" not in text
+        assert "Berth 9 drawings (25-0100) submission is due Sun 11 Oct" in text
+        assert "0 h of 12 h of preparation done, 6 h should be by now" in text
+        assert points[0]["level"] == "now"
+
+    def test_on_track_says_nothing(self):
+        assert self.points(self.steps(done=3)) == []
+
+    def test_a_blocked_step_is_raised(self):
+        points = self.points(self.steps(done=3, blocked=True))
+        assert [p["kind"] for p in points] == ["blocked"]
+
+    def test_a_finished_run_says_nothing(self):
+        assert self.points(self.steps(done=6), today=dt.date(2026, 10, 20)) == []
+
+    def test_the_steps_never_show_one_by_one(self):
+        points = checkins.checkpoints(
+            "Kirolos", tasks=self.steps(), today=TODAY, config=storage_config(),
+            load={"key": "steady", "reasons": [], "days_since_break": None},
+            last_row=None, team_last=None, ahead=[])
+        assert sum(1 for p in points if "Berth 9" in p["text"]) == 1
+
+
+def storage_config():
+    from workload_app.config import TASK_DEFAULT_SETTINGS
+    return dict(TASK_DEFAULT_SETTINGS)
+
+
+def test_a_submission_long_gone_is_left_to_the_submissions_list():
+    steps = TestSubmissionPreparation.steps()
+    late = checkins._submission_points("Kirolos", steps, dt.date(2026, 10, 14),
+                                       dt.date(2026, 10, 19))
+    assert len(late) == 1 and late[0]["text"].endswith("Was it sent?")
+    gone = checkins._submission_points("Kirolos", steps, dt.date(2026, 10, 30),
+                                       dt.date(2026, 11, 4))
+    assert gone == []

@@ -62,6 +62,9 @@ BACK_FROM_LEAVE_DAYS = 3
 TIMESHEET_GAP_DAYS = 5
 #: A task due within this many working days is coming up.
 DUE_SOON_DAYS = 3
+#: A submission whose date passed more than this many days ago is no longer
+#: asked about here: the Submissions list keeps track of whether it went.
+SUBMISSION_ASK_DAYS = 7
 
 SIGNALS = {
     "rest": "Needs to ease off",
@@ -273,6 +276,59 @@ def _point(level: str, kind: str, text: str, **extra: Any) -> Dict[str, Any]:
     return {"level": level, "kind": kind, "text": text, **extra}
 
 
+def _is_prep_step(task: task_sheet.Task) -> bool:
+    """One of the daily preparation steps the app makes before a submission."""
+    return task.kind == "Submission" and bool(task.series)
+
+
+def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
+                       today: _dt.date, soon_end: _dt.date
+                       ) -> List[Dict[str, Any]]:
+    """One line per submission, never one per preparation day.
+
+    The steps of a submission's run-up are taken together: when it is due,
+    how many hours of preparation are marked done, and how many should be by
+    now. A submission shows only once its preparation is behind, or a step
+    is blocked.
+    """
+    runs: Dict[str, List[task_sheet.Task]] = {}
+    for task in tasks:
+        if _is_prep_step(task) and task.due and name in task.assignees:
+            runs.setdefault(task.series, []).append(task)
+    out: List[Dict[str, Any]] = []
+    for steps in runs.values():
+        if all(t.done for t in steps):
+            continue
+        steps.sort(key=lambda t: t.due)
+        due = steps[-1].due
+        if due < today - _dt.timedelta(days=SUBMISSION_ASK_DAYS):
+            continue                  # long gone: Submissions keeps track of it
+        what = steps[0].deliverable_name or steps[0].name.split(" — ")[0]
+        label = f"{what} ({steps[0].project_number})" if steps[0].project_number else what
+        total = sum(t.required_hours or 0.0 for t in steps)
+        done = sum(t.required_hours or 0.0 for t in steps if t.done)
+        by_now = sum(t.required_hours or 0.0 for t in steps if t.due < today)
+        first_open = next(t for t in steps if not t.done)
+        if any(t.status == "Blocked" and not t.done for t in steps):
+            out.append(_point("now", "blocked",
+                              f"{label} submission, due {_short(due)}: preparation is "
+                              f"blocked. What do they need to get it moving?",
+                              task_id=first_open.id))
+            continue
+        if done + 1e-9 >= by_now:
+            continue                  # on track, or not begun yet: nothing to ask
+        made = f"{_hours(done)} of {_hours(total)} of preparation done"
+        if due < today:
+            text = (f"{label} submission was due {_short(due)}, with {made}. "
+                    f"Was it sent?")
+        else:
+            text = (f"{label} submission is due {_short(due)}. {made}, "
+                    f"{_hours(by_now)} should be by now. Will it make it?")
+        out.append(_point("now" if due <= soon_end else "soon", "submission", text,
+                          task_id=first_open.id))
+    return out
+
+
 def checkpoints(name: str, *, tasks: Sequence[task_sheet.Task], today: _dt.date,
                 config: Dict[str, Any], load: Dict[str, Any],
                 last_row: Optional[_dt.date], team_last: Optional[_dt.date],
@@ -282,8 +338,9 @@ def checkpoints(name: str, *, tasks: Sequence[task_sheet.Task], today: _dt.date,
     out: List[Dict[str, Any]] = []
     soon_days = planner.days_ahead(today, DUE_SOON_DAYS, config)
     soon_end = soon_days[-1] if soon_days else today
+    out.extend(_submission_points(name, tasks, today, soon_end))
     for task in tasks:
-        if task.done or name not in task.assignees:
+        if task.done or name not in task.assignees or _is_prep_step(task):
             continue
         label = _task_label(task)
         if task.status == "Blocked":
