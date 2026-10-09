@@ -57,7 +57,7 @@ function renderWeekly() {
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => switchView(t.view) }, 'Go'))))
         : el('div', { class: 'empty' }, 'Nothing needs you this week: the plan holds.'),
       r.more ? el('p', { class: 'muted small' },
-        `And ${r.more} more: Check-ins and the Planner list every one.`) : null),
+        `And ${r.more} more: Who needs help and the Planner list every one.`) : null),
     el('div', { class: 'cards cards-4' },
       statCard('Booked last week', last.load === null ? '—' : fmt.pct0(last.load), loadTone,
         last.week ? `${wkHours(last.hours)} of ${wkHours(last.capacity)}, week of ${dateText(last.week)}`

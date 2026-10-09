@@ -310,7 +310,7 @@
     if (!days.length) return null;
     return el('div', { class: 'pf-days' }, days.map((d) => {
       const t = d.away ? 'away' : d.free > 0.05 ? 'free' : d.over > 0.05 ? 'over' : 'full';
-      const label = d.away ? 'away' : d.free > 0.05 ? `+${fmt.hours(d.free)}` : d.over > 0.05 ? `−${fmt.hours(d.over)}` : 'full';
+      const label = d.away ? 'off' : d.free > 0.05 ? `+${fmt.hours(d.free)}` : d.over > 0.05 ? `−${fmt.hours(d.over)}` : 'full';
       return el('div', { class: `pf-day pf-${t}`, title: `${fmt.date(d.date)}: ${label}` },
         el('span', {}, new Date(`${d.date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'narrow' })),
         el('b', {}, label));
@@ -381,7 +381,7 @@
           p.strongest ? el('p', { class: 'small' }, el('b', {}, 'Strongest: '), p.strongest,
             el('br'), el('b', {}, 'To work on: '), p.weakest) : null),
         el('section', { class: 'pf-block' },
-          el('h4', {}, 'Lately'),
+          el('h4', {}, 'Last few weeks'),
           el('p', { class: 'muted small' }, 'Hours booked each week against the hours they had. Over the line wears people down.'),
           weekBars(p) || el('p', { class: 'muted' }, 'No recent weeks.'),
           signal && signal.reasons && signal.reasons.length

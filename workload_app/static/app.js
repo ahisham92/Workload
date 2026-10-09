@@ -342,7 +342,7 @@ async function newUnit() {
 function outsideNote(names) {
   return `${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} hours here but `
     + `${names.length === 1 ? 'is' : 'are'} not on the team. Their hours count `
-    + 'toward the projects and in Resourcing; add them on Team to give them a '
+    + 'toward the projects and in Team staffing; add them on Team to give them a '
     + 'KPI line and a share of a deliverable.';
 }
 
@@ -486,7 +486,7 @@ function openAccountModal() {
 const GRADE_ORDER = ['manager', 'senior', 'engineer', 'junior', 'bim', 'drafter'];
 const GRADE_HEADS = ['Manager', 'Senior', 'Engineer', 'Junior', 'BIM', 'Draftsman'];
 
-const RESOURCING_VIEWS = [['balance', 'Balance'], ['map', 'Map']];
+const RESOURCING_VIEWS = [['balance', 'Teams and people'], ['map', 'Map of teams and jobs']];
 
 async function loadResourcing() {
   const year = state.resourcingYear === undefined ? state.year : state.resourcingYear;
@@ -1196,7 +1196,7 @@ function renderOverview() {
 
   // Everything here is for the period chosen above, not life-to-date.
   const cards = [
-    ['In-hand budget', num(inHand), '', `active and not started, ${label.toLowerCase()}`],
+    ['Budget in hand', num(inHand), '', `active and not started, ${label.toLowerCase()}`],
     ['Planned MM', num(t.planned_mm), '', 'what we said we would burn'],
     ['Actual MM booked', num(t.actual_mm), '',
       `${fmt.hours(t.actual_mm * report.hours_per_man_month)} hours`],
@@ -1240,7 +1240,7 @@ function renderHeroes(report) {
       ? el('div', { class: 'hero' },
           el('span', { class: 'medal' }, '🏅'),
           el('div', { class: 'who' },
-            el('div', { class: 'label' }, `Hero of ${month.label}`),
+            el('div', { class: 'label' }, `Top of ${month.label}`),
             el('div', { class: 'name' }, month.hero || '—'),
             el('div', { class: 'why' },
               `scored ${num(month.hero_score, 1)} of 100 · strongest on `
@@ -1248,14 +1248,14 @@ function renderHeroes(report) {
       : el('div', { class: 'hero' },
           el('span', { class: 'medal' }, '🏅'),
           el('div', { class: 'who' },
-            el('div', { class: 'label' }, 'Hero of the month'),
+            el('div', { class: 'label' }, 'Top of the month'),
             el('div', { class: 'hero-empty' },
               'No completed month with booked time in this period yet.'))),
     year
       ? el('div', { class: 'hero hero-year' },
           el('span', { class: 'medal' }, '🏆'),
           el('div', { class: 'who' },
-            el('div', { class: 'label' }, `Hero of ${periodName(report.period)}`),
+            el('div', { class: 'label' }, `Top of ${periodName(report.period)}`),
             el('div', { class: 'name' }, year.engineer || '—'),
             el('div', { class: 'why' },
               `scored ${num(year.score, 1)} of 100 · `
@@ -1276,7 +1276,7 @@ function renderHeroes(report) {
       ? el('div', { class: 'hero', style: 'border-left-color: var(--series-3)' },
           el('span', { class: 'medal' }, '📅'),
           el('div', { class: 'who' },
-            el('div', { class: 'label' }, 'Months won'),
+            el('div', { class: 'label' }, 'Months on top'),
             el('div', { class: 'why', style: 'margin-top:4px' },
               Object.entries(wins)
                 .sort((a, b) => b[1] - a[1])
@@ -1360,7 +1360,7 @@ function renderFormation(report) {
   setChildren(host,
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, 'Team formation', meaningButton('utilisation')),
+        el('h3', {}, 'Each person, by grade and team', meaningButton('utilisation')),
         el('p', { class: 'muted' },
           `The % is how full each person's timesheet is in ${periodName(report.period)}, ${upto.short}: `
           + 'every hour booked, leave included, against a full timesheet for the working days so far. '
@@ -2567,7 +2567,7 @@ function renderReference() {
   setChildren($('#reference-lock'), unlocked
     ? el('div', { class: 'row', style: 'margin:0' },
         el('span', { class: 'pill pill-warn' }, 'unlocked for editing'),
-        el('button', { class: 'btn btn-sm', type: 'button', onclick: lockReference }, 'Lock'),
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: lockReference }, 'Lock the rules'),
         el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: saveReference },
           'Save changes'))
     : el('button', { class: 'btn', type: 'button', onclick: unlockReference },
@@ -2605,7 +2605,7 @@ function renderReference() {
       el('h3', {}, 'Project types'),
       el('div', { class: 'table-wrap' }, el('table', { class: unlocked ? 'edit-table' : '' },
         el('thead', {}, el('tr', {},
-          ['Code', 'Project type', 'Measurement basis', 'Earning trigger',
+          ['Type code', 'Project type', 'Measurement basis', 'Earning trigger',
            'Portfolio weight', 'In CPI?', 'Notes'].map((h, i) =>
             el('th', { class: i === 4 ? 'num' : '' }, h)))),
         el('tbody', {}, draft.project_types.map((t) => el('tr', {},
@@ -2713,7 +2713,7 @@ async function unlockReference() {
     await api('/api/reference/unlock', { method: 'POST', body: { password } });
     state.status = await api('/api/status');
     renderReference();
-    toast('Reference tables unlocked.', 'ok');
+    toast('Scoring rules unlocked.', 'ok');
   } catch (error) {
     toast(error.message, 'bad');
   }
@@ -2946,16 +2946,18 @@ function wire() {
 
 /* ------------------------------------------------------------- reports */
 
+// Reports answers "how is each person scoring?", so it opens on the
+// scorecard; the team's dials are Overview's answer and wait under Dashboard.
 const REPORT_VIEWS = [
-  ['dashboard', 'Dashboard'],
-  ['engineers', 'Engineer KPIs'],
-  ['member', 'Team Member'],
   ['scorecard', 'Scorecard'],
-  ['review', 'Management Review'],
+  ['engineers', 'Each person\'s figures'],
+  ['member', 'One person'],
+  ['dashboard', 'Team totals'],
+  ['review', 'Summary for management'],
 ];
 
 state.report = null;
-state.reportView = 'dashboard';
+state.reportView = 'scorecard';
 state.reportMember = null;
 
 function num(value, digits = 2) {
@@ -3046,7 +3048,7 @@ function renderDashboard(data) {
   const t = data.team;
   const statuses = data.by_status;
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Portfolio dashboard — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Team totals — ${data.period.label}`),
     kpiCards([
       ['Planned MM', num(t.planned_mm), 'full period plan'],
       ['Actual MM', num(t.actual_mm), 'what was burned'],
@@ -3162,7 +3164,7 @@ function renderEngineerKpis(data) {
     .sort((a, b) => b.total - a.total);
 
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Engineer KPIs — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Each person's figures — ${data.period.label}`),
     el('div', { class: 'report-grid' },
       el('section', { class: 'panel' },
         charts.groupedBars(names, [
@@ -3370,7 +3372,7 @@ function renderReview(data) {
   const issues = data.issues || [];
 
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Management review — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Summary for management — ${data.period.label}`),
     kpiCards([
       ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
       ['Actual MM', num(t.actual_mm), 'what we actually burned'],
@@ -3409,7 +3411,7 @@ function renderReview(data) {
       ], { scores: true })),
 
     el('section', { class: 'panel' },
-      el('h3', {}, 'Delivery mix'),
+      el('h3', {}, 'Where the hours went'),
       el('p', { class: 'muted' },
         `Where the delivered hours came from over ${data.period.label.toLowerCase()}.`),
       table(['Source', 'Hours', 'Man-months', 'Share'],
@@ -3419,7 +3421,7 @@ function renderReview(data) {
         })), { numeric: [1, 2, 3] })),
 
     el('section', { class: 'panel' },
-      el('h3', {}, 'Register health'),
+      el('h3', {}, 'Gaps in the project list'),
       issues.length
         ? el('div', {}, issues.map((issue) => el('div', {
             class: `msg msg-${issueTone(issue.level)}`,
@@ -3461,7 +3463,7 @@ function renderTeam() {
 
     el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {},
-        ['#', 'Engineer', 'Timesheet name pattern', 'Hours / month',
+        ['#', 'Engineer', 'Name on the timesheet', 'Hours / month',
          ...years.map(String), 'Timesheet rows', 'Last 12 months', 'Their sign-in', '']
           .map((h, i) =>
           el('th', { class: i === 0 || (i >= 3 && i < years.length + 5) ? 'num' : '' }, h)))),
@@ -3558,7 +3560,7 @@ function accessCell(person) {
     return el('button', {
       class: 'btn btn-sm', type: 'button',
       onclick: () => openAccessModal(person),
-    }, 'Give access');
+    }, 'Give a sign-in');
   }
   return el('div', { class: 'who' },
     el('span', { class: 'who-chip',
@@ -3658,7 +3660,7 @@ function openEngineerModal(person) {
   const fields = [
     { name: 'short_name', label: 'Short name',
       hint: 'also names their timesheet sheet' },
-    { name: 'pattern', label: 'Timesheet name pattern',
+    { name: 'pattern', label: 'Name on the timesheet',
       hint: 'matched against FullName in the export, e.g. *Nadia*' },
     { name: 'available_hours', label: 'Available hours per month',
       type: 'number', step: '1', min: '1' },

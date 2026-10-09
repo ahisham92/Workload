@@ -22,6 +22,7 @@
 <link rel="stylesheet" href="bringin.css">
 <link rel="stylesheet" href="paths.css">
 <link rel="stylesheet" href="look.css">
+<link rel="stylesheet" href="focus.css">
 <link rel="stylesheet" href="sheet.css">
 </head>
 <body>
@@ -96,20 +97,20 @@
 <nav class="tabs" id="tabs" role="tablist" hidden>
   <button class="tab is-active" data-view="overview" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
   <button class="tab" data-view="planner" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h7"/></svg><span>Planner</span></button>
-  <button class="tab" data-view="checkins" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="m15.5 14.5 2 2 3.5-4"/></svg><span>Check-ins</span></button>
-  <button class="tab" data-view="weekly" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/></svg><span>Weekly</span></button>
+  <button class="tab" data-view="checkins" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="m15.5 14.5 2 2 3.5-4"/></svg><span>Who needs help</span></button>
+  <button class="tab" data-view="weekly" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/></svg><span>Weekly report</span></button>
   <button class="tab" data-view="tasks" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></button>
   <button class="tab" data-view="projects" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Projects</span></button>
   <button class="tab" data-view="budgets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/></svg><span>Budgets</span></button>
   <button class="tab" data-view="reports" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Reports</span></button>
-  <button class="tab" data-view="growth" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21v-9"/><path d="M12 12c0-4 3-7 8-7 0 5-3 7-8 7z"/><path d="M12 15c0-3-2.5-5.5-7-5.5 0 4 2.5 5.5 7 5.5z"/></svg><span>Growth</span></button>
-  <button class="tab" data-view="resourcing" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4 3 8l4 4M3 8h13M17 12l4 4-4 4M21 16H8"/></svg><span>Resourcing</span></button>
+  <button class="tab" data-view="growth" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21v-9"/><path d="M12 12c0-4 3-7 8-7 0 5-3 7-8 7z"/><path d="M12 15c0-3-2.5-5.5-7-5.5 0 4 2.5 5.5 7 5.5z"/></svg><span>Goals and growth</span></button>
+  <button class="tab" data-view="resourcing" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4 3 8l4 4M3 8h13M17 12l4 4-4 4M21 16H8"/></svg><span>Team staffing</span></button>
   <button class="tab" data-view="team" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>Team</span></button>
   <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
   <button class="tab" data-view="bringin" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span>Bring in data</span></button>
   <button class="tab" data-view="guide" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><circle cx="12" cy="17.2" r=".6"/></svg><span>How to use</span></button>
-  <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Reference</span></button>
-  <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Admin</span></button>
+  <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Scoring rules</span></button>
+  <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Accounts</span></button>
 </nav>
 
 <main id="main" hidden>
@@ -118,7 +119,7 @@
   <section class="view is-active" id="view-overview">
     <div class="view-head">
       <div>
-        <h2>Portfolio and team</h2>
+        <h2>The year so far</h2>
         <p class="muted">Everything on this page is for the year chosen on the right — the budget in hand, what has been booked against it, and how the team is tracking.</p>
       </div>
       <label class="field inline">
@@ -306,11 +307,11 @@
   <section class="view" id="view-tasks">
     <div class="view-head">
       <div>
-        <h2>Task management</h2>
+        <h2>Tasks</h2>
         <p class="muted">The work in front of the team, who it belongs to, and whether it fits in the days available. This tab stands on its own — nothing here touches the timesheet, a project's progress or anyone's CPI.</p>
       </div>
       <div class="row-actions">
-        <button class="btn" id="btn-task-settings" type="button">Working day…</button>
+        <button class="btn" id="btn-task-settings" type="button">Working hours…</button>
         <button class="btn" id="btn-task-submissions" type="button">Submission tasks…</button>
         <button class="btn" id="btn-task-meeting" type="button">Weekly meeting…</button>
         <button class="btn btn-primary" id="btn-add-task" type="button">Add task</button>
@@ -361,7 +362,7 @@
   <section class="view" id="view-reference">
     <div class="view-head">
       <div>
-        <h2>Reference tables</h2>
+        <h2>Scoring rules</h2>
         <p class="muted">The project types and the rules of credit every deliverable is measured against.</p>
       </div>
       <div id="reference-lock"></div>
@@ -374,7 +375,7 @@
     <div class="view-head">
       <div>
         <h2>What do you want to do?</h2>
-        <p class="muted">Pick a path and only its tabs stay in the bar, in the order you need them. Change it any time with Show, above.</p>
+        <p class="muted">Three questions. Pick yours and only its tabs stay in the bar; each tab opens on its answer. Change it any time with Show tabs for, above.</p>
       </div>
     </div>
     <div id="paths-body"></div>
@@ -425,7 +426,7 @@
   <section class="view" id="view-checkins">
     <div class="view-head">
       <div>
-        <h2>Check-ins</h2>
+        <h2>Who needs help</h2>
         <p class="muted">Who has free hours, who has been overloaded and needs a lighter week, who is fresh and can take more, and what to ask each person. Nothing to fill in: it all comes from the timesheets, the tasks and the calendar.</p>
       </div>
       <div class="row-actions">
@@ -443,7 +444,7 @@
   <section class="view" id="view-growth">
     <div class="view-head">
       <div>
-        <h2>Growth</h2>
+        <h2>Goals and growth</h2>
         <p class="muted">Development time every week for everybody, goals set for each person every quarter and reviewed after three months, and KPIs that differ by grade: a manager is measured on supporting and developing the team, and nobody is ranked against a different grade.</p>
       </div>
       <div class="row-actions">
@@ -491,7 +492,7 @@
   <section class="view" id="view-resourcing">
     <div class="view-head">
       <div>
-        <h2>Resourcing</h2>
+        <h2>Team staffing</h2>
         <p class="muted">Who is in which team, and where the work is not where the people are.</p>
       </div>
       <div class="row-actions">
@@ -563,6 +564,7 @@
 <script src="tables.js"></script>
 <script src="paths.js"></script>
 <script src="look.js"></script>
+<script src="focus.js"></script>
 <script src="dates.js"></script>
 <script src="sheet.js"></script>
 <script src="subs.js"></script>

@@ -290,7 +290,7 @@ def build(*, quarter: str, today: _dt.date, roster: Sequence[Dict[str, Any]],
         else:
             for key in ("team_support", "developing"):
                 part(key, None, "Leads nobody yet: make them a team's lead on "
-                                "Resourcing, or set their grade to Manager.")
+                                "Team staffing, or set their grade to Manager.")
 
         counted = [p for p in parts if p["score"] is not None]
         weight = sum(p["weight"] for p in counted)
@@ -380,7 +380,7 @@ def _todo(quarter: str, today: _dt.date, people_out: Sequence[Dict[str, Any]],
         out.append({"kind": "lead", "level": "note",
                     "text": f"{', '.join(unled)} lead{'s' if len(unled) == 1 else ''} "
                             "nobody, so the team parts of their KPI are not counted. "
-                            "Make them a team's lead on Resourcing if they do lead."})
+                            "Make them a team's lead on Team staffing if they do lead."})
     days = sorted({p["development_day"] for p in people_out if p["development_day"]})
     if days and quarter == current:
         when = ", ".join(_dt.date.fromisoformat(d).strftime("%a %d %b") for d in days)

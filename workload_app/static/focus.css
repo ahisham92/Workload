@@ -1,0 +1,78 @@
+/* Selecao+ — one question, one answer, the rest under Show more (focus.js). */
+
+/* A page that shares another's tab is reached from that tab's header. */
+.tab.in-group { display: none; }
+
+/* -- the header asks the page's question --------------------------------- */
+.view[data-tone] .view-head .vh-question, .view[data-tone] .report-head .vh-question {
+  font-size: 1.02rem; font-weight: 600; color: rgba(255, 255, 255, .92);
+}
+.vh-pages {
+  display: inline-flex; gap: 4px; margin-top: 10px; padding: 3px;
+  border-radius: 999px; background: rgba(255, 255, 255, .1);
+  border: 1px solid rgba(255, 255, 255, .16);
+}
+.vh-page {
+  appearance: none; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
+  padding: 5px 14px; border: 0; border-radius: 999px;
+  background: transparent; color: rgba(255, 255, 255, .78);
+  transition: background .15s, color .15s;
+}
+.vh-page:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+.vh-page.is-on { background: #fff; color: var(--navy, #101B2D); }
+
+/* -- the answer ----------------------------------------------------------- */
+.answer {
+  --a: var(--ok); --a-soft: var(--ok-soft);
+  display: flex; align-items: center; gap: 14px;
+  width: fit-content; max-width: min(100%, 980px); margin: 0 auto 14px;
+  padding: 14px 18px; border-radius: 14px;
+  background: var(--a-soft);
+  border: 1px solid color-mix(in srgb, var(--a) 35%, var(--border));
+  box-shadow: var(--lift, var(--shadow));
+}
+.answer[hidden] { display: none; }
+.answer[data-answer-tone="warn"] { --a: var(--warn); --a-soft: var(--warn-soft); }
+.answer[data-answer-tone="bad"] { --a: var(--bad); --a-soft: var(--bad-soft); }
+.answer-dot {
+  flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--a);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--a) 18%, transparent);
+}
+.answer-body { min-width: 0; }
+.answer-say { margin: 0; font-size: 1.12rem; font-weight: 700; line-height: 1.35; color: var(--text); }
+.answer-next { margin: 4px 0 0; color: var(--muted); font-size: .92rem; }
+.answer-act { flex: none; }
+
+/* -- Show more -------------------------------------------------------------- */
+.view:not(.show-all) .fold-extra { display: none !important; }
+.fold-more {
+  appearance: none; font: inherit; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  margin: 6px auto 18px; padding: 10px 22px; border-radius: 999px;
+  background: var(--tone-soft, var(--surface-2)); color: var(--tone-ink, var(--text));
+  border: 1px solid var(--tone-line, var(--border)); box-shadow: var(--lift, var(--shadow));
+  max-width: min(100%, 720px); text-align: center;
+}
+.fold-more:hover { border-color: var(--tone, var(--accent)); }
+.fold-more-label { font-weight: 700; }
+.fold-more-label::after { content: " ▾"; }
+.fold-more[aria-expanded="true"] .fold-more-label::after { content: " ▴"; }
+.fold-more-what { font-size: .82rem; color: var(--muted); }
+
+/* -- the opening page: each path's question --------------------------------- */
+.path-card-ask { font-size: 1.02rem; font-weight: 600; color: var(--tone-ink, var(--text)); }
+.path-cards { max-width: 1100px; margin: 0 auto; }
+
+@media (max-width: 640px) {
+  .answer { width: auto; align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; }
+  .answer-dot { margin-top: 5px; }
+  .answer-body { flex: 1 1 calc(100% - 40px); }
+  .answer-say { font-size: 1.02rem; }
+  .answer-act { margin-left: 28px; }
+  .vh-pages { display: flex; width: fit-content; }
+}
+
+@media print {
+  .answer, .fold-more, .vh-pages { display: none !important; }
+  .view .fold-extra, .view:not(.show-all) .fold-extra { display: revert !important; }
+}

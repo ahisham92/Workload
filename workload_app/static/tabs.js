@@ -75,7 +75,7 @@
         dial({ label: 'On plan', value: t.plan_adherence, text: fmt.pct(t.plan_adherence), min: 0, max: 1.5,
           band: [0.85, 1.15], toneName: tone.target(t.plan_adherence),
           sub: `against ${num(t.planned_to_date_mm)} MM planned so far` }),
-        dial({ label: 'Plan earned', value: earnedShare, text: earnedShare === null ? '—' : fmt.pct(earnedShare),
+        dial({ label: 'Planned work done', value: earnedShare, text: earnedShare === null ? '—' : fmt.pct(earnedShare),
           min: 0, max: 1.3, band: [0.9, 1.3], toneName: earnedShare === null ? '' : tone.target(earnedShare),
           sub: `${num(t.earned_mm)} MM earned` })));
   }
@@ -221,7 +221,7 @@
         cells.push(el('div', {
           class: 'hm-cell', style: `background:${heatColour(u)}`,
           title: m ? `${name}, ${shortMonth(month)}: ${fmt.hours(m.total)} h of ${fmt.hours(m.capacity)} h`
-            + (m.absence ? ` · ${fmt.hours(m.absence)} h away` : '') : `${name}, ${shortMonth(month)}: nothing booked`,
+            + (m.absence ? ` · ${fmt.hours(m.absence)} h off` : '') : `${name}, ${shortMonth(month)}: nothing booked`,
         }, u === null ? '' : `${Math.round(u * 100)}`));
       }
     }

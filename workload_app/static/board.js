@@ -176,7 +176,7 @@
     return el('section', { class: 'panel bd' },
       el('div', { class: 'panel-head' },
         el('div', {},
-          el('h3', {}, 'Planning board'),
+          el('h3', {}, 'Move work'),
           el('p', { class: 'muted' },
             'Each column is a piece of work for the days chosen, each person sits on what they have lined up, '
             + 'bigger for more hours. Drag someone onto another person to hand over half of it, or tap them '

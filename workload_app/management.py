@@ -301,7 +301,7 @@ class Plan:
                         "start": begin, "end": end, "title": "Development time",
                         "agenda": ([f"Goal: {g}" for g in goals] if goals else
                                    ["No goals set for this quarter yet: ask your "
-                                    "manager to set them on Growth."])})
+                                    "manager to set them on Goals and growth."])})
         return out
 
     def meetings_on(self, day: _dt.date) -> List[Dict[str, Any]]:
