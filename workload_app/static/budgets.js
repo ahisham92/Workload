@@ -417,7 +417,7 @@ async function bringInFiles(input) {
     loadBudgets(true);
     if ((result.projects_updated || []).length || result.rows_filled) registerChanged();
   } catch (error) {
-    toast([error.message, ...(error.errors || [])].join(' '), 'bad');
+    toast(errorText(error), 'bad');
   }
 }
 

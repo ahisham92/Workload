@@ -210,3 +210,24 @@ class TestPaths:
         # Between them, the paths reach every tab but help and Admin.
         reached = {v for found in lists for v in re.findall(r"'([a-z]+)'", found)}
         assert views - reached == {"guide", "admin"}
+
+
+class TestAnotherWorker:
+    def test_bring_in_answered_by_a_worker_that_did_not_check(self, blank, tmp_path):
+        """A host runs several workers; the check lives in one's memory."""
+        files = team_exports()
+        token = blank.bring_in_check(files)["token"]
+        other = WorkloadService(blank.path)          # a second worker, same unit
+        done = other.bring_in_apply(token, files)
+        assert all(s["ok"] for s in done["steps"])
+        assert done["state"]["timesheets"]["rows"] == 6
+
+    def test_without_the_files_an_unknown_check_is_still_refused(self, blank):
+        with pytest.raises(ApiError):
+            blank.bring_in_apply("not-a-token")
+
+    def test_the_page_says_an_error_once(self):
+        from workload_app.app import STATIC_DIR
+        page = (STATIC_DIR / "bringin.js").read_text(encoding="utf-8")
+        assert "[error.message, ...(error.errors" not in page
+        assert "files: bring.files" in page

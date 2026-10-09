@@ -1870,7 +1870,8 @@ class WorkloadApp:
              lambda ctx, q, b: ctx.service.bring_in_check(b.get("files") or []),
              "manager"),
             ("POST", "/api/bring-in/apply",
-             lambda ctx, q, b: ctx.service.bring_in_apply(str(b.get("token") or "")),
+             lambda ctx, q, b: ctx.service.bring_in_apply(
+                 str(b.get("token") or ""), b.get("files") or None),
              "manager"),
             ("GET", "/api/weekly", s("weekly"), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),

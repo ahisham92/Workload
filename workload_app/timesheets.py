@@ -561,15 +561,18 @@ def _summarise(result: ParsedTimesheet, name_pattern: Optional[str],
         )
     if no_date:
         result.warnings.append(
-            f"{no_date:,} row(s) have no usable date; the day-by-day and "
-            f"dormancy calculations will ignore them."
+            f"{no_date:,} row(s) have no date. Their hours still count in the "
+            f"totals, just not on any one day. Nothing to do unless it is many rows."
         )
     if no_hours:
-        result.warnings.append(f"{no_hours:,} row(s) have no TotalHours.")
+        result.warnings.append(
+            f"{no_hours:,} row(s) have no hours, so they add nothing. Usually a "
+            f"blank line in the BISpark export: nothing to do.")
     if missing_phase:
         result.warnings.append(
-            f"{missing_phase:,} row(s) have no Phase, so they cannot be matched "
-            f"to a deliverable on Deliverable Actuals."
+            f"{missing_phase:,} row(s) have no Phase. Their hours still count for "
+            f"the person and the project, just not for one deliverable of it. "
+            f"Nothing to do unless it is many rows."
         )
     if unknown:
         result.warnings.append(
