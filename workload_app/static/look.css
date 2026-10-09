@@ -417,3 +417,25 @@ body[data-tone] .tabs {
 .view[data-tone] .holiday-prompt > span:first-child { flex: 0 1 auto; }
 .view[data-tone] .panel.fits .panel-head { gap: 16px; }
 .view[data-tone] .day-grid, .view[data-tone] .cards-3 { justify-content: start; }
+
+/* ------------------------------------------------------ centred, compact */
+/* Ahmed (9 Oct): centre things; four cards to a row; Meetings and Away side
+   by side at the same height. A box sized to its content sits in the middle
+   of the page; a row of cards holds at most four, each row centred, cards in
+   a row the same height. */
+.view[data-tone] .panel.fits { margin-left: auto; margin-right: auto; }
+.view[data-tone] .card-row {
+  display: flex !important; flex-wrap: wrap; justify-content: center; align-items: stretch;
+  max-width: calc(4 * var(--card-w) + 3 * 14px); margin-left: auto; margin-right: auto;
+  gap: 14px;
+}
+.view[data-tone] .card-row > * { flex: 0 0 var(--card-w); width: var(--card-w); min-width: 0; margin: 0; }
+@media (max-width: 700px) {
+  .view[data-tone] .card-row > * { flex: 1 1 100%; width: auto; }
+}
+.view[data-tone] .panel-pair {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; margin-bottom: 12px;
+}
+.view[data-tone] .panel-pair > .panel { flex: 1 1 420px; width: auto; margin: 0; }
+.view[data-tone] .panel-pair > .panel.is-slim { align-content: center; }
+.view[data-tone] .panel-pair .panel-head { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; }
