@@ -97,8 +97,38 @@
   const sized = new ResizeObserver((entries) => entries.forEach((e) => balance(e.target)));
   const seen = new WeakSet();
   let queued = false;
+  /* -- boxes no taller than what they hold ------------------------------- */
+  // A panel with nothing in it yet ("No meetings put in yet.") shrinks to a
+  // slim bar: its title, its button and the one line saying it is empty. The
+  // longer description waits, as the title's tooltip, until there is
+  // something to describe.
+  const EMPTY = /\b(no|none)\b[^.]*\byet\b|^nothing\b|not set up yet/i;
+  const CONTENT = 'table, svg:not(.tab-icon), canvas, img, li, input, select, textarea, .card, .pc, .eng, details';
+
+  function slim(panel) {
+    const notes = $$('.empty, p.muted, p', panel).filter((p) => EMPTY.test(p.textContent.trim()));
+    const busy = Array.from(panel.querySelectorAll(CONTENT))
+      .some((node) => !node.closest('button, .panel-head, .legend'));
+    // Only a panel made of a title, a line or two and a note: not one whose
+    // cards each say they are empty.
+    const plain = Array.from(panel.children).every((child) =>
+      child.matches('h3, p, .panel-head, .empty, .btn, .legend')
+      || (child.children.length <= 1 && notes.some((n) => child.contains(n))));
+    const on = notes.length === 1 && plain && !busy;
+    panel.classList.toggle('is-slim', on);
+    const title = panel.querySelector('h3');
+    for (const p of $$('p.muted', panel)) {
+      const note = notes.includes(p);
+      p.classList.toggle('slim-note', on && note);
+      p.classList.toggle('slim-hide', on && !note);
+      if (on && !note && title && !title.title) title.title = p.textContent.trim();
+    }
+    for (const e of $$('.empty', panel)) e.classList.toggle('slim-note', on);
+  }
+
   function findGrids() {
     queued = false;
+    for (const panel of $$('main .panel')) slim(panel);
     for (const grid of $$(SELECTOR)) {
       if (!seen.has(grid)) { seen.add(grid); sized.observe(grid); }
       balance(grid);
@@ -121,6 +151,7 @@
       window.switchView = function (view, ...rest) {
         const result = switchTo.call(this, view, ...rest);
         document.body.dataset.tone = toneOf(view);
+        requestAnimationFrame(findGrids);
         return result;
       };
     }
