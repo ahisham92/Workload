@@ -232,7 +232,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 
 /* engineer blocks: a grid of cards rather than one long column */
 .eng-grid { display: grid; gap: 12px; margin-top: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .eng { border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 14px; background: var(--surface); min-width: 0; }
 .eng-trend { margin-top: 10px; }
@@ -396,7 +396,7 @@ textarea { resize: vertical; min-height: 56px; }
 .chooser-head p { margin: 2px 0 0; }
 
 .unit-grid { display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .unit-card { position: relative; display: flex; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface); }
 .unit-card:hover { border-color: var(--accent); }
@@ -1019,7 +1019,7 @@ tr.row-done .task-name { text-decoration: line-through; }
 .request-time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
 
 .day-grid { display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .day-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); }
 .day-card.is-over { border-top: 3px solid var(--bad); }
@@ -1168,7 +1168,7 @@ tr.row-done .task-name { text-decoration: line-through; }
 /* One card per person: how loaded they have been, their free hours, and what
    to ask them. The edge colour is the same signal as the pill. */
 .ci-grid { display: grid; gap: 12px; margin-top: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .ci-card { border: 1px solid var(--border); border-left: 4px solid var(--accent);
   border-radius: var(--radius); padding: 12px 14px; background: var(--surface);
   min-width: 0; display: flex; flex-direction: column; gap: 6px; }

@@ -37,7 +37,7 @@
 .gr-score { font-size: 18px; font-variant-numeric: tabular-nums; }
 .gr-prov { grid-column: 1 / -1; font-size: 11px; text-align: right; }
 
-.gr-people { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.gr-people { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
 .gr-person { border: 1px solid var(--border); border-top: 4px solid var(--pc, var(--accent));
   border-radius: var(--radius); padding: 10px 12px; background: var(--surface);
   display: grid; gap: 8px; align-content: start; }

@@ -263,3 +263,36 @@ body[data-tone] .thumb-bar button.is-active .tab-icon { background: color-mix(in
   font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--tone), var(--tone-2));
   box-shadow: 0 6px 14px -6px var(--tone);
 }
+
+/* ------------------------------------------------ no plain white boxes */
+/* Ahmed (9 Oct): the white boxes and the white space inside them made every
+   tab look bare. So the page itself takes the tab's colour, and every surface
+   on the tab (panels, cards, tables, inputs) is tinted with it rather than
+   white; panels are set apart by a soft shadow and the coloured line on top,
+   not by a white box. */
+:root { --surface-base: #ffffff; --surface-2-base: #f0f2f5; --bg-base: #eef1f6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --surface-base: #1b1f26; --surface-2-base: #232830; --bg-base: #12151b; }
+}
+:root[data-theme="dark"] { --surface-base: #1b1f26; --surface-2-base: #232830; --bg-base: #12151b; }
+
+body[data-tone] { --bg: color-mix(in srgb, var(--tone) 9%, var(--bg-base)); background: var(--bg); }
+.view[data-tone] {
+  --surface: color-mix(in srgb, var(--tone) 7%, var(--surface-base));
+  --surface-2: color-mix(in srgb, var(--tone) 9%, var(--surface-2-base));
+  --border: color-mix(in srgb, var(--tone) 16%, var(--surface-2-base));
+}
+.view[data-tone] .panel {
+  border-color: transparent;
+  background:
+    linear-gradient(90deg, var(--tone), var(--tone-2)) top / 100% 3px no-repeat,
+    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--tone-2) 10%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 11%, var(--surface-base)) 0,
+      color-mix(in srgb, var(--tone) 6%, var(--surface-base)) 100%);
+}
+/* The bars above the tab take its colour too. */
+body[data-tone] .tabs, body[data-tone] .path-bar {
+  background: color-mix(in srgb, var(--tone) 6%, var(--surface-base));
+  border-bottom-color: color-mix(in srgb, var(--tone) 14%, var(--surface-2-base));
+}
+body[data-tone] .thumb-bar { background: color-mix(in srgb, var(--tone) 6%, var(--surface-base)); }
