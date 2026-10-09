@@ -18,11 +18,11 @@
   // where: the tab, as its button reads. go: [view, planner subtab] for the
   // manager page, or the id of a panel on the engineer's page.
   const MANAGER = {
-    intro: 'New here? Do the first setup once, top to bottom. After that the everyday routine '
+    intro: 'The app opens on four paths: plan people, see the workload, read the results, or set up. Each keeps only its own tabs; Show, above the tabs, changes it. New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
       + 'below is all you need. Tap any box to go there.',
     setup: [
-      { title: 'Bring in the timesheets', do: 'Set up the BISpark kit once; it sends the team\'s rows every 6 hours',
-        where: 'Timesheets', go: ['timesheets'] },
+      { title: 'Bring in your files', do: 'Timesheets and budgets together, in one place',
+        where: 'Bring in data', go: ['bringin'] },
       { title: 'Check your team', do: 'Grade and team for each person. On your own row: Grade Manager, This is me Yes',
         where: 'Team', go: ['team'] },
       { title: 'Give each engineer access', do: 'Give access on their row, so they get their own My day page',
@@ -31,10 +31,12 @@
         where: 'Planner › Today', go: ['planner', 'today'] },
       { title: 'Meetings', do: 'Put in client, other trade and internal meetings once, with who goes',
         where: 'Planner › Today', go: ['planner', 'today'] },
-      { title: 'Submissions and drawings', do: 'Confirm the due dates; upload the drawing list',
+      { title: 'Submissions and drawings', do: 'Confirm the due dates the timesheets suggest',
         where: 'Planner › Submissions', go: ['planner', 'submissions'] },
-      { title: 'Budgets', do: 'Copy the two BISpark export requests once, then map people once',
+      { title: 'Budgets', do: 'Map people from other units once; check each job\'s share',
         where: 'Budgets', go: ['budgets'] },
+      { title: 'Keep it coming by itself', do: 'Set up the BISpark kit once; it sends the team\'s rows every 6 hours',
+        where: 'Timesheets', go: ['timesheets'] },
       { title: 'Notifications and goals', do: 'Turn on phone alerts; set each person\'s goals for the quarter',
         where: 'Weekly, Growth', go: ['weekly'] },
     ],
@@ -71,6 +73,7 @@
       ['Did we keep to the plan?', 'Planner › Plan vs actual', ['planner', 'review']],
       ['How is each person growing?', 'Growth', ['growth']],
       ['Have the timesheets come in?', 'Timesheets', ['timesheets']],
+      ['Bring in a new export', 'Bring in data', ['bringin']],
       ['A project\'s hours and progress', 'Projects', ['projects']],
       ['Change someone\'s grade or team', 'Team', ['team']],
     ],

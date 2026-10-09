@@ -19,6 +19,8 @@
 <link rel="stylesheet" href="budgets.css">
 <link rel="stylesheet" href="planreview.css">
 <link rel="stylesheet" href="guide.css">
+<link rel="stylesheet" href="bringin.css">
+<link rel="stylesheet" href="paths.css">
 </head>
 <body>
 <div id="voyage" class="voyage-veil" data-opening="Opening Selecao+"></div>
@@ -46,10 +48,12 @@
     <div class="chooser-actions">
       <div class="add-unit-body">
         <p class="muted">
-          A unit starts from your team's timesheet exports — nothing else. Choose
-          everyone's export at once: the people, the projects, their phases and
-          who worked on what are all read out of them. Leave the name empty to
-          use the unit the exports belong to.
+          A unit starts from your team's timesheet exports. Choose everyone's
+          export at once: the people, the projects, their phases and who worked
+          on what are all read out of them. If you have them, add the BISpark
+          Projects list and a job's staff expenditure in the same go: each is
+          recognised and fills its part. Leave the name empty to use the unit
+          the exports belong to.
         </p>
         <div class="row">
           <label class="field">
@@ -57,10 +61,10 @@
             <input type="text" id="unit-name" placeholder="Marine Structures" spellcheck="false">
           </label>
           <label class="field grow">
-            <span>Timesheet exports (.xlsx or .csv, one or many)</span>
+            <span>Your files (.xlsx or .csv, as many as you like)</span>
             <input type="file" id="unit-timesheets" accept=".xlsx,.xlsm,.csv,.tsv,.txt" multiple>
           </label>
-          <button class="btn btn-primary" id="btn-new-unit" type="button">Create from timesheets</button>
+          <button class="btn btn-primary" id="btn-new-unit" type="button">Create the unit</button>
         </div>
         <div id="chooser-error"></div>
       </div>
@@ -91,17 +95,18 @@
   <button class="tab is-active" data-view="overview" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Overview</span></button>
   <button class="tab" data-view="planner" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h7"/></svg><span>Planner</span></button>
   <button class="tab" data-view="checkins" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="m15.5 14.5 2 2 3.5-4"/></svg><span>Check-ins</span></button>
-  <button class="tab" data-view="growth" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21v-9"/><path d="M12 12c0-4 3-7 8-7 0 5-3 7-8 7z"/><path d="M12 15c0-3-2.5-5.5-7-5.5 0 4 2.5 5.5 7 5.5z"/></svg><span>Growth</span></button>
   <button class="tab" data-view="weekly" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/></svg><span>Weekly</span></button>
-  <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
+  <button class="tab" data-view="tasks" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></button>
   <button class="tab" data-view="projects" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>Projects</span></button>
   <button class="tab" data-view="budgets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/></svg><span>Budgets</span></button>
   <button class="tab" data-view="reports" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Reports</span></button>
-  <button class="tab" data-view="tasks" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></button>
-  <button class="tab" data-view="team" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>Team</span></button>
-  <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Reference</span></button>
+  <button class="tab" data-view="growth" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21v-9"/><path d="M12 12c0-4 3-7 8-7 0 5-3 7-8 7z"/><path d="M12 15c0-3-2.5-5.5-7-5.5 0 4 2.5 5.5 7 5.5z"/></svg><span>Growth</span></button>
   <button class="tab" data-view="resourcing" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4 3 8l4 4M3 8h13M17 12l4 4-4 4M21 16H8"/></svg><span>Resourcing</span></button>
+  <button class="tab" data-view="team" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>Team</span></button>
+  <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
+  <button class="tab" data-view="bringin" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span>Bring in data</span></button>
   <button class="tab" data-view="guide" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><circle cx="12" cy="17.2" r=".6"/></svg><span>How to use</span></button>
+  <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Reference</span></button>
   <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Admin</span></button>
 </nav>
 
@@ -119,11 +124,12 @@
         <select id="overview-year"></select>
       </label>
     </div>
+    <section class="panel bi-start" id="overview-start" hidden></section>
     <section class="panel ci-summary" id="overview-checkins" hidden></section>
-    <section class="panel formation-panel" id="formation" hidden></section>
-    <div id="overview-cards" class="cards cards-4"></div>
-    <div id="hero-strip"></div>
     <section class="panel" id="overview-needs" hidden></section>
+    <div id="overview-cards" class="cards cards-4"></div>
+    <section class="panel formation-panel" id="formation" hidden></section>
+    <div id="hero-strip"></div>
     <section class="panel" id="overview-trend" hidden></section>
     <section class="panel">
       <h3>Workload by engineer</h3>
@@ -192,7 +198,7 @@
         row goes to whoever booked it, so there is nobody to pick. Somebody new
         joins the team, and a job number with no project becomes one — named by
         its number, with its phases as deliverables — for you to confirm on
-        Projects.
+        Projects. To bring in the budgets in the same go, use Bring in data.
       </p>
       <div class="row">
         <label class="field grow">
@@ -334,6 +340,28 @@
       <div id="reference-lock"></div>
     </div>
     <div id="reference-body"></div>
+  </section>
+
+  <!-- ---------------------------------------------------------- paths -->
+  <section class="view" id="view-paths">
+    <div class="view-head">
+      <div>
+        <h2>What do you want to do?</h2>
+        <p class="muted">Pick a path and only its tabs stay in the bar, in the order you need them. Change it any time with Show, above.</p>
+      </div>
+    </div>
+    <div id="paths-body"></div>
+  </section>
+
+  <!-- -------------------------------------------------- bring in data -->
+  <section class="view" id="view-bringin">
+    <div class="view-head">
+      <div>
+        <h2>Bring in data</h2>
+        <p class="muted">One place for every file. Choose them all at once, in any mix: each is recognised by its columns and fills its part of the app. Nothing is written until you tap Bring in.</p>
+      </div>
+    </div>
+    <div id="bringin-body"><div class="empty">Working it out…</div></div>
   </section>
 
   <!-- ---------------------------------------------------------- guide -->
@@ -500,11 +528,13 @@
 <script src="weekly.js"></script>
 <script src="growth.js"></script>
 <script src="budgets.js"></script>
+<script src="bringin.js"></script>
 <script src="guide.js"></script>
 <script src="board.js"></script>
 <script src="showcase.js"></script>
 <script src="tabs.js"></script>
 <script src="tables.js"></script>
+<script src="paths.js"></script>
 <script src="pocket.js"></script>
 </body>
 </html>
