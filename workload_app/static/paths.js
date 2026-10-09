@@ -51,7 +51,7 @@
       make('span', { class: 'path-bar-label' }, 'Show'),
       ...[{ key: '', title: 'Everything' }, ...PATHS].map((p) => make('button', {
         type: 'button', class: `path-chip${(current ? current.key : '') === p.key ? ' is-on' : ''}`,
-        onclick: () => choose(p.key, false) }, p.key ? p.title : 'Everything')),
+        'data-path': p.key || null, onclick: () => choose(p.key, false) }, p.key ? p.title : 'Everything')),
       make('button', { type: 'button', class: 'path-chip path-chip-ghost', onclick: welcome },
         'Paths'));
     const on = bar.querySelector('.path-chip.is-on');
@@ -98,9 +98,11 @@
   }
 
   function card(path, hint) {
+    const icon = document.querySelector(`#tabs .tab[data-view="${path.tabs[0]}"] .tab-icon`);
     return make('button', { type: 'button', class: `path-card${current && current.key === path.key ? ' is-last' : ''}`,
-      onclick: () => choose(path.key) },
-    make('span', { class: 'path-card-icon', 'aria-hidden': 'true' }, path.icon),
+      'data-path': path.key, onclick: () => choose(path.key) },
+    make('span', { class: 'path-card-icon', 'aria-hidden': 'true' },
+      icon ? icon.cloneNode(true) : path.icon),
     make('span', { class: 'path-card-title' }, path.title),
     hint ? make('span', { class: 'pill pill-info' }, hint) : null,
     make('span', { class: 'path-card-say' }, path.say),
