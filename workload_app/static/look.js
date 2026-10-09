@@ -61,37 +61,50 @@
     document.body.dataset.tone = toneOf(active ? active.id.replace(/^view-/, '') : 'overview');
   }
 
-  /* -- rows that fill the width ------------------------------------------ */
-  // A grid of cards fills its row: as many columns as fit, then balanced so
-  // the rows hold the same number (six cards are three and three, not five
-  // and one), and a short last row stretches its last card to the edge. So
-  // no grid leaves a blank stretch of panel beside it.
-  const GRIDS = { 'pc-grid': 232, 'eng-grid': 320, 'day-grid': 280, 'ci-grid': 320,
-    'gr-people': 300, 'unit-grid': 280, 'cards-3': 230, findings: 300, 'hero-strip': 280,
-    'load-grid': 260, 'report-grid': 340, 'bi-kinds': 220, ideas: 280, 'gr-grades': 420,
-    'bu-detail-grid': 320 };
+  /* -- cards as wide as they need, no wider ------------------------------ */
+  // Ahmed (9 Oct): boxes and cards stretched across the whole screen with
+  // little in them. So a grid of cards keeps each card at its own width,
+  // balances the rows (six cards are three and three, not five and one), and
+  // the panel around it is only as wide as its cards: the tab's colour shows
+  // beside it rather than an empty stretch of box. On a phone a card takes
+  // the width of the screen.
+  const GRIDS = { 'pc-grid': 272, 'eng-grid': 340, 'day-grid': 320, 'ci-grid': 320,
+    'gr-people': 300, 'unit-grid': 300, 'cards-3': 300, findings: 300, 'hero-strip': 300,
+    'load-grid': 280, 'bi-kinds': 300, ideas: 300 };
   const SELECTOR = Object.keys(GRIDS).map((c) => `.${c}`).join(',');
+  // What keeps a box at full width: things that are drawn to fill it.
+  const WIDE = 'table, canvas, svg:not(.tab-icon), .chart, .figure, .bars, textarea, '
+    + 'input[type="text"], input[type="search"], input[type="file"], .subtabs, '
+    + '.report-grid, .gr-grades, .bu-detail-grid';
+
+  const inGrid = (node) => Boolean(node.closest(SELECTOR));
+  const onGridParent = (panel) => /grid/.test(getComputedStyle(panel.parentElement).display);
+
+  /** A box only as wide as what it holds, when nothing in it is drawn to fill it. */
+  function fit(panel) {
+    const wide = Array.from(panel.querySelectorAll(WIDE)).some((n) => !inGrid(n));
+    panel.classList.toggle('fits', !wide && !onGridParent(panel));
+  }
 
   function balance(grid) {
     const key = Object.keys(GRIDS).find((c) => grid.classList.contains(c));
     const items = Array.from(grid.children).filter((n) => !n.hidden);
-    const width = grid.clientWidth;
-    if (!key || !items.length || !width) return;
+    if (!key || !items.length || !grid.offsetParent) return;
+    const style = getComputedStyle(grid);
     // A row that scrolls sideways (the people cards on a phone) keeps its own layout.
-    if (getComputedStyle(grid).gridAutoFlow.startsWith('column')) {
-      grid.style.gridTemplateColumns = '';
-      items.forEach((item) => { item.style.gridColumn = ''; });
-      return;
-    }
-    const gap = parseFloat(getComputedStyle(grid).columnGap) || 12;
-    const fit = Math.max(1, Math.floor((width + gap) / (GRIDS[key] + gap)));
-    const rows = Math.ceil(items.length / fit);
+    if (style.gridAutoFlow.startsWith('column')) { grid.style.gridTemplateColumns = ''; return; }
+    // The room there is: the panel's own room when the panel shrinks to fit.
+    const panel = grid.closest('.panel.fits');
+    const room = panel
+      ? panel.parentElement.clientWidth - (panel.offsetWidth - grid.clientWidth)
+      : grid.clientWidth;
+    const gap = parseFloat(style.columnGap) || 12;
+    const width = GRIDS[key];
+    const fits = Math.floor((room + gap) / (width + gap));
+    if (fits < 2) { grid.style.gridTemplateColumns = 'minmax(0, 1fr)'; return; }
+    const rows = Math.ceil(items.length / fits);
     const cols = Math.ceil(items.length / rows);
-    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
-    const short = cols * rows - items.length;
-    items.forEach((item, i) => {
-      item.style.gridColumn = short && i === items.length - 1 ? `span ${short + 1}` : '';
-    });
+    grid.style.gridTemplateColumns = `repeat(${cols}, ${width}px)`;
   }
 
   const sized = new ResizeObserver((entries) => entries.forEach((e) => balance(e.target)));
@@ -128,7 +141,7 @@
 
   function findGrids() {
     queued = false;
-    for (const panel of $$('main .panel')) slim(panel);
+    for (const panel of $$('main .panel')) { slim(panel); fit(panel); }
     for (const grid of $$(SELECTOR)) {
       if (!seen.has(grid)) { seen.add(grid); sized.observe(grid); }
       balance(grid);
@@ -140,11 +153,45 @@
     new MutationObserver(() => {
       if (!queued) { queued = true; requestAnimationFrame(findGrids); }
     }).observe(main, { childList: true, subtree: true });
+    // A wider window has room for more cards in a row.
+    new ResizeObserver(() => {
+      if (!queued) { queued = true; requestAnimationFrame(findGrids); }
+    }).observe(main);
     findGrids();
+  }
+
+  /* -- the tab bar's gliding pill ---------------------------------------- */
+  const glider = make('span', { class: 'tab-glider', 'aria-hidden': 'true' });
+  function glide() {
+    const nav = document.getElementById('tabs');
+    if (!nav || nav.hidden) return;
+    if (!glider.isConnected) { nav.prepend(glider); nav.classList.add('has-glider'); }
+    const tab = nav.querySelector('.tab.is-active');
+    if (!tab || !tab.offsetWidth) { glider.classList.remove('is-on'); return; }
+    glider.style.width = `${tab.offsetWidth}px`;
+    glider.style.transform = `translateX(${tab.offsetLeft}px)`;
+    glider.style.top = `${tab.offsetTop}px`;
+    glider.classList.add('is-on');
+    const left = tab.offsetLeft - nav.scrollLeft;
+    if (left < 0 || left + tab.offsetWidth > nav.clientWidth) {
+      nav.scrollTo({ left: tab.offsetLeft - nav.clientWidth / 2 + tab.offsetWidth / 2 });
+    }
+  }
+  function watchTabs() {
+    const nav = document.getElementById('tabs');
+    if (!nav) return;
+    // Paths reorder and hide tabs; the bar shows once signed in.
+    new MutationObserver((records) => {
+      if (records.some((r) => r.target !== glider)) requestAnimationFrame(glide);
+    }).observe(nav,
+      { attributes: true, subtree: true, attributeFilter: ['class', 'style', 'hidden'] });
+    new ResizeObserver(() => glide()).observe(nav);
+    glide();
   }
 
   function start() {
     dress();
+    watchTabs();
     watchGrids();
     const switchTo = window.switchView;
     if (typeof switchTo === 'function') {
@@ -152,6 +199,7 @@
         const result = switchTo.call(this, view, ...rest);
         document.body.dataset.tone = toneOf(view);
         requestAnimationFrame(findGrids);
+        requestAnimationFrame(glide);
         return result;
       };
     }

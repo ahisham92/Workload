@@ -325,3 +325,95 @@ body[data-tone] .thumb-bar { background: color-mix(in srgb, var(--tone) 6%, var(
 .panel.is-slim .btn, .panel.is-slim .row, .panel.is-slim .view-actions { order: 2; }
 /* A person's day is as tall as their day, not as the busiest one's. */
 .view[data-tone] .day-grid { align-items: start; margin-bottom: 12px; }
+
+/* ---------------------------------------------- a smooth tab bar */
+/* Ahmed (9 Oct): the row of underlined tabs felt poor. The tabs are now soft
+   pills on one frosted bar; a pill in the tab's colour glides to the tab
+   chosen (look.js moves .tab-glider). The paths sit in the same band as a
+   quiet row of chips, so the top reads as one piece. */
+body[data-tone] .tabs {
+  gap: 4px; padding: 8px 16px 6px; border-bottom: 0;
+  background: color-mix(in srgb, color-mix(in srgb, var(--tone) 7%, var(--surface-base)) 86%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px); backdrop-filter: saturate(1.4) blur(14px);
+  box-shadow: none; scrollbar-width: none; scroll-behavior: smooth; position: sticky;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab-glider {
+  position: absolute; top: 8px; left: 0; height: 36px; width: 0; z-index: 0; border-radius: 999px;
+  pointer-events: none; opacity: 0;
+  background: linear-gradient(120deg, var(--tone, var(--accent)), var(--tone-2, var(--accent)));
+  box-shadow: 0 6px 16px -6px var(--tone, var(--accent));
+  transition: transform .35s cubic-bezier(.3, .9, .3, 1), width .35s cubic-bezier(.3, .9, .3, 1), opacity .2s;
+}
+.tab-glider.is-on { opacity: 1; }
+body[data-tone] .tab {
+  position: relative; z-index: 1; height: 36px; padding: 0 14px; border: 0; border-radius: 999px;
+  color: var(--muted); font-weight: 600; background: none;
+  transition: color .25s, background-color .2s;
+}
+body[data-tone] .tab:hover { color: var(--text); background: color-mix(in srgb, var(--tone) 8%, transparent); }
+body[data-tone] .tab[data-tone] .tab-icon { color: var(--tone); transition: color .25s; }
+body[data-tone] .tab.is-active, body[data-tone] .tab[data-tone].is-active {
+  color: #fff; background: none; border: 0;
+}
+body[data-tone] .tab.is-active .tab-icon { color: #fff; }
+/* Without the glider (it has not been placed yet), the chosen tab still shows. */
+.tabs:not(.has-glider) .tab.is-active { background: linear-gradient(120deg, var(--tone), var(--tone-2)); }
+
+body[data-tone] .path-bar {
+  padding: 2px 16px 10px; border-bottom: 0;
+  background: color-mix(in srgb, color-mix(in srgb, var(--tone) 7%, var(--surface-base)) 86%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px); backdrop-filter: saturate(1.4) blur(14px);
+  box-shadow: 0 10px 22px -18px rgba(16, 24, 40, .45);
+}
+body[data-tone] .path-bar-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+body[data-tone] .path-chip { font-size: 12.5px; padding: 3px 11px; background: transparent; transition: background .2s, color .2s; }
+body[data-tone] .path-chip:not(.is-on):hover { background: color-mix(in srgb, var(--tone, var(--accent)) 10%, transparent); }
+body[data-tone] .path-chip:not([data-path]).is-on { background: var(--navy); border-color: var(--navy); }
+
+/* The phone's bar: a floating pill, frosted, above the page. */
+@media (max-width: 700px) {
+  body[data-tone] .thumb-bar:not([hidden]) {
+    left: 10px; right: 10px; bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 4px; border: 0; border-radius: 22px;
+    background: color-mix(in srgb, color-mix(in srgb, var(--tone) 7%, var(--surface-base)) 82%, transparent);
+    -webkit-backdrop-filter: saturate(1.4) blur(16px); backdrop-filter: saturate(1.4) blur(16px);
+    box-shadow: 0 12px 30px -10px rgba(16, 24, 40, .4), 0 0 0 1px color-mix(in srgb, var(--tone) 14%, transparent);
+  }
+  body[data-tone] .thumb-bar button { min-height: 52px; border-radius: 18px; transition: background .25s, color .25s; }
+  body[data-tone] .thumb-bar button.is-active { color: #fff; background: linear-gradient(120deg, var(--tone), var(--tone-2)); }
+  body[data-tone] .thumb-bar button.is-active .tab-icon { background: none; }
+  body.has-thumb-bar { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { .tab-glider, .tabs { transition: none; scroll-behavior: auto; } }
+/* The bar scrolls sideways when the tabs outrun it; its ends fade out so it
+   is plain there is more. */
+body[data-tone] .tabs {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 40px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 40px), transparent 100%);
+}
+/* A tab's own sections (Today, Plan vs actual, …) stay on one smooth row
+   that slides sideways on a phone, rather than wrapping into a block. */
+.view[data-tone] .subtabs {
+  display: flex; flex-wrap: nowrap; width: max-content; max-width: 100%; overflow-x: auto;
+  scrollbar-width: none; scroll-behavior: smooth; gap: 2px; padding: 4px;
+  background: color-mix(in srgb, var(--tone) 9%, var(--surface-base));
+  border-color: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+.view[data-tone] .subtabs::-webkit-scrollbar { display: none; }
+.view[data-tone] .subtab { flex: none; font-weight: 600; transition: background .25s, color .25s; }
+.view[data-tone] .subtab:not(.is-active):hover { background: color-mix(in srgb, var(--tone) 10%, transparent); }
+@media (max-width: 700px) {
+  body[data-tone] .path-bar { padding: 8px 16px; }
+}
+
+/* ------------------------------------------- nothing wider than it needs */
+/* look.js marks a box .fits when nothing in it is drawn to fill the width:
+   it is then only as wide as what it holds, and the tab's colour shows
+   beside it. Text keeps to a readable line length, so a long sentence does
+   not stretch a box either. */
+.view[data-tone] .panel.fits { width: fit-content; max-width: 100%; }
+.view[data-tone] .panel p, .view[data-tone] .panel .muted { max-width: 78ch; }
+.view[data-tone] .holiday-prompt > span:first-child { flex: 0 1 auto; }
+.view[data-tone] .panel.fits .panel-head { gap: 16px; }
+.view[data-tone] .day-grid, .view[data-tone] .cards-3 { justify-content: start; }
