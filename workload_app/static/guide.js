@@ -18,7 +18,7 @@
   // where: the tab, as its button reads. go: [view, planner subtab] for the
   // manager page, or the id of a panel on the engineer's page.
   const MANAGER = {
-    intro: 'New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
+    intro: 'The app opens on four paths: plan people, see the workload, read the results, or set up. Each keeps only its own tabs; Show, above the tabs, changes it. New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
       + 'below is all you need. Tap any box to go there.',
     setup: [
       { title: 'Bring in your files', do: 'Timesheets and budgets together, in one place',

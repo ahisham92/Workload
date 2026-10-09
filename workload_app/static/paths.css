@@ -1,0 +1,41 @@
+/* Selecao+ — paths: what do you want to do? (paths.js) */
+
+.tab.off-path { display: none; }
+
+.path-bar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 20px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  overflow-x: auto; scrollbar-width: none;
+}
+.path-bar[hidden] { display: none; }
+.path-bar::-webkit-scrollbar { display: none; }
+.path-bar-label { color: var(--muted); font-size: .82rem; margin-right: 2px; flex: none; }
+.path-chip {
+  appearance: none; flex: none; font: inherit; font-size: .85rem; cursor: pointer;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); white-space: nowrap;
+}
+.path-chip:hover { border-color: var(--accent); }
+.path-chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.path-chip-ghost { border-style: dashed; color: var(--muted); }
+
+.path-carry { margin-bottom: 14px; }
+.path-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.path-card {
+  appearance: none; font: inherit; color: var(--text); text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 18px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface); box-shadow: var(--shadow);
+  transition: border-color .15s, transform .15s;
+}
+.path-card:hover, .path-card:focus-visible { border-color: var(--accent); transform: translateY(-2px); }
+.path-card.is-last { border-color: var(--accent); }
+.path-card-icon {
+  width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent); font-size: 1.3rem;
+}
+.path-card-title { font-size: 1.1rem; font-weight: 700; }
+.path-card-say { color: var(--muted); }
+.path-card-tabs { font-size: .82rem; color: var(--accent); font-weight: 600; }
+.path-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.path-skip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .9rem; }

@@ -1029,6 +1029,8 @@ async function enterApp() {
   await refreshAll();
   switchView('overview');
   openViewFromAddress();
+  // Opening the app offers the paths first (paths.js), unless a link named a view.
+  if (window.paths) window.paths.opened();
 }
 
 /* A notification on the phone opens the app at the view it is about:

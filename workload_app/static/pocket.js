@@ -53,12 +53,17 @@
     onclick: () => (sheet.hidden ? openSheet() : closeSheet()) });
   moreButton.innerHTML = `${MORE_ICON}<span>More</span>`;
 
-  const visibleTabs = () => Array.from(tabs.querySelectorAll('.tab')).filter((t) => !t.hidden);
+  // A tab off the chosen path (paths.js) is out of the bar as well.
+  const visibleTabs = () => Array.from(tabs.querySelectorAll('.tab'))
+    .filter((t) => !t.hidden && !t.classList.contains('off-path'));
   const labelOf = (tab) => tab.textContent.replace(/\s+/g, ' ').trim();
 
   function split() {
     const all = visibleTabs();
     const rank = (tab) => {
+      // A chosen path orders its own tabs first (paths.js sets a negative order).
+      const order = Number(tab.style.order);
+      if (order < 0) return order;
       const i = DAILY.indexOf(tab.dataset.view);
       return i < 0 ? Infinity : i;
     };
