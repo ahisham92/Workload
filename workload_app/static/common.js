@@ -41,6 +41,12 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const BASE = new URL('.', window.location.href).pathname.replace(/\/$/, '');
 
 /** A failed request's messages, as a toast (the page's own `toast`). */
+/** An error's words, each said once: a plain error repeats its message as its
+    only error, and showing both printed it twice. */
+function errorText(error) {
+  return [...new Set([error.message, ...(error.errors || [])])].join(' ');
+}
+
 function toastError(error) {
   toast((error.errors || [error.message]).join(' '), 'bad');
 }

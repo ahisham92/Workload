@@ -2605,14 +2605,23 @@ class WorkloadService:
             result.update(token=token, ready=ready)
             return result
 
-    def bring_in_apply(self, token: str) -> Dict[str, Any]:
+    def bring_in_apply(self, token: str,
+                       files: Optional[Sequence[Dict[str, Any]]] = None
+                       ) -> Dict[str, Any]:
         """Bring the checked files in: timesheets, then budgets, then drawings.
 
         Each step stands on its own: one that fails says why, and the steps
         after it still run on what is already there.
+
+        A check is held in this process's memory, and a host may run several
+        workers: the one answering Bring in need not be the one that checked.
+        So the page sends the files again with the token, and when the token
+        is not held here they are read again, as the check read them.
         """
         with self._lock:
             staged = self._staged.pop(token, None)
+            if not (isinstance(staged, dict) and staged.get("bring_in")) and files:
+                staged = self._staged.pop(self.bring_in_check(files)["token"], None)
             if not isinstance(staged, dict) or not staged.get("bring_in"):
                 raise ApiError(HTTPStatus.NOT_FOUND,
                                "That check has expired. Choose the files again.")

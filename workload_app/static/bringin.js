@@ -17,7 +17,7 @@
  */
 'use strict';
 
-const bring = { state: null, check: null, done: null, busy: false };
+const bring = { state: null, check: null, files: null, done: null, busy: false };
 
 /** Each kind of file: what it is, where it comes from, and what it fills. */
 const BI_KINDS = [
@@ -84,11 +84,15 @@ async function checkFiles(files) {
   bring.done = null;
   renderBringIn();
   try {
-    bring.check = await voyage.during(`Reading ${files.length} file(s)`, async () => api(
-      '/api/bring-in/check', { method: 'POST', body: { files: await filesBase64(files) } }));
+    bring.check = await voyage.during(`Reading ${files.length} file(s)`, async () => {
+      // Kept for Bring in, which sends them again: the server that answers it
+      // may not be the one that did the check.
+      bring.files = await filesBase64(files);
+      return api('/api/bring-in/check', { method: 'POST', body: { files: bring.files } });
+    });
   } catch (error) {
     bring.check = null;
-    toast([error.message, ...(error.errors || [])].join(' '), 'bad');
+    toast(errorText(error), 'bad');
   } finally {
     bring.busy = false;
   }
@@ -136,15 +140,16 @@ async function applyFiles() {
   bring.busy = true;
   try {
     bring.done = await voyage.during('Bringing it in', () => api(
-      '/api/bring-in/apply', { method: 'POST', body: { token: check.token } }));
+      '/api/bring-in/apply', { method: 'POST', body: { token: check.token, files: bring.files } }));
     bring.check = null;
+    bring.files = null;
     bring.state = bring.done.state;
     const fine = bring.done.steps.every((s) => s.ok);
     toast(fine ? 'Brought in. Every tab is up to date.' : 'Brought in, with something to look at.',
       fine ? 'ok' : 'bad');
     await refreshAll();
   } catch (error) {
-    toast([error.message, ...(error.errors || [])].join(' '), 'bad');
+    toast(errorText(error), 'bad');
   } finally {
     bring.busy = false;
   }
