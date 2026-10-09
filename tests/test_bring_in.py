@@ -186,3 +186,27 @@ class TestThePage:
 
     def test_the_start_card_is_drawn_after_every_refresh(self):
         assert "window.bringin.startHere()" in self.app
+
+
+class TestPaths:
+    def setup_method(self):
+        from workload_app.app import STATIC_DIR
+        self.index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.paths = (STATIC_DIR / "paths.js").read_text(encoding="utf-8")
+        self.app = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    def test_the_app_opens_on_the_paths(self):
+        assert 'id="view-paths"' in self.index and 'src="paths.js"' in self.index
+        assert "window.paths.opened()" in self.app
+
+    def test_every_path_leads_to_tabs_that_exist(self):
+        import re
+        views = set(re.findall(r'data-view="([a-z]+)"', self.index))
+        lists = re.findall(r"tabs: \[([^\]]+)\]", self.paths)
+        assert len(lists) == 4
+        for found in lists:
+            for view in re.findall(r"'([a-z]+)'", found):
+                assert view in views, view
+        # Between them, the paths reach every tab but help and Admin.
+        reached = {v for found in lists for v in re.findall(r"'([a-z]+)'", found)}
+        assert views - reached == {"guide", "admin"}
