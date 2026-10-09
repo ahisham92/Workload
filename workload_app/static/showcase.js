@@ -228,12 +228,15 @@
       return ra - rb || a.localeCompare(b);
     });
     const period = state.report && state.report.period ? state.report.period.label : '';
+    // Hours used counts only to the last timesheet day, so the caption says so.
+    const upto = state.report && typeof countedTo === 'function' ? countedTo(state.report) : null;
+    const counted = !upto ? '' : upto.stale ? `, counted ${upto.short} (the last timesheet day)` : ' so far';
     setChildren(host,
       el('div', { class: 'panel-head' },
         el('div', {},
           el('h3', {}, 'The team at a glance'),
           el('p', { class: 'muted' },
-            `Each person's score and the measures behind it for ${period || 'the period'}, `
+            `Each person's score and the measures behind it for ${period || 'the period'}${counted}, `
             + 'how loaded they are and what they are on next. Ordered by score. Open a card for '
             + 'the whole picture.')),
         el('span', { class: 'legend' },

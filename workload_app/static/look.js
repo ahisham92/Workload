@@ -61,8 +61,61 @@
     document.body.dataset.tone = toneOf(active ? active.id.replace(/^view-/, '') : 'overview');
   }
 
+  /* -- rows that fill the width ------------------------------------------ */
+  // A grid of cards fills its row: as many columns as fit, then balanced so
+  // the rows hold the same number (six cards are three and three, not five
+  // and one), and a short last row stretches its last card to the edge. So
+  // no grid leaves a blank stretch of panel beside it.
+  const GRIDS = { 'pc-grid': 232, 'eng-grid': 320, 'day-grid': 280, 'ci-grid': 320,
+    'gr-people': 300, 'unit-grid': 280, 'cards-3': 230, findings: 300, 'hero-strip': 280,
+    'load-grid': 260, 'report-grid': 340, 'bi-kinds': 220, ideas: 280, 'gr-grades': 420,
+    'bu-detail-grid': 320 };
+  const SELECTOR = Object.keys(GRIDS).map((c) => `.${c}`).join(',');
+
+  function balance(grid) {
+    const key = Object.keys(GRIDS).find((c) => grid.classList.contains(c));
+    const items = Array.from(grid.children).filter((n) => !n.hidden);
+    const width = grid.clientWidth;
+    if (!key || !items.length || !width) return;
+    // A row that scrolls sideways (the people cards on a phone) keeps its own layout.
+    if (getComputedStyle(grid).gridAutoFlow.startsWith('column')) {
+      grid.style.gridTemplateColumns = '';
+      items.forEach((item) => { item.style.gridColumn = ''; });
+      return;
+    }
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 12;
+    const fit = Math.max(1, Math.floor((width + gap) / (GRIDS[key] + gap)));
+    const rows = Math.ceil(items.length / fit);
+    const cols = Math.ceil(items.length / rows);
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    const short = cols * rows - items.length;
+    items.forEach((item, i) => {
+      item.style.gridColumn = short && i === items.length - 1 ? `span ${short + 1}` : '';
+    });
+  }
+
+  const sized = new ResizeObserver((entries) => entries.forEach((e) => balance(e.target)));
+  const seen = new WeakSet();
+  let queued = false;
+  function findGrids() {
+    queued = false;
+    for (const grid of $$(SELECTOR)) {
+      if (!seen.has(grid)) { seen.add(grid); sized.observe(grid); }
+      balance(grid);
+    }
+  }
+  function watchGrids() {
+    const main = document.getElementById('main');
+    if (!main) return;
+    new MutationObserver(() => {
+      if (!queued) { queued = true; requestAnimationFrame(findGrids); }
+    }).observe(main, { childList: true, subtree: true });
+    findGrids();
+  }
+
   function start() {
     dress();
+    watchGrids();
     const switchTo = window.switchView;
     if (typeof switchTo === 'function') {
       window.switchView = function (view, ...rest) {
@@ -75,5 +128,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 
-  window.look = { toneOf, dress };
+  window.look = { toneOf, dress, balance };
 }());
