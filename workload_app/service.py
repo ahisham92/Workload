@@ -93,7 +93,8 @@ def _remembered(method):
         with self._lock:
             wb = self.workbook
             key = ("view", method.__name__, json.dumps(
-                [args, self.unit, self.read_only, self._unlocked],
+                [args, self.unit, self.read_only, self._unlocked,
+                 self._official_rows()],
                 sort_keys=True, default=str), _today().isoformat())
             return unit_module.fresh_copy(
                 wb._cached(key, lambda: method(self, *args)))
@@ -119,6 +120,11 @@ class WorkloadService:
         #: Takes a dated copy of the unit, before a change that replaces a lot
         #: at once; the app knows where copies go, so it hands this in.
         self.keep_copy: Optional[Callable[[], Any]] = None
+        #: The site's list of official holidays, which every unit in a country
+        #: follows, and where what the timesheets show is added to it.  The app
+        #: hands these in; a unit on its own has neither.
+        self.official_list: Optional[Callable[[], List[Dict[str, Any]]]] = None
+        self.official_learn: Optional[Callable[[List[Dict[str, Any]]], Any]] = None
         if path is not None:
             self.open(path)
 
@@ -1040,6 +1046,58 @@ class WorkloadService:
             return {"applied": len(proposals), "save": self._commit(),
                     "proposals": self._list_proposals(wb)}
 
+    def _official_rows(self) -> List[Dict[str, Any]]:
+        """The site's official holidays, or none for a unit on its own."""
+        if self.official_list is None:
+            return []
+        try:
+            return self.official_list()
+        except Exception:                       # pragma: no cover - never fatal
+            return []
+
+    def _learned_holidays(self, wb, rows, country: Optional[str],
+                          today: _dt.date) -> List[Dict[str, Any]]:
+        """What this unit's timesheets say about its country's holidays.
+
+        A day most people booked as a holiday is one; a built-in one most
+        people worked through is not.  Days the built-in list already has
+        right are left out.
+        """
+        if not country:
+            return []
+        counts = wb._cached(("leave", "holiday_counts"),
+                            lambda: calendar_.holidays_from_timesheets(rows))
+        if not counts:
+            return []
+        first = _dt.date.fromisoformat(min(counts))
+        last = _dt.date.fromisoformat(max(counts))
+        built_in = holidays_module.days_between(country, first, min(last, today))
+        learned = calendar_.learned_holidays(counts, built_in)
+        def name_of(day: str) -> str:
+            # Named after the built-in holiday it stands for, when it is near
+            # one: a holiday moved to a Thursday, or a day added to Eid.
+            near = sorted((abs((_dt.date.fromisoformat(day)
+                                - _dt.date.fromisoformat(other)).days), other)
+                          for other in built_in)
+            for gap, other in near:
+                if gap <= 7 and other in learned["remove"]:
+                    return f"{built_in[other]} (moved)"
+            for gap, other in near:
+                if gap <= 3:
+                    return f"{built_in[other]} (extra day)"
+            return holidays_module.LEARNED_NAME
+        out = [{"country": country, "day": day, "off": True, "source": "timesheets",
+                "name": name_of(day)}
+               for day in learned["add"] if day not in built_in]
+        out += [{"country": country, "day": day, "off": False, "source": "timesheets",
+                 "name": built_in[day]} for day in learned["remove"]]
+        return out
+
+    def _half_days(self, wb, rows) -> Dict[str, Any]:
+        """Half days of leave: a personal excuse booked on the timesheets."""
+        return wb._cached(("leave", "half_days"),
+                          lambda: calendar_.half_days_from_timesheets(rows))
+
     def _calendar(self, wb, rows, people: Sequence[Dict[str, Any]] = (),
                   teams: Sequence[Dict[str, Any]] = ()):
         """The working-day settings, less holidays and whoever is away."""
@@ -1047,14 +1105,26 @@ class WorkloadService:
         leave = {name: set(days) for name, days in self._leave(wb, rows).items()}
         absences = self.store.absences()
         choice = self._holiday_choice(teams)
+        site = self._official_rows()
+        learned = self._learned_holidays(wb, rows, choice.get("unit"), today)
+        listed = {(r["country"], r["day"]) for r in site}
+        new = [r for r in learned if (r["country"], r["day"]) not in listed]
+        if new and self.official_learn is not None:
+            # Every other unit in the country follows what these show.
+            try:
+                self.official_learn(new)
+            except Exception:                   # pragma: no cover - never fatal
+                pass
         public = holidays_module.calendar_for(
             choice, people=people,
             start=today - _dt.timedelta(days=HOLIDAYS_BEHIND_DAYS),
-            end=today + _dt.timedelta(days=HOLIDAYS_AHEAD_DAYS))
+            end=today + _dt.timedelta(days=HOLIDAYS_AHEAD_DAYS),
+            official=holidays_module.official_changes(site + new))
         config = calendar_.with_calendar(
             wb.task_settings(),
             holidays=calendar_.workbook_holidays(wb) | public["common"],
-            absences=absences, leave=leave, own_holidays=public["own"])
+            absences=absences, leave=leave, own_holidays=public["own"],
+            half_days=self._half_days(wb, rows))
         return config, absences, leave, public, choice
 
     def _work_calendar(self, wb) -> Dict[str, Any]:
@@ -1392,7 +1462,8 @@ class WorkloadService:
             inputs["config"], inputs["absences"], inputs["leave"], today,
             today + _dt.timedelta(days=AWAY_AHEAD_DAYS),
             public=inputs["public"]["named"],
-            country_names={c["code"]: c["name"] for c in holidays_module.choices()})
+            country_names={c["code"]: c["name"] for c in holidays_module.choices()},
+            half_days=inputs["config"].get("half_away") or {})
 
     def _holidays_view(self, inputs: Dict[str, Any], today: _dt.date) -> Dict[str, Any]:
         choice = inputs["holiday_choice"]

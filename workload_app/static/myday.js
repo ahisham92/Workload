@@ -17,7 +17,7 @@ const myDay = { unit: null, day: null, sheet: null, date: null, week: null, open
 const MD_KIND = {
   task: 'Task', submission: 'Submission', meeting: 'Meeting', request: 'Request',
   management: 'Team', development: 'Development', work: 'Project work', done: 'Done',
-  outlook: 'Outlook', typed: 'Meeting',
+  outlook: 'Outlook', typed: 'Meeting', half_day: 'Half day off',
 };
 
 function mdQuery(extra = {}) {

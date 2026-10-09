@@ -287,7 +287,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                 present = calendar_.present_days(config, person["name"], days)
                 supply[key][i] += present * max(
                     0.0, a_day - management.get(person["name"], 0.0))
-                away_days[key][i] += len(days) - present
+                away_days[key][i] += _whole(len(days) - present)
 
     groups = []
     alerts = []
@@ -308,7 +308,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                 "from": first.isoformat(), "to": last.isoformat(),
                 "demand_hours": round(work[i], 1),
                 "capacity_hours": round(cap, 1),
-                "away_days": away_days[key][i] if key in away_days else 0,
+                "away_days": _whole(away_days[key][i]) if key in away_days else 0,
                 "load": round(work[i] / cap, 3) if cap else None,
                 "gap_people": round(gap, 2),
             })
@@ -420,7 +420,7 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
         end = _dt.date.fromisoformat(run[-1]["to"])
         open_ended = j == len(weeks) - 1
         if len(run) < MIN_NEED_WEEKS and not open_ended:
-            away = sum(w.get("away_days", 0) for w in run)
+            away = _whole(sum(w.get("away_days", 0) for w in run))
             why = (f"{away} day{'s' if away != 1 else ''} away" if away
                    else "a busy week")
             out.append({
@@ -481,3 +481,8 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
                 "from": start.isoformat(), "to": end.isoformat(), "ask_by": None,
             })
     return out
+
+
+def _whole(value: float) -> float:
+    """5.0 days reads as 5; half a day off stays a half."""
+    return int(value) if float(value).is_integer() else value

@@ -20,6 +20,7 @@ is found a different way, and then sees exactly what it always did.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import functools
 import gzip
 import hashlib
@@ -37,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import (accounts as accounts_module, bringin, budgets, busy_calendar,
-               export as export_module, management,
+               export as export_module, holidays as holidays_module, management,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
 from .accounts import (AccountError, Accounts, ROLE_MANAGER,
@@ -256,11 +257,19 @@ class WorkloadApp:
         self._to_tell: Dict[str, Tuple[int, float]] = {}
 
     # -- the services one account at a time ------------------------------
+    def _new_service(self) -> WorkloadService:
+        """A service that follows the site's official holidays, and adds to
+        them what its timesheets show."""
+        service = WorkloadService(autosave=self.autosave)
+        service.official_list = self.accounts.official_holidays
+        service.official_learn = self.accounts.learn_official_holidays
+        return service
+
     def service_for(self, user_id: int) -> WorkloadService:
         with self._services_lock:
             service = self._services.pop(user_id, None)
             if service is None:
-                service = WorkloadService(autosave=self.autosave)
+                service = self._new_service()
             self._services[user_id] = service
             # The oldest is only forgotten, not closed: a request on another
             # thread may still be using it, and closing it would pull its unit
@@ -910,7 +919,7 @@ class WorkloadApp:
             if unit["id"] == current and ctx.service._wb is not None:
                 view = ctx.service.checkins()
             else:
-                service = WorkloadService(autosave=self.autosave)
+                service = self._new_service()
                 try:
                     if theirs:
                         # Another manager's unit, looked at and never changed.
@@ -1624,7 +1633,7 @@ class WorkloadApp:
             return {"ok": False, "recorded": True}
         # A service of its own: whatever the manager has open in the browser,
         # and anything they have staged there, is left exactly as it was.
-        service = WorkloadService(autosave=self.autosave)
+        service = self._new_service()
         kind = str(body.get("kind") or "timesheets")
         if kind != "timesheets":
             # The budgets step. Its answer is for the PC's log alone: the
@@ -1727,6 +1736,80 @@ class WorkloadApp:
     def push_check(self, ctx: Context, query, body) -> Dict[str, Any]:
         """Look now, rather than waiting for the morning's run."""
         return notify.run(self, user_ids=[ctx.user["id"]])
+
+    # ------------------------------------------------------------------
+    # official holidays: one list for the site, kept by its administrator
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _holiday_admin(ctx: Context) -> bool:
+        """Inside a site, its administrator; on its own, an admin account."""
+        if ctx.site is not None:
+            return _site_admin(ctx.site)
+        return bool(ctx.user and ctx.user["is_admin"])
+
+    def official_holidays(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """A country's official holidays for a year, as every unit there has
+        them: built in, added by the administrator, or from the timesheets."""
+        try:
+            code = holidays_module.clean_country(
+                (query.get("country") or ["EG"])[0]) or "EG"
+        except ValueError:
+            code = "EG"
+        this_year = service_today().year
+        try:
+            year = int((query.get("year") or [this_year])[0])
+        except (TypeError, ValueError):
+            year = this_year
+        year = min(max(year, 2000), 2100)
+        return {
+            "country": code,
+            "country_name": holidays_module.COUNTRIES[code]["name"],
+            "year": year,
+            "can_edit": self._holiday_admin(ctx),
+            "countries": holidays_module.choices(),
+            "days": holidays_module.official_year(
+                code, year, self.accounts.official_holidays(code)),
+        }
+
+    def _official_day(self, ctx: Context, country: Any, day: Any):
+        if not self._holiday_admin(ctx):
+            raise ApiError(HTTPStatus.FORBIDDEN,
+                           "Only the site's administrator changes the official "
+                           "holidays. Each unit can still mark a day "
+                           "\"Not a holiday\" for itself.")
+        try:
+            code = holidays_module.clean_country(country)
+        except ValueError:
+            code = None
+        if not code:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "Choose a country.")
+        try:
+            iso = _dt.date.fromisoformat(str(day or "")).isoformat()
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "Give the day as a date.")
+        return code, iso
+
+    def set_official_holiday(self, ctx: Context, query, body) -> Dict[str, Any]:
+        """The administrator adds a day for every unit in a country, or says
+        a built-in one is not a holiday this year."""
+        code, iso = self._official_day(ctx, body.get("country"), body.get("date"))
+        off = body.get("off", True) is not False
+        name = " ".join(str(body.get("name") or "").split())[:80]
+        if off and not name:
+            name = "Official holiday"
+        self.accounts.set_official_holiday(code, iso, name=name, off=off,
+                                           set_by=ctx.user["id"])
+        return self.official_holidays(
+            ctx, {"country": [code], "year": [iso[:4]]}, {})
+
+    def undo_official_holiday(self, ctx: Context, query, body, country,
+                              day) -> Dict[str, Any]:
+        """Take back what the administrator set for a day."""
+        code, iso = self._official_day(ctx, country, day)
+        self.accounts.clear_official_holiday(code, iso)
+        return self.official_holidays(
+            ctx, {"country": [code], "year": [iso[:4]]}, {})
 
     # ------------------------------------------------------------------
     # the routes
@@ -1913,6 +1996,10 @@ class WorkloadApp:
             ("GET", "/api/holidays", s("holidays"), "manager"),
             ("PUT", "/api/holidays", s("save_holidays", body=True), "manager"),
             ("POST", "/api/absences", s("add_absence", body=True), "manager"),
+            ("GET", "/api/official-holidays", self.official_holidays, "user"),
+            ("POST", "/api/official-holidays", self.set_official_holiday, "user"),
+            ("POST", "/api/official-holidays/{}/{}/undo",
+             self.undo_official_holiday, "user"),
             ("POST", "/api/absences/{}/remove",
              lambda ctx, q, b, absence_id: ctx.service.remove_absence(_int(absence_id)),
              "manager"),

@@ -728,7 +728,8 @@ async function overviewNeeds() {
 /* -- today ------------------------------------------------------------- */
 
 const KIND_LABEL = { request: 'Request', submission: 'Submission', meeting: 'Meeting',
-  management: 'Team', development: 'Development', task: 'Task', work: '' };
+  management: 'Team', development: 'Development', task: 'Task', work: '',
+  half_day: 'Half day off' };
 
 /** A meeting's agenda, folded away under it until it is wanted. */
 function agendaList(b) {
@@ -964,7 +965,86 @@ function renderDay() {
 /* -- who is away ---------------------------------------------------------- */
 
 const AWAY_SOURCE = { typed: '', timesheet: 'from their timesheet', workbook: 'unit calendar',
-  holiday: 'public holiday' };
+  holiday: 'public holiday', half_day: '' };
+
+/* -- official holidays: one list for the site --------------------------- */
+
+const OFFICIAL_FROM = {
+  built_in: 'built in',
+  admin: 'set by the administrator',
+  timesheets: 'from the timesheets: most people booked it',
+};
+
+/** The site's official holidays for a country and year. Every unit in that
+    country follows this one list; only the site's administrator changes
+    it. A unit can still mark a day "Not a holiday" for itself. */
+async function openOfficial(country, year) {
+  let view;
+  const query = new URLSearchParams();
+  if (country) query.set('country', country);
+  if (year) query.set('year', year);
+  try { view = await api(`/api/official-holidays?${query}`); } catch (error) {
+    toastError(error); return;
+  }
+  const change = async (body, path) => {
+    try {
+      view = path ? await api(path, { method: 'POST', body: {} })
+        : await api('/api/official-holidays', { method: 'POST', body });
+      await replanDay();
+      openOfficial(view.country, view.year);
+    } catch (error) { toastError(error); }
+  };
+  const holidays = view.days.filter((d) => d.off);
+  const notHolidays = view.days.filter((d) => !d.off);
+  const line = (d) => el('li', { class: `request official-day${d.off ? '' : ' is-off'}` },
+    el('span', { class: 'request-time' }, shortDate(d.date)),
+    el('span', { class: 'request-what' },
+      el('b', {}, d.off ? d.name : `${d.built_in_name || d.name}: not a holiday`),
+      el('span', { class: 'muted small' }, ` · ${OFFICIAL_FROM[d.source] || ''}`
+        + (d.source === 'timesheets' && !d.off ? ' worked through it' : '')
+        + (d.expected && d.source === 'built_in' ? ' · follows the moon, may move a day' : ''))),
+    view.can_edit ? (d.source === 'admin'
+      ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+        title: 'Take back what the administrator set for this day.',
+        onclick: () => change(null, `/api/official-holidays/${view.country}/${d.date}/undo`) }, 'Undo')
+      : d.off ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+        title: `Take this day off the list for every unit in ${view.country_name}.`,
+        onclick: () => change({ country: view.country, date: d.date, off: false, name: d.name }) },
+      'Not a holiday')
+        : el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+          onclick: () => change({ country: view.country, date: d.date, off: true, name: d.built_in_name || d.name }) },
+        'It is a holiday'))
+      : el('span'));
+  const day = el('input', { type: 'date', 'aria-label': 'Day' });
+  const name = el('input', { type: 'text', placeholder: 'e.g. Eid al-Adha, extra day', 'aria-label': 'Name', class: 'grow' });
+  const pick = el('select', { 'aria-label': 'Country', onchange: () => openOfficial(pick.value, view.year) },
+    view.countries.map((c) => el('option', { value: c.code }, c.name)));
+  pick.value = view.country;
+  openPanel(`Official holidays: ${view.country_name}`, el('div', { class: 'official-panel' },
+    el('p', { class: 'muted small' },
+      `Every unit in ${view.country_name} follows this one list. Days most people booked as a holiday on `
+      + 'their timesheets are added by themselves; leave stays personal leave. '
+      + (view.can_edit ? 'You can add a day for everyone, or take one off.'
+        : 'Only the site\'s administrator changes it; your unit can still mark a day "Not a holiday" in Days off.')),
+    el('div', { class: 'plan-nav' },
+      pick,
+      el('button', { class: 'btn btn-sm', type: 'button', title: 'Earlier year',
+        onclick: () => openOfficial(view.country, view.year - 1) }, '‹'),
+      el('b', {}, String(view.year)),
+      el('button', { class: 'btn btn-sm', type: 'button', title: 'Later year',
+        onclick: () => openOfficial(view.country, view.year + 1) }, '›')),
+    view.can_edit ? el('div', { class: 'official-add' },
+      day, name,
+      el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => {
+        if (!day.value) { day.focus(); return; }
+        change({ country: view.country, date: day.value, name: name.value.trim(), off: true });
+      } }, 'Add for everyone')) : null,
+    el('h4', {}, `Holidays in ${view.year} (${holidays.length} days)`),
+    holidays.length ? el('ul', { class: 'request-list' }, holidays.map(line))
+      : el('p', { class: 'muted small' }, 'None this year.'),
+    notHolidays.length ? el('h4', {}, 'Built-in days that are not holidays this year') : null,
+    notHolidays.length ? el('ul', { class: 'request-list' }, notHolidays.map(line)) : null));
+}
 const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function weekText(days) {
@@ -1059,18 +1139,19 @@ function awayText(a) {
 /** One line in: who, from, to. Everybody is a public holiday. */
 function markAway(data, name) {
   const people = data.people.map((p) => ({ value: p.name, label: p.name }));
-  openModal('Add a day off', [
+  const everyone = name === '*';
+  openModal(everyone ? 'Holiday for everyone in this unit' : 'Add a day off', [
     { name: 'person', label: 'Who', type: 'select', full: true,
       options: [{ value: '*', label: 'Everybody (a public holiday)' }, ...people] },
     { name: 'start', label: 'From', type: 'date' },
     { name: 'end', label: 'To', type: 'date', hint: 'blank for one day' },
-    { name: 'note', label: 'Why', placeholder: 'Leave, site visit, course…', full: true },
+    { name: 'note', label: 'Why', placeholder: everyone ? 'Bridge day, office closed…' : 'Leave, site visit, course…', full: true },
   ], async () => {
     const values = modalValues();
     const result = await api('/api/absences', { method: 'POST', body: values });
     toast(`${awayText(result)} is off the plan.`, 'ok');
     await replanDay();
-  }, { person: name || '*', start: data.date, end: '' });
+  }, { person: name || (people[0] || {}).value || '*', start: data.date, end: '' });
 }
 
 function awayPanel(data) {
@@ -1085,8 +1166,15 @@ function awayPanel(data) {
             `; ${t.name}: ${(data.holidays.countries.find((c) => c.code === t.country) || {}).name || t.country}`),
           '. ',
           el('button', { class: 'linkish', type: 'button', onclick: () => openHolidays() }, 'Change')) : null),
-      el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
-        'Add a day off')),
+      el('div', { class: 'row-actions' },
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
+          'Add a day off'),
+        el('button', { class: 'btn btn-sm', type: 'button',
+          title: 'A day nobody in this unit works: a bridge day, the office closed.',
+          onclick: () => markAway(data, '*') }, 'Holiday for everyone'),
+        el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+          title: 'The one list of official holidays every unit in the country follows.',
+          onclick: () => openOfficial((data.holidays || {}).unit || 'EG') }, 'Official holidays'))),
     holidayPrompt(data),
     away.length ? el('ul', { class: 'request-list' }, away.map((a) => el('li', { class: 'request' },
       el('span', { class: 'request-time' }, awayWhen(a)),
