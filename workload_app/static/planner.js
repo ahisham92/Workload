@@ -1433,7 +1433,23 @@ function renderSubmissions() {
     }
   };
   const counts = data.counts;
-  setChildren($('#planner-body'),
+  // Every submission and revision, live; the plan below follows it.
+  if (!plan.allSubs) {
+    plan.allSubs = submissionsPanel({ onChange: () => {
+      clearTimeout(plan.followTimer);
+      plan.followTimer = setTimeout(() => refreshSubmissionPlan(), 1500);
+    } });
+  }
+  const body = $('#planner-body');
+  let below = $('#subs-plan', body);
+  if (!below || !body.contains(plan.allSubs.node)) {
+    const shownBefore = plan.allSubs.node.isConnected === false && plan.allSubs.shown;
+    below = el('div', { id: 'subs-plan' });
+    setChildren(body, plan.allSubs.node, below);
+    if (shownBefore) plan.allSubs.reload();
+    plan.allSubs.shown = true;
+  }
+  setChildren(below,
     proposalsBlock(data.from_list, () => loadSubmissions({ quiet: true })),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' },
@@ -1456,7 +1472,7 @@ function renderSubmissions() {
         stat('Date passed', String(counts.overdue), counts.overdue ? 'bad' : 'ok'),
         stat('Nobody on it', String(counts.idle), counts.idle ? 'warn' : 'ok')),
       data.items.length
-        ? el('div', { class: 'table-wrap' }, el('table', { class: 'edit-table submissions-table' },
+        ? el('div', { class: 'table-wrap' }, el('table', { class: 'edit-table gsheet submissions-table' },
             el('thead', {}, el('tr', {},
               el('th', {}, ''), el('th', {}, 'Due'), el('th', {}, 'Deliverable'),
               el('th', {}, 'Date from'), el('th', { class: 'num' }, 'Hours left'),
@@ -1484,6 +1500,17 @@ function renderSubmissions() {
             }))))
         : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')),
     waitingPanel(data));
+}
+
+/** The plan again, after a submission changed above it, leaving the sheet
+    above (and whichever cell is being typed in) as it is. */
+async function refreshSubmissionPlan() {
+  if (plan.view !== 'submissions') { plan.submissions = null; return; }
+  try {
+    const fresh = await api('/api/submissions');
+    plan.submissions = fresh;
+    renderSubmissions();
+  } catch { /* the next visit loads it */ }
 }
 
 /** Sent and nothing back yet: the client's turn, oldest first, to chase. */
@@ -1614,12 +1641,13 @@ function wirePlanner() {
 }
 
 window.planner = {
-  load: () => { plan.needs = null; plan.submissions = null; return openPlanner(); },
+  load: () => { plan.needs = null; plan.submissions = null; plan.allSubs = null; return openPlanner(); },
   board: () => { plan.view = 'handovers'; switchView('planner'); },
   open: (view) => { plan.view = view; switchView('planner'); },
   afterRefresh: () => {
     plan.needs = null;
     plan.submissions = null;
+    if (plan.allSubs) plan.allSubs.reload();
     overviewNeeds();
     if ($('#view-planner').classList.contains('is-active')) openPlanner({ quiet: true });
   },

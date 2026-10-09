@@ -1,0 +1,170 @@
+/* Selecao+ — schedules as sheets, day-first date boxes, and submissions.
+ * (sheet.js, dates.js, subs.js). Loaded after look.css, and in its colours:
+ * nothing here is plain white; cells take the tab's own tint. */
+
+/* -------------------------------------------------------- a sheet's cells */
+table.gsheet {
+  --cell-line: color-mix(in srgb, var(--tone, var(--accent)) 16%, var(--border));
+  --cell-bg: color-mix(in srgb, var(--tone, var(--accent)) 4%, var(--surface));
+  --cell-on: color-mix(in srgb, var(--tone, var(--accent)) 16%, var(--surface));
+  border-collapse: separate; border-spacing: 0;
+}
+table.gsheet thead th {
+  background: color-mix(in srgb, var(--tone, var(--accent)) 12%, var(--surface));
+  color: var(--tone-ink, var(--text)); font-weight: 600; font-size: 12px;
+  letter-spacing: .01em; white-space: nowrap;
+  border-bottom: 2px solid color-mix(in srgb, var(--tone, var(--accent)) 35%, var(--border));
+}
+table.gsheet tbody td {
+  padding: 0; background: var(--cell-bg);
+  border-right: 1px solid var(--cell-line); border-bottom: 1px solid var(--cell-line);
+  transition: background .12s;
+}
+table.gsheet tbody td:last-child { border-right: 0; }
+table.gsheet tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--tone, var(--accent)) 7%, var(--surface)); }
+table.gsheet tbody tr:hover td { background: color-mix(in srgb, var(--tone, var(--accent)) 10%, var(--surface)); }
+table.gsheet tbody td.num, table.gsheet tbody td:first-child.num { padding: 0 8px; }
+
+/* The boxes are the cells: no white boxes inside boxes. */
+table.gsheet input:not([type="checkbox"]), table.gsheet select, table.gsheet textarea {
+  width: 100%; min-height: 36px; margin: 0;
+  border: 0; border-radius: 0; box-shadow: none; outline: 0;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px;
+  padding: 7px 9px;
+}
+table.gsheet select { appearance: none; -webkit-appearance: none; padding-right: 22px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+  background-size: 4px 4px; background-repeat: no-repeat; }
+table.gsheet input::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); }
+table.gsheet td:focus-within {
+  background: var(--surface-base, var(--surface)) !important;
+  box-shadow: inset 0 0 0 2px var(--tone, var(--accent));
+  position: relative; z-index: 1;
+}
+table.gsheet td.is-sel { background: var(--cell-on) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone, var(--accent)) 55%, transparent); }
+table.gsheet td.is-bad { box-shadow: inset 0 0 0 2px var(--bad) !important; }
+table.gsheet tr.row-bad td { background: var(--bad-soft) !important; }
+table.gsheet td .btn-danger { margin: 0 6px; }
+table.gsheet td.num input { text-align: right; }
+.edit-table.gsheet td.num input { min-width: 66px; }
+.edit-table.gsheet td:nth-child(2) input { min-width: 200px; }
+
+/* --------------------------------------------------- day-first date boxes */
+input.dayfield {
+  font-variant-numeric: tabular-nums; cursor: text; min-width: 118px;
+  padding-right: 30px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237b8494' stroke-width='1.8' stroke-linecap='round'%3E%3Crect x='3.5' y='5' width='17' height='15' rx='2.5'/%3E%3Cpath d='M3.5 10h17M8 3v4M16 3v4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center; background-size: 16px 16px;
+}
+input.dayfield.is-bad { box-shadow: inset 0 0 0 2px var(--bad) !important; color: var(--bad); }
+
+.daypick {
+  position: absolute; z-index: 1000; width: 268px; padding: 10px 10px 8px;
+  border-radius: 14px; border: 1px solid var(--tone-line, var(--border));
+  background: color-mix(in srgb, var(--tone, var(--accent)) 6%, var(--surface-base, var(--surface)));
+  box-shadow: 0 18px 40px -18px rgba(16, 24, 40, .45), 0 2px 6px rgba(16, 24, 40, .08);
+  font-size: 13px; user-select: none;
+}
+.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dp-head b { font-weight: 600; }
+.dp-nav { width: 30px; height: 30px; border-radius: 9px; border: 0; background: transparent;
+  color: var(--text); font-size: 18px; cursor: pointer; }
+.dp-nav:hover { background: color-mix(in srgb, var(--tone, var(--accent)) 14%, transparent); }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dp-wd { text-align: center; font-size: 11px; color: var(--muted); padding: 4px 0; }
+.dp-day { height: 32px; border: 0; border-radius: 9px; background: transparent; color: var(--text);
+  font: inherit; cursor: pointer; font-variant-numeric: tabular-nums; }
+.dp-day:hover { background: color-mix(in srgb, var(--tone, var(--accent)) 14%, transparent); }
+.dp-day.is-weekend { color: var(--muted); }
+.dp-day.is-today { box-shadow: inset 0 0 0 1.5px var(--tone, var(--accent)); }
+.dp-day.is-on { background: linear-gradient(135deg, var(--tone, var(--accent)), var(--tone-2, var(--accent))); color: #fff; font-weight: 600; }
+.dp-day:disabled { opacity: .3; cursor: default; }
+.dp-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px;
+  padding-top: 6px; border-top: 1px solid var(--tone-line, var(--border)); }
+.dp-link { border: 0; background: transparent; color: var(--tone-ink, var(--accent)); font: inherit;
+  font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 7px; }
+.dp-link:hover { background: color-mix(in srgb, var(--tone, var(--accent)) 12%, transparent); }
+.dp-hint { color: var(--muted); font-size: 11.5px; }
+
+/* ------------------------------------------------- the project saves itself */
+.save-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 6px 12px;
+  border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-weight: 500; }
+.save-chip::before { content: "✓"; font-weight: 700; }
+.save-chip.is-typing, .save-chip.is-saving { background: var(--accent-soft); color: var(--accent); }
+.save-chip.is-typing::before, .save-chip.is-saving::before { content: "•"; animation: save-pulse 1s infinite; }
+.save-chip.is-held { background: var(--warn-soft); color: var(--warn); }
+.save-chip.is-held::before { content: "!"; }
+.save-chip.is-bad { background: var(--bad-soft); color: var(--bad); }
+.save-chip.is-bad::before { content: "✕"; }
+@keyframes save-pulse { 50% { opacity: .3; } }
+.toast.warn { border-left-color: var(--warn); }
+
+/* ----------------------------------------------------------- submissions */
+.sub-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+.sub-filter { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px 6px 6px;
+  border-radius: 999px; border: 1px solid var(--tone-line, var(--border)); cursor: pointer;
+  background: color-mix(in srgb, var(--tone, var(--accent)) 5%, var(--surface)); color: var(--text); font: inherit; font-size: 13px; }
+.sub-filter b { min-width: 26px; height: 24px; padding: 0 7px; border-radius: 999px; display: inline-grid; place-items: center;
+  background: color-mix(in srgb, var(--tone, var(--accent)) 14%, transparent); font-variant-numeric: tabular-nums; }
+.sub-filter.f-late b { background: var(--bad-soft); color: var(--bad); }
+.sub-filter.f-returned b { background: var(--warn-soft); color: var(--warn); }
+.sub-filter.f-accepted b { background: var(--ok-soft); color: var(--ok); }
+.sub-filter.is-on { background: linear-gradient(120deg, var(--tone, var(--accent)), var(--tone-2, var(--accent))); color: #fff; border-color: transparent; }
+.sub-filter.is-on b { background: rgba(255, 255, 255, .22); color: #fff; }
+
+.subs-table td.sub-what { padding: 7px 10px; min-width: 210px; max-width: 320px; }
+.subs-table td.sub-what.is-old { padding-left: 26px; }
+.subs-table td.sub-rev input { min-width: 54px; max-width: 70px; font-weight: 600; }
+.subs-table td.sub-purpose select { min-width: 74px; }
+.subs-table td.sub-code select { min-width: 132px; }
+.subs-table td.sub-reason input { min-width: 190px; }
+.subs-table td:nth-child(2) { padding: 6px 8px; white-space: nowrap; }
+.subs-table .sub-actions { padding: 0 6px; white-space: nowrap; text-align: right; }
+.subs-table .sub-hint { padding: 0 10px; text-align: right; }
+.sub-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; }
+.sub-fold { border: 0; background: transparent; color: var(--tone-ink, var(--accent)); font: inherit;
+  font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
+.sub-x { color: var(--muted); }
+
+.sub-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; background: var(--surface-2); color: var(--muted); }
+.sub-chip small { font-weight: 500; opacity: .8; margin-left: 2px; }
+.sub-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.st-planned { --st: var(--accent); --st-soft: var(--accent-soft); }
+.st-late { --st: var(--bad); --st-soft: var(--bad-soft); }
+.st-with_client { --st: #7a4fd0; --st-soft: color-mix(in srgb, #7a4fd0 14%, var(--surface)); }
+.st-returned { --st: var(--bad); --st-soft: var(--bad-soft); }
+.st-comments { --st: var(--warn); --st-soft: var(--warn-soft); }
+.st-accepted { --st: var(--ok); --st-soft: var(--ok-soft); }
+.st-none { --st: var(--muted); --st-soft: var(--surface-2); }
+.sub-chip[class*="st-"] { background: var(--st-soft); color: var(--st); }
+.sub-row.is-old td { opacity: .78; }
+.sub-row[data-status="late"] td:first-child, .sub-row[data-status="returned"] td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+.sub-row[data-status="comments"] td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.sub-row[data-status="with_client"] td:first-child { box-shadow: inset 3px 0 0 #7a4fd0; }
+.sub-row[data-status="accepted"] td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+.sub-row.is-saving td { background-image: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tone, var(--accent)) 10%, transparent), transparent); }
+.sub-row.is-saved td:nth-child(2) { box-shadow: inset 0 -2px 0 var(--ok); }
+
+.sub-trail { display: inline-flex; align-items: center; gap: 3px; }
+.sub-mark { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 6px;
+  font-size: 11px; font-weight: 600; background: var(--st-soft); color: var(--st); }
+.sub-mark b { font-weight: 800; }
+.sub-mark + .sub-mark::before { content: "›"; color: var(--muted); margin: 0 3px 0 -1px; font-weight: 400; }
+
+@media (max-width: 700px) {
+  table.gsheet input:not([type="checkbox"]), table.gsheet select { min-height: 42px; font-size: 15px; }
+  .subs-table td.sub-what { min-width: 170px; }
+  .daypick { width: min(300px, calc(100vw - 16px)); }
+  .dp-day { height: 38px; }
+}
+
+/* On a phone the deliverable stays in view while the rest of its row scrolls. */
+@media (max-width: 700px) {
+  .subs-table th:first-child, .subs-table td.sub-what {
+    position: sticky; left: 0; z-index: 2; min-width: 150px; max-width: 170px; white-space: normal;
+    background: color-mix(in srgb, var(--tone, var(--accent)) 9%, var(--surface-base, var(--surface))) !important;
+  }
+}

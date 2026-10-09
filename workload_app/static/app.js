@@ -2141,9 +2141,74 @@ function showProjectDetail() {
 }
 
 function closeDetail() {
+  const changed = state.detail && state.detail.changed;
+  if (state.detail && state.detail.saveTimer) {
+    clearTimeout(state.detail.saveTimer);
+    autoSave();                      // what was typed last still goes
+  }
   state.detail = null;
   $('#project-detail').hidden = true;
   $('#projects-list').hidden = false;
+  if (changed) refreshAll().catch(toastError);
+}
+
+/* A project that is already in the register saves itself as it is edited,
+   a moment after the typing stops: there is no Save step to forget. The one
+   thing that holds a save back is the weights, which have to make 100%. */
+function scheduleSave() {
+  const detail = state.detail;
+  if (!detail || !detail.project) return;
+  clearTimeout(detail.saveTimer);
+  showSaveState('typing');
+  detail.saveTimer = setTimeout(autoSave, 700);
+}
+
+function showSaveState(kind, words) {
+  const node = $('#detail-saved');
+  if (!node) return;
+  const text = {
+    typing: 'Saving…', saving: 'Saving…', saved: words || 'All changes saved',
+    held: words, bad: words,
+  }[kind];
+  node.className = `save-chip is-${kind}`;
+  node.textContent = text;
+}
+
+async function autoSave() {
+  const detail = state.detail;
+  if (!detail || !detail.project) return;
+  detail.saveTimer = null;
+  const total = weightTotal();
+  if (detail.draft.deliverables.length && Math.abs(total - 1) > 1e-4) {
+    showSaveState('held', `Not saved yet: the weights make ${(total * 100).toFixed(1)}%, not 100%`);
+    return;
+  }
+  if (detail.saving) { detail.again = true; return; }
+  detail.saving = true;
+  showSaveState('saving');
+  const { draft } = detail;
+  try {
+    const result = await api(`/api/projects/${encodeURIComponent(detail.project.number)}/full`, {
+      method: 'PUT', body: { project: draft.project, deliverables: draft.deliverables } });
+    markSaved(result.save);
+    // New deliverables now have their ids, so the next save keeps them.
+    result.deliverables.forEach((d, i) => { if (draft.deliverables[i]) draft.deliverables[i].row = d.row; });
+    detail.project = result.project;
+    detail.changed = true;
+    setChildren($('#detail-errors'));
+    const at = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    if (state.detail === detail) showSaveState('saved', `All changes saved ${at}`);
+    if (detail.subs) detail.subs.reload();
+  } catch (error) {
+    if (state.detail === detail) {
+      showSaveState('bad', 'Not saved: see below');
+      setChildren($('#detail-errors'),
+        el('ul', {}, (error.errors || [error.message]).map((e) => el('li', {}, e))));
+    }
+  } finally {
+    detail.saving = false;
+    if (detail.again) { detail.again = false; scheduleSave(); }
+  }
 }
 
 function weightTotal() {
@@ -2165,7 +2230,7 @@ function field(label, name, opts = {}) {
   const input = el('input', {
     type: opts.type || 'text', value: raw ?? '',
     step: opts.step, min: opts.min, max: opts.max,
-    oninput: (e) => { draft[name] = typedValue(e.target, opts); },
+    oninput: (e) => { draft[name] = typedValue(e.target, opts); scheduleSave(); },
   });
   return el('label', { class: 'field' },
     el('span', {}, label, opts.hint ? el('span', { class: 'hint' }, ` — ${opts.hint}`) : null),
@@ -2175,7 +2240,7 @@ function field(label, name, opts = {}) {
 function selectField(label, name, options) {
   const draft = state.detail.draft.project;
   const select = el('select', {
-    onchange: (e) => { draft[name] = e.target.value || null; },
+    onchange: (e) => { draft[name] = e.target.value || null; scheduleSave(); },
   }, options.map((o) => {
     const [value, text] = optionParts(o);
     return el('option', { value }, text);
@@ -2229,7 +2294,7 @@ function renderDetail() {
         el('label', { class: 'field full' },
           el('span', {}, 'Notes'),
           el('textarea', {
-            oninput: (e) => { draft.project.notes = e.target.value; },
+            oninput: (e) => { draft.project.notes = e.target.value; scheduleSave(); },
           }, draft.project.notes || '')))),
 
     el('section', { class: 'panel' },
@@ -2238,32 +2303,78 @@ function renderDetail() {
           el('h3', {}, 'Deliverables'),
           el('p', { class: 'muted' },
             'The phase weights are each deliverable’s share of this project’s scope, '
-            + 'and have to account for all of it before the project can be saved.')),
+            + 'and have to account for all of it before the project can be saved. '
+            + 'Works like a sheet: every change saves itself, and rows copied from Excel paste straight in.')),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: addDeliverable },
           '+ Add deliverable')),
       weightBar(),
       draft.deliverables.length
-        ? el('div', { class: 'table-wrap' }, el('table', { class: 'edit-table' },
+        ? el('div', { class: 'table-wrap' }, deliverableSheet(el('table', { class: 'edit-table gsheet' },
             el('thead', {}, el('tr', {},
               ['#', 'Deliverable / phase', 'Type', 'Step reached', 'Weight %',
                'TS Phase', 'Drawings', ...state.reference.engineers.map((e) => `${e.short_name} %`),
                'Status date', ''].map((h, i) => el('th', {
                 class: (i === 0 || (i >= 4 && i < 7 + state.reference.engineers.length)) ? 'num' : '',
               }, h)))),
-            el('tbody', {}, draft.deliverables.map(deliverableRow))))
+            el('tbody', {}, draft.deliverables.map(deliverableRow)))))
         : el('div', { class: 'empty' },
             'No deliverables yet. Add the phases this project is measured by.')),
+
+    isNew ? null : submissionsHere(),
 
     el('div', { class: 'sticky-foot' },
       el('div', { class: 'errors', id: 'detail-errors' }),
       el('div', { class: 'foot-actions' },
-        el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeDetail }, 'Cancel'),
-        el('button', {
-          class: 'btn btn-primary', type: 'button', id: 'detail-save',
-          onclick: saveDetail,
-        }, isNew ? 'Create project' : 'Save project'))));
+        isNew ? null : el('span', { class: 'save-chip is-saved', id: 'detail-saved' }, 'All changes saved'),
+        isNew
+          ? el('button', { class: 'btn btn-ghost', type: 'button', onclick: closeDetail }, 'Cancel')
+          : null,
+        isNew
+          ? el('button', {
+            class: 'btn btn-primary', type: 'button', id: 'detail-save', onclick: saveDetail,
+          }, 'Create project')
+          : el('button', { class: 'btn btn-primary', type: 'button', onclick: closeDetail }, 'Done'))));
 
   refreshTotals();
+}
+
+/** This project's submissions, kept across re-draws of the page. */
+function submissionsHere() {
+  const detail = state.detail;
+  if (!detail.subs) {
+    detail.subs = submissionsPanel({ project: detail.project.number,
+      onChange: () => { detail.changed = true; followSubmissions(detail); } });
+  }
+  return detail.subs.node;
+}
+
+/* A submission changed below: the deliverables' own dates moved with it on
+   the server, so the draft (and the status dates on show) take them too, or
+   the next save would put the old ones back. */
+async function followSubmissions(detail) {
+  try {
+    const fresh = await api(`/api/projects/${encodeURIComponent(detail.project.number)}`);
+    const byRow = new Map(fresh.deliverables.map((d) => [d.row, d]));
+    for (const d of detail.draft.deliverables) {
+      const now = byRow.get(d.row);
+      if (!now) continue;
+      for (const key of ['status_date', 'submitted_to_client', 'comments_received', 'resubmitted', 'completed']) {
+        d[key] = now[key];
+      }
+      const box = document.querySelector(`#project-detail input[data-status-row="${d.row}"]`);
+      if (box && document.activeElement !== box) box.value = d.status_date || '';
+    }
+  } catch { /* the next save says what is wrong */ }
+}
+
+/** The deliverables grid takes rows pasted beyond its end as new rows. */
+function deliverableSheet(table) {
+  table.gsheetAddRows = (count) => {
+    for (let i = 0; i < count; i += 1) addDeliverable({ quiet: true });
+    renderDetail();
+    return $('#project-detail table.gsheet');
+  };
+  return table;
 }
 
 function weightBar() {
@@ -2301,7 +2412,7 @@ function refreshTotals() {
           : `${((1 - total) * 100).toFixed(1)} points unaccounted for`));
   }
   const save = $('#detail-save');
-  if (save) {
+  if (save && !state.detail.project) {
     save.disabled = !complete;
     save.title = complete ? '' : 'The phase weights have to total 100% first';
   }
@@ -2315,7 +2426,7 @@ function refreshTotals() {
 
 function deliverableRow(d, position) {
   const draft = state.detail.draft;
-  const set = (key, value) => { d[key] = value; };
+  const set = (key, value) => { d[key] = value; scheduleSave(); };
 
   const stepOptions = (code) => [el('option', { value: '' }, '— not started —')]
     .concat(((state.reference.credit_steps || {})[code] || []).map((s) =>
@@ -2359,6 +2470,7 @@ function deliverableRow(d, position) {
     oninput: (e) => {
       d.shares = { ...(d.shares || {}), [name]: typedValue(e.target, { percent: true }) };
       refreshTotals();
+      scheduleSave();
     },
   });
 
@@ -2377,8 +2489,8 @@ function deliverableRow(d, position) {
     ...state.reference.engineers.map((e) => el('td', { class: 'num' },
       shareInput(e.short_name))),
     el('td', {}, el('input', {
-      type: 'date', value: d.status_date || '',
-      oninput: (e) => set('status_date', e.target.value || null),
+      type: 'date', value: d.status_date || '', 'data-status-row': d.row || null,
+      onchange: (e) => set('status_date', e.target.value || null),
     })),
     el('td', {}, el('button', {
       class: 'btn btn-sm btn-danger', type: 'button',
@@ -2386,11 +2498,12 @@ function deliverableRow(d, position) {
       onclick: () => {
         draft.deliverables.splice(position, 1);
         renderDetail();
+        scheduleSave();
       },
     }, '✕')));
 }
 
-function addDeliverable() {
+function addDeliverable({ quiet = false } = {}) {
   const draft = state.detail.draft;
   const remaining = Math.max(0, 1 - weightTotal());
   const shares = {};
@@ -2400,7 +2513,9 @@ function addDeliverable() {
     step_no: null, phase_weight: remaining || null, ts_phase: null,
     status_date: null, notes: '', shares,
   });
+  if (quiet) return;
   renderDetail();
+  scheduleSave();
 }
 
 async function saveDetail() {
@@ -2416,9 +2531,9 @@ async function saveDetail() {
       body: { project: draft.project, deliverables: draft.deliverables },
     });
     markSaved(result.save);
-    toast(`${result.project.number} saved with ${result.deliverables.length} deliverable(s).`, 'ok');
-    closeDetail();
+    toast(`${result.project.number} saved with ${result.deliverables.length} deliverable(s). From now on it saves itself as you edit.`, 'ok');
     await refreshAll();
+    await openProject(result.project.number);
   } catch (error) {
     setChildren($('#detail-errors'), 
       el('ul', {}, (error.errors || [error.message]).map((e) => el('li', {}, e))));
@@ -2430,6 +2545,8 @@ async function removeProject(project) {
   const count = state.detail.draft.deliverables.length;
   const extra = count ? `\n\nIts ${count} deliverable(s) go with it.` : '';
   if (!window.confirm(`Remove ${project.number} from the register?${extra}`)) return;
+  clearTimeout(state.detail.saveTimer);
+  state.detail.saveTimer = null;
   try {
     const result = await api(
       `/api/projects/${encodeURIComponent(project.number)}?cascade=true`,

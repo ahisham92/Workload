@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from . import config as cfg, tasks as task_list
+from . import config as cfg, revisions, tasks as task_list
 from .model import (CreditStep, Deliverable, Engineer, Project, ProjectType,
                     ValidationError, as_date, as_fraction, as_number, as_text,
                     iso, pattern_to_regex, stored_date)
@@ -188,6 +188,24 @@ CREATE TABLE IF NOT EXISTS phasing (
     mm             REAL NOT NULL,
     PRIMARY KEY (project_number, quarter_start)
 );
+
+-- Each time a deliverable goes to the client: planned, really sent, back with
+-- a code and a reason, and the revision that goes again.  Never overwritten:
+-- a new revision is a new row, so the history stays (revisions.py).
+CREATE TABLE IF NOT EXISTS submission_issues (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    deliverable_row INTEGER NOT NULL,
+    seq             INTEGER NOT NULL DEFAULT 1,
+    rev             TEXT NOT NULL DEFAULT '',
+    purpose         TEXT NOT NULL DEFAULT '',
+    planned         TEXT,
+    submitted       TEXT,
+    returned        TEXT,
+    code            TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    ref             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS submission_issues_row ON submission_issues(deliverable_row, seq);
 """
 
 #: Settings this module keeps in the store's ``settings`` table.
@@ -233,6 +251,7 @@ class Unit:
         self.store.changed = self.reload
         if seed and not self.is_set_up():
             self.seed(load_defaults())
+        self._issues_from_dates()
         self._revision = self._read_revision()
 
     # -- plumbing --------------------------------------------------------
@@ -1306,6 +1325,7 @@ class Unit:
         db.execute("DELETE FROM deliverables WHERE row = ?", (row,))
         db.execute("DELETE FROM drawings WHERE row = ?", (row,))
         db.execute("DELETE FROM drawing_list WHERE row = ?", (row,))
+        db.execute("DELETE FROM submission_issues WHERE deliverable_row = ?", (row,))
 
     def delete_deliverable(self, row: int) -> Dict[str, Any]:
         if self.deliverable(row) is None:
@@ -1389,6 +1409,9 @@ class Unit:
                     removed += 1
             for deliverable in checked:
                 self._write_deliverable(db, deliverable)
+                # A deliverable's sendings are kept as issues; the dates the
+                # screen sent back may be older than them.
+                self._sync_dates(db, deliverable.row, planned_from_register=True)
 
         return {
             "project": project.to_dict(),
@@ -1396,6 +1419,172 @@ class Unit:
             "removed": removed,
             "weight_total": round(total_weight, 6),
         }
+
+    # -- submissions and their revisions (revisions.py) ---------------------
+    def _issues_from_dates(self) -> int:
+        """The sendings a deliverable's dates already record, made into issues
+        for any deliverable that has dates and no issues yet -- a unit from
+        before issues were kept, or one whose register came from a file.
+        The dates themselves are not touched.  How many deliverables gained
+        issues."""
+        with self._connect() as db:
+            have = {r[0] for r in db.execute(
+                "SELECT DISTINCT deliverable_row FROM submission_issues")}
+        made = {}
+        for deliverable in self._read_deliverables():
+            if deliverable.row not in have:
+                issues = revisions.from_dates(deliverable)
+                if issues:
+                    made[deliverable.row] = issues
+        if made:
+            with self._write() as db:
+                for row, issues in made.items():
+                    for seq, issue in enumerate(issues, start=1):
+                        self._insert_issue(db, row, seq, issue)
+        return len(made)
+
+    @staticmethod
+    def _insert_issue(db: sqlite3.Connection, row: int, seq: int,
+                      issue: Dict[str, Any]) -> int:
+        values = {k: issue.get(k) for k in revisions.FIELDS}
+        for key in revisions.FIELDS:
+            if key not in revisions.DATE_FIELDS and values[key] is None:
+                values[key] = ""
+        return db.execute(
+            f"INSERT INTO submission_issues (deliverable_row, seq, "
+            f"{', '.join(revisions.FIELDS)}) VALUES (?, ?, "
+            f"{', '.join('?' for _ in revisions.FIELDS)})",
+            (row, seq, *[values[k] for k in revisions.FIELDS])).lastrowid
+
+    def issues(self) -> Dict[int, List[Dict[str, Any]]]:
+        """Every deliverable's issues, oldest first, by deliverable row."""
+        if self._cache.get("issues_filled") is None:
+            self._cache["issues_filled"] = True
+            self._issues_from_dates()
+        def build() -> Dict[int, List[Dict[str, Any]]]:
+            with self._connect() as db:
+                rows = db.execute("SELECT * FROM submission_issues "
+                                  "ORDER BY deliverable_row, seq, id").fetchall()
+            out: Dict[int, List[Dict[str, Any]]] = {}
+            for r in rows:
+                out.setdefault(r["deliverable_row"], []).append(dict(r))
+            return out
+        return fresh_copy(self._cached("issues", build))
+
+    def _issue(self, issue_id: int) -> Dict[str, Any]:
+        for issues in self.issues().values():
+            for issue in issues:
+                if issue["id"] == issue_id:
+                    return issue
+        raise ValidationError(["There is no such submission."])
+
+    def _sync_dates(self, db: sqlite3.Connection, row: int, *,
+                    planned_from_register: bool = False) -> None:
+        """The deliverable's own dates, put in step with its issues.
+
+        ``planned_from_register``: the register's status date was the one just
+        typed, so a revision still to go takes its planned day from it rather
+        than the other way round."""
+        issues = [dict(r) for r in db.execute(
+            "SELECT * FROM submission_issues WHERE deliverable_row = ? "
+            "ORDER BY seq, id", (row,))]
+        if not issues:
+            return
+        if planned_from_register and not issues[-1].get("submitted"):
+            typed = db.execute("SELECT status_date FROM deliverables WHERE row = ?",
+                               (row,)).fetchone()
+            if typed and typed[0] and typed[0] != issues[-1].get("planned"):
+                db.execute("UPDATE submission_issues SET planned = ? WHERE id = ?",
+                           (typed[0], issues[-1]["id"]))
+                issues[-1]["planned"] = typed[0]
+        dates = revisions.dates_for(issues)
+        db.execute(f"UPDATE deliverables SET {', '.join(k + ' = ?' for k in dates)} "
+                   f"WHERE row = ?", (*dates.values(), row))
+
+    def start_issue(self, row: int, data: Dict[str, Any], *,
+                    today: _dt.date) -> Dict[str, Any]:
+        """Start a submission, or the next revision of one that came back."""
+        if self.deliverable(row) is None:
+            raise ValidationError([f"There is no deliverable {row}."])
+        before = self.issues().get(row, [])
+        state = revisions.describe(before, today)
+        if not state["can_start"]:
+            raise ValidationError([
+                "This deliverable already has a submission on its way: "
+                "record when it went, or when it came back, first."])
+        last = before[-1] if before else {}
+        draft = {"rev": state["next_rev"], "purpose": last.get("purpose", ""),
+                 "planned": None, "submitted": None, "returned": None,
+                 "code": "", "reason": "", "ref": ""}
+        if not before and self.deliverable(row).status_date:
+            draft["planned"] = self.deliverable(row).status_date.isoformat()
+        issue, errors = revisions.check(draft, data, as_date)
+        if errors:
+            raise ValidationError(errors)
+        with self._write() as db:
+            issue["id"] = self._insert_issue(db, row, len(before) + 1, issue)
+            self._sync_dates(db, row)
+        return issue
+
+    def update_issue(self, issue_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        current = self._issue(issue_id)
+        issue, errors = revisions.check(current, data, as_date)
+        if errors:
+            raise ValidationError(errors)
+        with self._write() as db:
+            db.execute(
+                f"UPDATE submission_issues SET "
+                f"{', '.join(k + ' = ?' for k in revisions.FIELDS)} WHERE id = ?",
+                (*[issue[k] if issue[k] is not None or k in revisions.DATE_FIELDS
+                   else "" for k in revisions.FIELDS], issue_id))
+            self._sync_dates(db, current["deliverable_row"])
+        return issue
+
+    def delete_issue(self, issue_id: int) -> Dict[str, Any]:
+        current = self._issue(issue_id)
+        row = current["deliverable_row"]
+        with self._write() as db:
+            db.execute("DELETE FROM submission_issues WHERE id = ?", (issue_id,))
+            if db.execute("SELECT 1 FROM submission_issues WHERE deliverable_row = ?",
+                          (row,)).fetchone():
+                self._sync_dates(db, row)
+            else:
+                # The last one gone: nothing has been sent after all.
+                db.execute("UPDATE deliverables SET submitted_to_client = NULL, "
+                           "comments_received = NULL, resubmitted = NULL, "
+                           "completed = NULL WHERE row = ?", (row,))
+        return {"removed": issue_id, "row": row}
+
+    def absorb_dates(self, row: int, change: Dict[str, Any]) -> None:
+        """Dates put on a deliverable from elsewhere (the drawing list, a
+        confirmed submissions plan) carried onto its issues."""
+        deliverable = self.deliverable(row)
+        if deliverable is None:
+            return
+        issues = self.issues().get(row, [])
+        with self._write() as db:
+            if not issues:
+                for seq, issue in enumerate(revisions.from_dates(deliverable), start=1):
+                    self._insert_issue(db, row, seq, issue)
+                return
+            last = issues[-1]
+            update: Dict[str, Any] = {}
+            if change.get("submitted_to_client") and not last.get("submitted"):
+                update["submitted"] = change["submitted_to_client"]
+            if change.get("comments_received") and not last.get("returned") \
+                    and (last.get("submitted") or update.get("submitted")):
+                update["returned"] = change["comments_received"]
+            if change.get("completed") and last.get("code") != "A" \
+                    and (last.get("submitted") or update.get("submitted")):
+                update["code"] = "A"
+                update.setdefault("returned", last.get("returned") or change["completed"])
+            if change.get("status_date") and not last.get("submitted"):
+                update["planned"] = change["status_date"]
+            if update:
+                db.execute(f"UPDATE submission_issues SET "
+                           f"{', '.join(k + ' = ?' for k in update)} WHERE id = ?",
+                           (*update.values(), last["id"]))
+            self._sync_dates(db, row)
 
     def weight_by_project(self) -> Dict[str, float]:
         """Total phase weight per project -- each should come to 100%."""

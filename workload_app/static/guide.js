@@ -67,6 +67,7 @@
       ['Who is stuck or needs help?', 'Check-ins', ['checkins']],
       ['Is a job over its budget?', 'Budgets', ['budgets']],
       ['What is due, and what came back with A, B or C?', 'Planner › Submissions', ['planner', 'submissions']],
+      ['Record a submission, its return and the next revision', 'Planner › Submissions, or the project on Projects', ['planner', 'submissions']],
       ['Do we need more people?', 'Planner › More people', ['planner', 'people']],
       ['Move work from one person to another', 'Planner › Planning board', ['planner', 'handovers']],
       ['How did last week go?', 'Weekly', ['weekly']],
