@@ -36,7 +36,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import (accounts as accounts_module, budgets, busy_calendar,
+from . import (accounts as accounts_module, bringin, budgets, busy_calendar,
                export as export_module, management,
                member as member_view, nightly, notify, storage, webpush,
                weekly as weekly_module)
@@ -791,7 +791,13 @@ class WorkloadApp:
             self.accounts_update_filename(user_id, unit["id"], path.name)
             self.open_unit(ctx, query, body, unit["id"])
             service = ctx.service or self.service_for(user_id)
-            imported = service.import_exports(files)
+            timesheet_files, others = _timesheets_first(files)
+            imported = service.import_exports(timesheet_files)
+            # Budgets and a drawing list chosen with them come in straight
+            # after, so the unit starts with everything the files hold.
+            brought_in = (service.bring_in_apply(
+                service.bring_in_check(others)["token"])["steps"]
+                if others else [])
         except Exception:
             if _is_open(ctx, unit["id"]):
                 ctx.service.close()
@@ -808,6 +814,8 @@ class WorkloadApp:
                                      imported["staged"].get("unit_name") or "")
         status = service.status()
         status["imported"] = {k: v for k, v in imported.items() if k != "staged"}
+        status["brought_in"] = [{k: v for k, v in step.items() if k != "result"}
+                                for step in brought_in]
         return status
 
     def _name_after_exports(self, ctx: Context, user_id: int, unit_id: str,
@@ -1857,6 +1865,13 @@ class WorkloadApp:
              s("set_budget_person", body=True), "manager"),
             ("PUT", "/api/budgets/jobs/{}",
              s("set_budget_share", body=True), "manager"),
+            ("GET", "/api/bring-in", s("bring_in_state"), "manager"),
+            ("POST", "/api/bring-in/check",
+             lambda ctx, q, b: ctx.service.bring_in_check(b.get("files") or []),
+             "manager"),
+            ("POST", "/api/bring-in/apply",
+             lambda ctx, q, b: ctx.service.bring_in_apply(str(b.get("token") or "")),
+             "manager"),
             ("GET", "/api/weekly", s("weekly"), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),
             ("GET", "/api/push", self.push_status, "user"),
@@ -1963,6 +1978,22 @@ class WorkloadApp:
             ("POST", "/api/save", s("save"), "manager"),
             ("POST", "/api/reload", s("reload"), "manager"),
         ]
+
+
+def _timesheets_first(files: Any) -> Tuple[List[Any], List[Any]]:
+    """The timesheet exports among a new unit's files, and the rest the app
+    knows (budgets, a drawing list). A file it does not know stays with the
+    exports, so the timesheet importer says what is wrong with it."""
+    if not isinstance(files, list):
+        return files, []
+    exports, others = [], []
+    for item in files:
+        kind = None
+        if isinstance(item, dict) and item.get("content_base64"):
+            kind, _read = bringin.classify(str(item.get("filename") or ""),
+                                           _decode(item["content_base64"]))
+        (others if kind not in (None, "timesheets") else exports).append(item)
+    return exports, others
 
 
 def _password_in(body: Dict[str, Any]) -> Tuple[str, bool]:

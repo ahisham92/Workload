@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from . import budgets as budgets_module
+from . import bringin
 from . import busy_calendar
 from . import meetings as meetings_module
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
@@ -2540,6 +2541,142 @@ class WorkloadService:
                 return budgets_module.save_requests(self, body, parse_capture)
             except budgets_module.BudgetError as error:
                 raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
+
+    # -- bring in data: every file in one place ----------------------------
+
+    def bring_in_check(self, files: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Say what each file is and what it will fill, writing nothing."""
+        with self._lock:
+            self.workbook                       # a unit must be open
+            if not files:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "Choose your files first.")
+            by_kind: Dict[str, List[Dict[str, Any]]] = {k: [] for k in bringin.KINDS}
+            listed, errors = [], []
+            for item in _objects(files, "files"):
+                filename = str(item.get("filename") or "file.xlsx")
+                kind, read = bringin.classify(filename, _decode(item.get("content_base64")))
+                if kind is None:
+                    errors.append(read)
+                    listed.append({"filename": filename, "kind": None,
+                                   "label": "Not recognised", "note": read})
+                    continue
+                by_kind[kind].append(item)
+                if kind == "projects":
+                    note = f"{len(read['jobs']):,} job(s)"
+                elif kind == "spend":
+                    note = f"{len({r['job_number'] for r in read['rows']}):,} job(s), " \
+                           f"{len(read['rows']):,} row(s)"
+                elif kind == "drawings":
+                    note = f"{len(read):,} drawing row(s)"
+                else:
+                    note = ""
+                listed.append({"filename": filename, "kind": kind,
+                               "label": bringin.LABELS[kind], "note": note,
+                               "fills": bringin.FILLS[kind]})
+            result: Dict[str, Any] = {"files": listed, "errors": errors,
+                                      "timesheets": None}
+            if by_kind["timesheets"]:
+                staged = self.stage_exports(by_kind["timesheets"])
+                # What the timesheet importer will do, in short; its own
+                # token stays staged for the second step.
+                result["timesheets"] = {
+                    k: staged[k] for k in ("rows", "hours", "first_date",
+                                           "last_date", "errors", "warnings")}
+                result["timesheets"]["people"] = len(staged["people"])
+                result["timesheets"]["new_people"] = [
+                    p["name"] for p in staged["people"] if p.get("new")]
+                result["timesheets"]["new_projects"] = len(staged["new_projects"])
+                timesheet_token = staged["token"]
+                if staged["errors"] or not staged["rows"]:
+                    # Exports that cannot be read are left out; the rest
+                    # can still come in.
+                    self._staged.pop(timesheet_token, None)
+                    timesheet_token = None
+                    result["timesheets"]["left_out"] = True
+            else:
+                timesheet_token = None
+            ready = bool(timesheet_token or by_kind["projects"] or by_kind["spend"]
+                         or by_kind["drawings"])
+            token = uuid.uuid4().hex
+            self._keep_staged(token, {
+                "bring_in": True, "timesheets": timesheet_token,
+                "budgets": by_kind["projects"] + by_kind["spend"],
+                "drawings": by_kind["drawings"]})
+            result.update(token=token, ready=ready)
+            return result
+
+    def bring_in_apply(self, token: str) -> Dict[str, Any]:
+        """Bring the checked files in: timesheets, then budgets, then drawings.
+
+        Each step stands on its own: one that fails says why, and the steps
+        after it still run on what is already there.
+        """
+        with self._lock:
+            staged = self._staged.pop(token, None)
+            if not isinstance(staged, dict) or not staged.get("bring_in"):
+                raise ApiError(HTTPStatus.NOT_FOUND,
+                               "That check has expired. Choose the files again.")
+            steps: List[Dict[str, Any]] = []
+
+            def step(kind: str, run: Callable[[], Dict[str, Any]],
+                     said: Callable[[Dict[str, Any]], str]) -> None:
+                try:
+                    done = run()
+                except ApiError as error:
+                    steps.append({"kind": kind, "ok": False, "said": error.message,
+                                  "errors": error.errors})
+                    return
+                steps.append({"kind": kind, "ok": True, "said": said(done),
+                              "result": done})
+
+            if staged["timesheets"]:
+                step("timesheets",
+                     lambda: self.apply_exports(staged["timesheets"], "replace"),
+                     lambda r: (
+                         f"{r['rows_written']:,} timesheet rows for "
+                         f"{len(r['people'])} "
+                         f"{'person' if len(r['people']) == 1 else 'people'}"
+                         + (f"; new on the team: {', '.join(r['people_added'])}"
+                            if r["people_added"] else "")
+                         + (f"; {len(r.get('projects_added') or [])} project(s) set up"
+                            if r.get("projects_added") else "") + "."))
+            if staged["budgets"]:
+                step("budgets", lambda: self.import_budgets(staged["budgets"]),
+                     lambda r: (
+                         (f"{r['jobs_listed']:,} job budget(s)" if r["jobs_listed"]
+                          else "No Projects list")
+                         + (f"; who spent the hours on {len(r['spend_jobs'])} job(s)"
+                            if r["spend_jobs"] else "") + "."))
+            if staged["drawings"]:
+                step("drawings",
+                     lambda: self.import_drawing_list({"files": staged["drawings"]}),
+                     lambda r: (
+                         f"{r['matched']:,} drawing(s) matched to deliverables"
+                         + (f"; {sum(u['drawings'] for u in r['unmatched']):,} "
+                            "with no deliverable to go to" if r["unmatched"] else "")
+                         + (f"; {len(r['proposals'])} change(s) to the register "
+                            "suggested" if r["proposals"] else "") + "."))
+            return {"steps": steps, "state": self.bring_in_state(),
+                    "save": {"saved": True}}
+
+    def bring_in_state(self) -> Dict[str, Any]:
+        """What the unit already holds of each kind of file."""
+        with self._lock:
+            wb = self.workbook
+            store = self.store
+            first, last = store.date_range()
+            budgets = store.job_budgets()
+            drawings = store.drawing_list()
+            return {
+                "timesheets": {"rows": store.count(), "first_date": iso(first),
+                               "last_date": iso(last),
+                               "people": len(wb.engineer_names())},
+                "projects": {"jobs": len(budgets),
+                             "with_budget": sum(1 for j in budgets if j.get("budget_mm"))},
+                "spend": {"jobs": len({e["job_number"] for e in store.job_spend()})},
+                "drawings": {"deliverables": len(drawings),
+                             "drawings": sum(d["total"] or 0 for d in drawings.values())},
+            }
 
 
 

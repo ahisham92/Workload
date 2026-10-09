@@ -1,0 +1,47 @@
+/* Selecao+ — Bring in data, and the Start here card (bringin.js). */
+
+.bi-drop {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 28px 16px; text-align: center; cursor: pointer;
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  background: var(--accent-soft); transition: border-color .15s, background .15s;
+}
+.bi-drop:hover, .bi-drop.is-over { border-color: var(--accent); }
+.bi-drop strong { font-size: 1.05rem; }
+.bi-drop .muted { max-width: 520px; }
+.bi-drop-icon { font-size: 1.8rem; line-height: 1; color: var(--accent); }
+
+.bi-files { list-style: none; margin: 0 0 12px; padding: 0; }
+.bi-files li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.bi-files li:last-child { border-bottom: 0; }
+.bi-files .pill { margin-right: 8px; }
+.bi-file { font-weight: 600; word-break: break-all; }
+.bi-fills { font-size: .85rem; margin-top: 2px; }
+
+.bi-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.bi-kind {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface);
+}
+.bi-kind.is-in { border-color: var(--ok); background: var(--ok-soft); }
+.bi-kind-head { display: flex; gap: 8px; align-items: center; }
+.bi-from { font-size: .82rem; }
+
+.bi-start { border-left: 4px solid var(--accent); }
+.bi-start-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.bi-start-head h3 { margin: 0 0 2px; }
+.bi-steps { list-style: none; margin: 10px 0 0; padding: 0; counter-reset: bi; }
+.bi-steps li {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0;
+  border-top: 1px solid var(--border); counter-increment: bi;
+}
+.bi-tick {
+  flex: 0 0 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  border: 2px solid var(--accent); color: var(--accent); font-weight: 700; font-size: .85rem;
+}
+.bi-tick:empty::before { content: counter(bi); }
+.bi-steps li.is-done .bi-tick { background: var(--ok); border-color: var(--ok); color: #fff; }
+.bi-steps li.is-done .bi-step-text strong { text-decoration: line-through; opacity: .7; }
+.bi-step-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.bi-step-text .muted { font-size: .85rem; }
