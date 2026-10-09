@@ -1314,7 +1314,7 @@ function unfilledNote(report) {
   const list = names.map((n) => `${n} ${notFilled(report.per_engineer[n]).replace(' not filled in yet', '')}`);
   return el('p', { class: 'msg msg-warn', style: 'margin-top:6px' },
     `Timesheets not filled in yet: ${list.join(', ')}. `
-    + 'Ask them to fill these days in; the % above counts only the days that are filled.');
+    + 'Ask them to fill these days in; until they do, those days pull their % down.');
 }
 
 /** One person's hours in the period, by what they went on. */

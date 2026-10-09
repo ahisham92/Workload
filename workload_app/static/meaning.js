@@ -28,7 +28,7 @@ const MEANINGS = {
     title: 'Days not filled in yet',
     what: 'Working days with nothing on someone’s timesheet so far.',
     how: 'The hours a full timesheet holds for the working days so far, less every hour they booked (leave included), in whole days.',
-    good: 'None. If there are some, ask them to fill those days in: until they do, their real-work % counts only the days that are filled.',
+    good: 'None. If there are some, ask them to fill those days in: until they do, those empty days pull their busy-on-real-work % down.',
   },
   cpi: {
     title: 'Efficiency (CPI)',
