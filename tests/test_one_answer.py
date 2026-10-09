@@ -79,7 +79,7 @@ def test_nothing_is_removed_only_folded():
 
 
 def test_the_guide_says_where_shared_pages_now_live():
-    for words in ("Projects › Budgets", "Reports › Growth", "Bring in data › Timesheets",
-                  "Planner › Tasks", "Team › Reference", "Show more"):
+    for words in ("Projects › Budgets", "Reports › Goals and growth", "Bring in data › Timesheets",
+                  "Planner › Tasks", "Team › Scoring rules", "Show more"):
         assert words in GUIDE, words
     assert "four paths" not in GUIDE

@@ -70,12 +70,12 @@ function togetherPanel() {
         el('p', { class: 'muted' },
           `${t.totals.units} units, ${t.totals.teams} teams, ${t.totals.people} people: `
           + `${ciHours(t.totals.free_week)} free this week, ${t.totals.rest} need to ease off, `
-          + `${t.totals.urgent} things to ask now. Each unit's own Check-ins, side by side.`))),
+          + `${t.totals.urgent} things to ask now. Each unit's own Who needs help page, side by side.`))),
     el('div', { class: 'table-wrap' }, el('table', { class: 'ci-together-table' },
       el('thead', {}, el('tr', {},
         el('th', {}, 'Unit · team'), el('th', { class: 'num' }, 'People'),
-        el('th', { class: 'num' }, 'Free this week'), el('th', { class: 'num' }, 'Ease off'),
-        el('th', { class: 'num' }, 'Heavy'), el('th', { class: 'num' }, 'Room'),
+        el('th', { class: 'num' }, 'Free this week'), el('th', { class: 'num' }, 'Need a lighter week'),
+        el('th', { class: 'num' }, 'Heavy'), el('th', { class: 'num' }, 'Have room'),
         el('th', { class: 'num' }, 'Ask now'))),
       el('tbody', {}, t.units.flatMap((u) => [
         el('tr', { class: `ci-unit-row ${u.id === t.current ? 'is-current' : ''}` },
@@ -209,7 +209,7 @@ function freeGrid(people, data) {
     ...data.days.map((d, i) => {
       const day = p.days[i];
       if (!day) return el('td', {});
-      if (day.away) return el('td', { class: 'ci-cell ci-away', 'data-sort': '-1' }, 'away');
+      if (day.away) return el('td', { class: 'ci-cell ci-away', 'data-sort': '-1' }, 'off');
       const share = Math.min(1, day.free / perDay);
       const cell = el('td', {
         class: `ci-cell ${day.free >= 0.5 ? 'ci-free' : ''} ${day.over > 0 ? 'ci-over' : ''}`,
@@ -269,7 +269,7 @@ function loadBars(weeks) {
       rx: 2, class: `ci-bar ci-bar-${kind}`,
     });
     hoverable(bar, `<b>Week of ${dateText(week.week, { day: 'numeric', month: 'short' })}</b><br>`
-      + (load === null ? 'away all week'
+      + (load === null ? 'off all week'
         : `${fmt.hours(week.hours)} h of ${fmt.hours(week.capacity)} h · ${Math.round(load * 100)}%`
         + (week.overtime ? `<br>${fmt.hours(week.overtime)} h overtime` : '')
         + (week.days_off ? `<br>${week.days_off} day(s) off` : '')));

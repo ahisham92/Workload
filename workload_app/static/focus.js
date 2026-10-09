@@ -123,7 +123,7 @@
       let act = null;
       if (planTone !== 'ok') { next = 'Behind plan: see which jobs are behind.'; act = ['Open Projects', 'projects']; }
       else if (cpiTone !== 'ok') { next = 'Costing more than it earns: see which jobs.'; act = ['Open Projects', 'projects']; }
-      else if (busyTone !== 'ok') { next = u > 1.05 ? 'Too much overtime: see who needs a lighter week.' : 'Room to take more work: see who has it.'; act = ['Open Check-ins', 'checkins']; }
+      else if (busyTone !== 'ok') { next = u > 1.05 ? 'Too much overtime: see who needs a lighter week.' : 'Room to take more work: see who has it.'; act = ['Open Who needs help', 'checkins']; }
       return { say: `The team is ${parts.join(', ')}.`, tone, next, act };
     },
 
@@ -142,7 +142,7 @@
       let say = room.length
         ? `${names(room.map((p) => `${p.name} (${hrs(p.free_hours)})`))} ${room.length > 1 ? 'have' : 'has'} room today; ${busy} ${busy === 1 ? 'person is' : 'people are'} booked full.`
         : `Everyone in today is booked full${people.length ? ` (${people.length - away.length} people)` : ''}.`;
-      if (away.length) say += ` ${names(away)} ${away.length > 1 ? 'are' : 'is'} away.`;
+      if (away.length) say += ` ${names(away)} ${away.length > 1 ? 'are' : 'is'} off today.`;
       return { say, tone: room.length ? 'ok' : 'warn',
         next: room.length ? 'Something new came in? Type it in the box below: it goes to whoever has room.'
           : 'Something new came in? Type it below and "What does it push?" shows what slips.' };
@@ -256,7 +256,7 @@
       return {
         say: `${top[0]} leads with ${Math.round(top[1])} of 100${ranked.length > 1 ? `; ${low[0]} is lowest at ${Math.round(low[1])}` : ''}${label ? `, ${label.toLowerCase()}` : ''}.`,
         tone: 'ok',
-        next: 'Show more, below, has how each score is made up; Engineer KPIs has the figures behind it.',
+        next: 'Show more, below, has how each score is made up; Each person\'s figures has the numbers behind it.',
       };
     },
 

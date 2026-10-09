@@ -1946,7 +1946,7 @@ def outside_message(names: Sequence[str]) -> str:
     return (
         f"{len(names)} {'people have' if many else 'person has'} hours here but "
         f"{'are' if many else 'is'} not on the team: {who}. Their hours count "
-        "toward the projects and in Resourcing; add them on Team to give them "
+        "toward the projects and in Team staffing; add them on Team to give them "
         "a KPI line and a share of a deliverable."
     )
 

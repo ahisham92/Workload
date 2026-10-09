@@ -202,7 +202,7 @@ function holdsPanel(s) {
       const has = k.has(s);
       return el('div', { class: `bi-kind ${has ? 'is-in' : ''}` },
         el('div', { class: 'bi-kind-head' },
-          el('span', { class: `pill ${has ? 'pill-ok' : 'pill-muted'}` }, has ? 'In' : 'Not yet'),
+          el('span', { class: `pill ${has ? 'pill-ok' : 'pill-muted'}` }, has ? 'In the app' : 'Not yet'),
           el('strong', {}, k.title)),
         el('div', {}, has ? k.said(s) : k.fills),
         el('div', { class: 'muted bi-from' }, `From: ${k.from}`));

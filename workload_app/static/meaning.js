@@ -43,7 +43,7 @@ const MEANINGS = {
     good: 'Close to 100% (85% to 115%). Far under means work is slipping behind the plan. Far over means it is taking more effort than planned.',
   },
   plan_earned: {
-    title: 'Plan earned',
+    title: 'Planned work done',
     what: 'How much of the value planned so far has actually been delivered.',
     how: 'Earned MM divided by planned MM to date.',
     good: '90% or more: the work is keeping up with the plan. Under that, it is falling behind.',

@@ -45,8 +45,8 @@ const shortDate = (iso) => dateText(iso, { day: 'numeric', month: 'short' });
 /* ------------------------------------------------------------ loading */
 
 const PLANNER_VIEWS = [['today', 'Today'], ['review', 'Plan vs actual'],
-  ['handovers', 'Planning board'],
-  ['submissions', 'Submissions'], ['people', 'More people']];
+  ['handovers', 'Move work'],
+  ['submissions', 'Submissions'], ['people', 'People needed']];
 
 function renderPlannerTabs() {
   setChildren($('#planner-subtabs'), ...PLANNER_VIEWS.map(([key, label]) =>
@@ -124,7 +124,7 @@ async function suggestMoves() {
     if (!data.suggested.length) {
       toast(data.summary.over_after
         ? 'Nobody doing the same kind of work has room to take any of it. '
-          + 'See "More people" above.'
+          + 'See "People needed" above.'
         : 'Nobody is over a full load. Nothing to suggest.');
       return;
     }
@@ -237,7 +237,7 @@ function renderNeeds(needs) {
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, 'More people'),
+        el('h3', {}, 'People needed'),
         el('p', { class: 'muted' },
           `Each team's forecast work against the people it has, week by week to ${shortDate(needs.horizon_end)}. `
           + 'Engineers and draftsmen are counted apart, because one cannot do the other’s work.'))),
@@ -521,7 +521,7 @@ function movesPanel(data) {
           'Try a handover and every figure above shows its effect. Nothing changes until you commit: '
           + `a share of a project is then kept until ${dateText(data.to)} and lapses by itself; a task is simply reassigned.`)),
       el('div', { class: 'row-actions' },
-        el('button', { class: 'btn btn-sm', type: 'button', onclick: suggestMoves }, 'Suggest handovers'),
+        el('button', { class: 'btn btn-sm', type: 'button', onclick: suggestMoves }, 'Suggest who takes what'),
         el('button', { class: 'btn btn-sm', type: 'button', onclick: () => tryNewWork(data) }, 'Try new work'),
         trying.length ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => tryMoves([]) }, 'Clear') : null,
         trying.length ? el('button', { class: 'btn btn-sm', type: 'button', onclick: keepWhatIf }, 'Keep as a what-if') : null,
@@ -536,7 +536,7 @@ function movesPanel(data) {
             onclick: () => tryMoves(plan.moves.filter((_m, j) => j !== i)) }, '✕'))))
       : el('p', { class: 'muted' }, 'None being tried. Open someone above and hand over part of their work, or let the app suggest.'),
     saved.length ? el('div', {},
-      el('h4', {}, 'In force'),
+      el('h4', {}, 'Moves already made'),
       el('ul', { class: 'plan-moves' }, saved.map((move) => el('li', {},
         el('span', {}, moveText(move)),
         el('span', { class: 'muted small' }, ` · ${shortDate(move.start)} to ${shortDate(move.end)}`),
@@ -1037,14 +1037,14 @@ function holidayPrompt(data) {
   return el('div', { class: 'holiday-prompt' },
     el('span', {}, h.unit ? `Public holidays look like ${h.unit_name}'s.` : 'Which country\'s public holidays does this unit keep?'),
     pick,
-    el('label', { class: 'check-chip' }, week, el('span', {}, 'and its working week')),
+    el('label', { class: 'check-chip' }, week, el('span', {}, 'and use its working days')),
     el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => {
       if (!pick.value) { pick.focus(); return; }
       saveHolidays({ unit: pick.value, use_week: week.checked },
         `Public holidays: ${pick.options[pick.selectedIndex].text}.`);
     } }, h.unit ? 'Yes' : 'Use'),
     el('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => openHolidays() },
-      'Teams elsewhere…'));
+      'A team in another country…'));
 }
 
 
@@ -1059,9 +1059,9 @@ function awayText(a) {
 /** One line in: who, from, to. Everybody is a public holiday. */
 function markAway(data, name) {
   const people = data.people.map((p) => ({ value: p.name, label: p.name }));
-  openModal('Away', [
+  openModal('Add a day off', [
     { name: 'person', label: 'Who', type: 'select', full: true,
-      options: [{ value: '*', label: 'Everybody — a public holiday' }, ...people] },
+      options: [{ value: '*', label: 'Everybody (a public holiday)' }, ...people] },
     { name: 'start', label: 'From', type: 'date' },
     { name: 'end', label: 'To', type: 'date', hint: 'blank for one day' },
     { name: 'note', label: 'Why', placeholder: 'Leave, site visit, course…', full: true },
@@ -1078,7 +1078,7 @@ function awayPanel(data) {
   return el('section', { class: 'panel' },
     el('div', { class: 'panel-head' },
       el('div', {},
-        el('h3', {}, away.length ? `Away (${away.length} coming up)` : 'Away'),
+        el('h3', {}, away.length ? `Days off: leave and holidays (${away.length} coming up)` : 'Days off: leave and holidays'),
         data.holidays && data.holidays.chosen ? el('p', { class: 'muted small' },
           data.holidays.unit ? `Public holidays: ${data.holidays.unit_name}` : 'No public holidays chosen',
           ...(data.holidays.teams || []).filter((t) => t.country).map((t) =>
@@ -1086,7 +1086,7 @@ function awayPanel(data) {
           '. ',
           el('button', { class: 'linkish', type: 'button', onclick: () => openHolidays() }, 'Change')) : null),
       el('button', { class: 'btn btn-sm', type: 'button', onclick: () => markAway(data) },
-        'Someone is away')),
+        'Add a day off')),
     holidayPrompt(data),
     away.length ? el('ul', { class: 'request-list' }, away.map((a) => el('li', { class: 'request' },
       el('span', { class: 'request-time' }, awayWhen(a)),
@@ -1190,7 +1190,7 @@ function pushedList(option) {
     p.kind === 'task'
       ? el('span', { class: `pill ${p.late ? 'pill-bad' : 'pill-ok'}` },
         p.late ? `Late by ${p.days_late} day${p.days_late === 1 ? '' : 's'}` : 'Still on time')
-      : el('span', { class: 'pill pill-warn' }, 'Slips'),
+      : el('span', { class: 'pill pill-warn' }, 'Something slips'),
     el('span', { class: 'pr-what' },
       `${fmt.hours(p.hours)} h of `, el('b', {}, p.title),
       el('span', { class: 'muted small' },
@@ -1291,8 +1291,8 @@ function dayCards(day, shown) {
           el('b', {}, p.name),
           el('span', { class: 'muted small' }, [p.grade_label, p.team_name].filter(Boolean).join(' · ')),
           el('span', { class: `pill ${p.away || p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
-            p.away ? 'away — hand these on'
-              : p.over_hours ? `${fmt.hours(p.over_hours)} h over`
+            p.away ? 'off today: hand these on'
+              : p.over_hours ? `${fmt.hours(p.over_hours)} h won't fit today`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
         el('ol', { class: 'day-blocks' }, p.blocks.map((b) => el('li', {
           class: `block block-${b.kind} ${b.done ? 'is-done' : ''}`,
@@ -1304,9 +1304,9 @@ function dayCards(day, shown) {
           b.title,
           agendaList(b))))),
         p.away ? null : el('button', { class: 'linkish day-away', type: 'button',
-          onclick: () => markAway(plan.dayData, p.name) }, 'Mark away')))),
+          onclick: () => markAway(plan.dayData, p.name) }, 'Add a day off')))),
     away.length ? el('p', { class: 'small' },
-      el('b', {}, 'Away: '), away.map((p) => p.name).join(', '), '.') : null,
+      el('b', {}, 'Off today: '), away.map((p) => p.name).join(', '), '.') : null,
     idle.length ? el('p', { class: 'muted small' },
       `Nothing booked lately and nothing planned: ${idle.map((p) => p.name).join(', ')}.`) : null);
 }
@@ -1316,7 +1316,7 @@ function weekTable(data, shown) {
   const cell = (day, name) => {
     const p = day.people.find((x) => x.name === name);
     if (!day.working_day || !p) return el('td', { class: 'muted' }, '—');
-    if (p.away && !p.blocks.length) return el('td', { class: 'muted' }, 'away');
+    if (p.away && !p.blocks.length) return el('td', { class: 'muted' }, 'off');
     const load = (p.hours + p.over_hours) / (day.hours_per_day || 1);
     return el('td', {
       class: 'num week-cell clickable', 'data-sort': String(load),
@@ -1343,12 +1343,12 @@ function dayText(data) {
     lines.push(`${dateText(day.date)}${unit}`);
     if (!day.working_day) { lines.push('  Not a working day.', ''); continue; }
     const off = day.people.filter((p) => p.away && inChosenTeam(p, data)).map((p) => p.name);
-    if (off.length) lines.push(`  Away: ${off.join(', ')}`);
+    if (off.length) lines.push(`  Off: ${off.join(', ')}`);
     for (const p of day.people) {
       if (!inChosenTeam(p, data)) continue;
       if (p.away || (!p.blocks.length && !p.over_hours)) continue;
       lines.push(`${p.name}${p.team_name ? ` (${p.team_name})` : ''}`
-        + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h over` : ''));
+        + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h won't fit today` : ''));
       for (const b of p.blocks) {
         lines.push(`  ${b.start}–${b.end}  ${KIND_LABEL[b.kind] ? `${KIND_LABEL[b.kind]}: ` : ''}`
           + `${b.project && b.title !== b.project ? `${b.project} ` : ''}${b.title}`);
@@ -1572,7 +1572,7 @@ function openDrawingList() {
         + (d.hours_per_drawing ? `, ${fmt.hours(d.hours_per_drawing)} h a drawing.` : '.')),
       result.deliverables.length ? el('div', { class: 'table-wrap' }, el('table', {},
         el('thead', {}, el('tr', {}, el('th', {}, 'Deliverable'), el('th', { class: 'num' }, 'Drawings'),
-          el('th', { class: 'num' }, 'Gone out'), el('th', { class: 'num' }, 'A'),
+          el('th', { class: 'num' }, 'Sent'), el('th', { class: 'num' }, 'A'),
           el('th', { class: 'num' }, 'B'), el('th', { class: 'num' }, 'C'))),
         el('tbody', {}, result.deliverables.map((e) => el('tr', {},
           el('td', {}, el('span', { class: 'code' }, `${e.project_number} `), e.name),

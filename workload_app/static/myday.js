@@ -398,7 +398,7 @@ function renderMyCalendar() {
     me.linked
       ? el('div', {},
         el('p', { class: me.problem ? 'muted cal-problem' : 'muted' },
-          el('span', { class: `pill ${me.problem ? 'pill-bad' : 'pill-ok'}` }, me.problem ? 'Not read' : 'Linked'),
+          el('span', { class: `pill ${me.problem ? 'pill-bad' : 'pill-ok'}` }, me.problem ? 'Could not read it' : 'Linked'),
           ' ', calendarRead(me)),
         el('p', { class: 'muted small' }, 'Your meetings come off your free time by themselves. ', CALENDAR_NOTE),
         el('details', { class: 'cal-change' }, el('summary', {}, 'Paste a new link or unlink'),

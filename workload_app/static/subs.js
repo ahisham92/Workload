@@ -140,9 +140,9 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
         }, el('b', {}, String(count)), words);
       }));
     const head = el('tr', {},
-      el('th', {}, 'Deliverable'), el('th', {}, 'Where it stands'), el('th', {}, 'Rev'),
+      el('th', {}, 'Deliverable'), el('th', {}, 'Where it stands'), el('th', {}, 'Revision'),
       el('th', {}, 'For'), el('th', {}, 'Planned'), el('th', {}, 'Submitted'),
-      el('th', {}, 'Returned'), el('th', {}, 'Code'), el('th', {}, 'Reason / comments'),
+      el('th', {}, 'Returned'), el('th', {}, 'Review code'), el('th', {}, 'Reason / comments'),
       el('th', {}, ''));
     const rows = [];
     for (const item of items) rows.push(...itemRows(item));

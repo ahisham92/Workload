@@ -57,12 +57,12 @@
 
   function drawBar() {
     bar.replaceChildren(
-      make('span', { class: 'path-bar-label' }, 'Show'),
+      make('span', { class: 'path-bar-label' }, 'Show tabs for'),
       ...[{ key: '', title: 'Everything' }, ...PATHS].map((p) => make('button', {
         type: 'button', class: `path-chip${(current ? current.key : '') === p.key ? ' is-on' : ''}`,
-        'data-path': p.key || null, onclick: () => choose(p.key, false) }, p.key ? p.title : 'Everything')),
+        'data-path': p.key || null, onclick: () => choose(p.key, false) }, p.key ? p.title : 'All tabs')),
       make('button', { type: 'button', class: 'path-chip path-chip-ghost', onclick: welcome },
-        'Paths'));
+        'Start page'));
     const on = bar.querySelector('.path-chip.is-on');
     if (on && !bar.hidden) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
@@ -139,7 +139,7 @@
           : current && current.key === p.key ? 'Last time' : ''))),
       make('div', { class: 'path-foot' },
         make('button', { type: 'button', class: 'btn btn-ghost', onclick: () => choose('') },
-          'Show everything'),
+          'Show all tabs'),
         make('label', { class: 'path-skip', for: 'paths-skip' }, skip,
           ' Next time, open straight on my last path')));
     window.switchView('paths');
