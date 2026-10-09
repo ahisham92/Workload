@@ -168,3 +168,20 @@ def test_the_routes_are_there():
     for route in ('("GET", "/api/submission-issues"', '("POST", "/api/submission-issues"',
                   '("PUT", "/api/submission-issues/{}"', '("DELETE", "/api/submission-issues/{}"'):
         assert route in text
+
+
+def test_reopening_a_unit_never_doubles_its_history(unit_copy):
+    wb = Unit(unit_copy)
+    d = first_open(wb)
+    db = sqlite3.connect(unit_copy)
+    db.execute("UPDATE deliverables SET submitted_to_client = ?, comments_received = ? WHERE row = ?",
+               ("2026-07-01", "2026-07-20", d.row))
+    db.commit()
+    db.close()
+    counts = []
+    for _ in range(3):
+        again = Unit(unit_copy)
+        again.issues()
+        again.reload()
+        counts.append(len(again.issues()[d.row]))
+    assert counts == [1, 1, 1]
