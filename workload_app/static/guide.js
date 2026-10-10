@@ -21,7 +21,7 @@
     intro: 'The app opens on three questions: plan the week, see how we\'re doing, or set up. Each keeps only its own tabs; Show tabs for, above the tabs, changes it. Every tab opens on its answer, each part of it is headed by the question it answers, and only the extras sit under Show more at the bottom, and some tabs hold two pages (Projects and Budgets, for one): switch between them in the tab\'s header. New here? Start with Bring in data, then do the rest of the first setup once, top to bottom. After that the everyday routine '
       + 'below is all you need. Tap any box to go there.',
     setup: [
-      { title: 'Bring in your files', do: 'Timesheets and budgets together, in one place',
+      { title: 'Bring in your files', do: 'Timesheets and budgets together, in one place; place anybody new in Who is who once',
         where: 'Bring in data', go: ['bringin'] },
       { title: 'Check your team', do: 'Grade and team for each person. On your own row: Grade Manager, This is me Yes',
         where: 'Team', go: ['team'] },

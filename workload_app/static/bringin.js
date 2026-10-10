@@ -51,7 +51,8 @@ async function loadBringIn() {
 function renderBringIn() {
   const body = $('#bringin-body');
   if (!body || !bring.state) return;
-  setChildren(body, chooserPanel(), resultPanel(), holdsPanel(bring.state), keepUpPanel());
+  setChildren(body, chooserPanel(), resultPanel(), whoPanel(bring.state.who),
+    holdsPanel(bring.state), keepUpPanel());
 }
 
 /* -------------------------------------------------------------- choosing */
@@ -190,6 +191,74 @@ async function applyProposals() {
     toastError(error);
   }
   renderBringIn();
+}
+
+/* ------------------------------------------------------------ who is who */
+
+const WHO_TONE = { team: 'ok', draftsman: 'ok', loan: 'info', out: 'warn', left: 'neutral', other: 'neutral' };
+
+function whoDays(p) {
+  if (p.kind === 'left') return p.to ? `left ${fmt.date(p.to)}` : '';
+  if (p.kind !== 'loan' && p.kind !== 'out') return '';
+  if (!p.from && !p.to) return 'until you change it';
+  return `${p.from ? fmt.date(p.from) : 'from the start'} to ${p.to ? fmt.date(p.to) : 'until you change it'}`;
+}
+
+/** Everybody in the files and what each is to the team: set once, kept.
+    Only somebody new from another unit is asked about. */
+function whoPanel(who) {
+  if (!who || !who.people.length) return null;
+  const ask = who.people.filter((p) => p.ask);
+  const rest = who.people.filter((p) => !p.ask);
+  const row = (p) => el('li', { class: 'request bi-who' },
+    el('span', { class: 'request-what' },
+      el('b', {}, p.name),
+      el('span', { class: 'muted small' }, ` · ${p.unit_label || 'unit not known'}`
+        + (p.mm ? ` · ${fmt.mm(p.mm)} MM on your jobs` : ''))),
+    el('span', {},
+      el('span', { class: `pill pill-${WHO_TONE[p.kind] || 'neutral'}` }, p.kind_label),
+      whoDays(p) ? el('div', { class: 'muted small' }, whoDays(p)) : null),
+    el('button', { class: 'btn btn-sm', type: 'button', onclick: () => editWho(who, p) }, 'Change'));
+  const keepAll = async () => {
+    try {
+      bring.state = await api('/api/bring-in/who/keep', { method: 'POST',
+        body: { people: ask.map((p) => ({ name: p.name, unit: p.unit })) } });
+      toast('Kept. They will not be asked about again.', 'ok');
+      renderBringIn();
+      if (typeof refreshAll === 'function') refreshAll().catch(() => {});
+    } catch (error) { toastError(error); }
+  };
+  return el('section', { class: 'panel', id: 'bi-who' },
+    el('h3', {}, ask.length ? `Who is who: ${ask.length} new to place` : 'Who is who'),
+    el('p', { class: 'muted' },
+      'Everybody in your files and what they are to your team. Only your team counts toward your budgets: '
+      + 'your own people, draftsmen working for you, and people loaned in for their dates. Somebody loaned out '
+      + 'to another unit is left out of your budgets and your planning for those dates. Each person is set once '
+      + 'and stays; you are only asked about somebody new.'),
+    ask.length ? el('ul', { class: 'request-list' }, ask.map(row)) : null,
+    ask.length ? el('div', { class: 'row' },
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: keepAll },
+        ask.length === 1 ? 'Keep as shown' : `Keep all ${ask.length} as shown`)) : null,
+    rest.length ? el('details', { class: 'bi-who-rest', open: ask.length ? null : true },
+      el('summary', {}, `Already placed (${rest.length})`),
+      el('ul', { class: 'request-list' }, rest.map(row))) : null);
+}
+
+function editWho(who, p) {
+  openModal(`What is ${p.name} to your team?`, [
+    { name: 'kind', label: 'They are', type: 'select', full: true,
+      options: [{ value: 'default', label: 'Go by their unit' }, ...who.kinds] },
+    { name: 'from', label: 'From', type: 'date', hint: 'loaned in or out' },
+    { name: 'to', label: 'Until, or the day they left', type: 'date', hint: 'blank if not known yet' },
+  ], async () => {
+    const values = modalValues();
+    bring.state = await api('/api/bring-in/who', { method: 'PUT',
+      body: { full_name: p.name, unit: p.unit, kind: values.kind, from: values.from, to: values.to } });
+    closeModal();
+    toast(`${p.name}: saved.`, 'ok');
+    renderBringIn();
+    if (typeof refreshAll === 'function') refreshAll().catch(() => {});
+  }, { kind: p.set ? p.kind : 'default', from: p.from || '', to: p.to || '' });
 }
 
 /* ------------------------------------------------------- what is in now */

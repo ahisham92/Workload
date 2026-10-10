@@ -410,3 +410,62 @@ class TestOverTheWeb:
                              "kind": "draftsman"})
         assert status == 200
         assert {p["name"]: p["kind"] for p in view["people"]}["Draft Person"] == "draftsman"
+
+
+class TestWhoIsWho:
+    """Ahmed (2026-10-10): Bring in data always shows who is who; each person
+    is set once, and somebody loaned out leaves the budgets and the plan."""
+
+    def test_everybody_shows_and_only_newcomers_from_other_units_are_asked(self, unit):
+        unit.import_budgets([the_staff_list()])
+        who = unit.bring_in_state()["who"]
+        by_name = {p["name"]: p for p in who["people"]}
+        assert by_name["Ahmed Otherunit"]["ask"] and by_name["Draft Person"]["ask"]
+        assert not by_name["Osama Ashdown"]["ask"]
+        assert who["to_ask"] == 2
+        assert {k["value"] for k in who["kinds"]} >= {"loan", "out"}
+
+    def test_kept_once_and_never_asked_again(self, unit):
+        unit.import_budgets([the_staff_list()])
+        state = unit.keep_people({"people": [
+            {"name": "Ahmed Otherunit", "unit": "STEEL STRUCTURES"},
+            {"name": "Draft Person", "unit": "CONCRETE BUILDINGS"}]})
+        assert state["who"]["to_ask"] == 0
+        unit.import_budgets([the_staff_list()])
+        assert unit.bring_in_state()["who"]["to_ask"] == 0
+
+    def test_a_new_unit_is_a_new_question(self, unit):
+        unit.import_budgets([the_staff_list()])
+        unit.keep_people({"people": [{"name": "Draft Person", "unit": "CONCRETE BUILDINGS"}]})
+        unit.import_budgets([staff_list(staff("Draft Person", D(2026, 9, 20), 8,
+                                              unit="STEEL STRUCTURES", job=OTHER_JOB))])
+        asked = [p for p in unit.bring_in_state()["who"]["people"] if p["ask"]]
+        assert ("Draft Person", "STEEL STRUCTURES") in {(p["name"], p["unit"]) for p in asked}
+
+    def test_loaned_out_is_not_the_teams_for_those_dates(self, unit):
+        unit.import_budgets([the_staff_list()])
+        before = job(unit)["team_spent_mm"]
+        unit.set_who({"full_name": "Osama Ashdown", "unit": "MARINE STRUCTURES",
+                      "kind": "out", "from": "2026-09-01", "to": "2026-09-30"})
+        assert job(unit)["team_spent_mm"] == pytest.approx(before - 14 / 185, abs=0.01)
+
+    def test_loaned_out_is_off_the_plan_for_those_dates(self, unit):
+        unit.import_budgets([the_staff_list()])
+        unit.set_who({"full_name": "Osama Ashdown", "unit": "MARINE STRUCTURES",
+                      "kind": "out", "from": "2026-10-04", "to": "2026-10-29"})
+        person = budgets.loaned_out(unit)[0]["person"]
+        away = unit._work_calendar(unit.workbook)["away"]
+        assert "2026-10-05" in away[person]
+        assert "2026-11-02" not in away.get(person, ())
+
+    def test_the_plan_follows_at_once(self, unit):
+        unit.import_budgets([the_staff_list()])
+        before = unit.checkins()
+        unit.set_who({"full_name": "Osama Ashdown", "unit": "MARINE STRUCTURES",
+                      "kind": "out", "from": "2026-10-01", "to": "2026-12-31"})
+        after = unit.checkins()
+        assert before != after
+
+    def test_someone_on_team_with_no_staff_list_can_be_loaned_out(self, unit):
+        names = {p["name"] for p in unit.bring_in_state()["who"]["people"]}
+        assert names, "the team should be listed even before any staff list"

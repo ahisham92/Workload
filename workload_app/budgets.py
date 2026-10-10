@@ -63,8 +63,10 @@ LARGEST_SHRINK = 0.10
 
 #: What somebody on a staff expenditure is to the team.
 KINDS = {"team": "My team", "draftsman": "Draftsman in my team",
-         "other": "Other unit", "left": "Left the team",
-         "loan": "On loan to my team"}
+         "loan": "Loaned in to my team", "out": "Loaned out to another unit",
+         "left": "Left the team", "other": "Other unit"}
+#: The kinds that run between two days.
+DATED = {"loan", "out"}
 
 _JOB_NUMBER = re.compile(r"[A-Z]{1,4}\d{5}-\d{4}[A-Z]")
 
@@ -336,9 +338,12 @@ def counts(kind: Dict[str, Any], day: Optional[str]) -> bool:
         return True
     if kind["kind"] == "left":
         return bool(kind["to"]) and bool(day) and day <= kind["to"]
-    if kind["kind"] == "loan":
-        return bool(day) and (not kind["from"] or day >= kind["from"]) \
+    if kind["kind"] in DATED:
+        inside = bool(day) and (not kind["from"] or day >= kind["from"]) \
             and (not kind["to"] or day <= kind["to"])
+        # Loaned in: theirs only while here. Loaned out: the team's except
+        # while they serve the other unit.
+        return inside if kind["kind"] == "loan" else not inside
     return False
 
 
@@ -480,7 +485,8 @@ def set_person(service, body: Dict[str, Any]) -> None:
         service.store.set_spend_person(name, unit, None)
         return
     if kind not in KINDS:
-        raise BudgetError("Choose my team, draftsman, other unit, left or on loan.")
+        raise BudgetError("Choose my team, draftsman, loaned in, loaned out, left or "
+                          "other unit.")
     days = {}
     for field in ("from", "to"):
         value = body.get(field)
@@ -490,9 +496,9 @@ def set_person(service, body: Dict[str, Any]) -> None:
         days[field] = day.isoformat() if day else None
     if kind == "left" and not days["to"]:
         raise BudgetError("Say the day they left.")
-    if kind == "loan" and days["from"] and days["to"] and days["to"] < days["from"]:
+    if kind in DATED and days["from"] and days["to"] and days["to"] < days["from"]:
         raise BudgetError("The loan ends before it starts.")
-    if kind not in {"left", "loan"}:
+    if kind not in {"left"} | DATED:
         days = {"from": None, "to": None}
     if kind == "left":
         days["from"] = None
@@ -816,8 +822,83 @@ def people_on_jobs(service) -> List[Dict[str, Any]]:
                     "unit_label": item["unit"].title() if item["unit"].isupper() else item["unit"],
                     "kind": kind["kind"], "kind_label": KINDS[kind["kind"]],
                     "from": kind["from"], "to": kind["to"], "set": kind["set"]})
-    counted_first = {"team": 0, "draftsman": 1, "loan": 2, "left": 3, "other": 4}
+    counted_first = {"team": 0, "draftsman": 1, "loan": 2, "out": 3, "left": 4, "other": 5}
     out.sort(key=lambda p: (counted_first[p["kind"]], -p["mm"]))
+    return out
+
+
+def who_is_who(service) -> Dict[str, Any]:
+    """Everybody in the files, and what each is to the team.
+
+    The people on the staff expenditures, and everybody on Team even when no
+    staff expenditure has them yet (so one of them can be marked loaned out).
+    Each is set once and stays set: only somebody new -- or somebody now in
+    another unit, which is a new line -- is asked about.
+    """
+    store = service.store
+    unit = own_unit(service)
+    people = store.spend_people()
+    out = people_on_jobs(service)
+    seen_people = {p["name"] for p in out}
+    full_for: Dict[str, str] = {}
+    for full, person in _team_full_names(service).items():
+        full_for.setdefault(person, full)
+    units = store.latest_units()
+    for person in service.workbook.engineer_names():
+        full = full_for.get(person, person)
+        if full in seen_people:
+            continue
+        their_unit = units.get(person) or unit
+        kind = kind_of(full, their_unit, people, unit)
+        if not kind["set"]:
+            kind["kind"] = "team"           # on Team, so the team's until said
+        out.append({"name": full, "unit": their_unit, "mm": 0.0, "jobs": 0,
+                    "first_day": None, "last_day": None,
+                    "unit_label": their_unit.title() if their_unit.isupper() else their_unit,
+                    "kind": kind["kind"], "kind_label": KINDS[kind["kind"]],
+                    "from": kind["from"], "to": kind["to"], "set": kind["set"]})
+    team = set(_team_full_names(service)) | set(service.workbook.engineer_names())
+    for p in out:
+        p["on_team"] = p["name"] in team
+        # Asked about once: somebody from another unit nobody has placed yet.
+        p["ask"] = not p["set"] and p["kind"] == "other"
+    return {"unit": unit.title() if unit.isupper() else unit, "people": out,
+            "kinds": [{"value": k, "label": v} for k, v in KINDS.items()],
+            "to_ask": sum(1 for p in out if p["ask"])}
+
+
+def keep_as_they_are(service, names: Sequence[Dict[str, Any]]) -> int:
+    """Set each listed person to what they are shown as now, so nobody is
+    asked about them again."""
+    unit = own_unit(service)
+    people = service.store.spend_people()
+    kept = 0
+    for item in names:
+        name, their_unit = _text(item.get("name")), _text(item.get("unit"))
+        if not name or (name, their_unit) in people:
+            continue
+        kind = kind_of(name, their_unit, people, unit)["kind"]
+        service.store.set_spend_person(name, their_unit, kind)
+        kept += 1
+    if kept:
+        refill(service)
+        apply_to_register(service)
+    return kept
+
+
+def loaned_out(service) -> List[Dict[str, Any]]:
+    """Team members serving another unit, with their days, for planning."""
+    outs = [(full, said) for (full, _unit), said in service.store.spend_people().items()
+            if said["kind"] == "out"]
+    if not outs:
+        return []
+    by_full = _team_full_names(service)
+    names = set(service.workbook.engineer_names())
+    out = []
+    for full, said in outs:
+        person = by_full.get(full) or (full if full in names else None)
+        if person:
+            out.append({"person": person, "from": said["from_day"], "to": said["to_day"]})
     return out
 
 
