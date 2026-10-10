@@ -1949,6 +1949,8 @@ class WorkloadApp:
             ("PUT", "/api/budgets/jobs/{}",
              s("set_budget_share", body=True), "manager"),
             ("GET", "/api/bring-in", s("bring_in_state"), "manager"),
+            ("PUT", "/api/bring-in/who", s("set_who", body=True), "manager"),
+            ("POST", "/api/bring-in/who/keep", s("keep_people", body=True), "manager"),
             ("POST", "/api/bring-in/check",
              lambda ctx, q, b: ctx.service.bring_in_check(b.get("files") or []),
              "manager"),

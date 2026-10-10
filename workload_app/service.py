@@ -1093,6 +1093,17 @@ class WorkloadService:
                  "name": built_in[day]} for day in learned["remove"]]
         return out
 
+    def _loaned_out(self, today: _dt.date) -> List[Dict[str, Any]]:
+        """Days a team member serves another unit: not there to plan."""
+        out = []
+        for loan in budgets_module.loaned_out(self):
+            start = loan["from"] or (today - _dt.timedelta(days=HOLIDAYS_BEHIND_DAYS)).isoformat()
+            end = loan["to"] or (today + _dt.timedelta(days=HOLIDAYS_AHEAD_DAYS)).isoformat()
+            if end >= start:
+                out.append({"id": None, "person": loan["person"], "start": start,
+                            "end": end, "note": "loaned out to another unit"})
+        return out
+
     def _half_days(self, wb, rows) -> Dict[str, Any]:
         """Half days of leave: a personal excuse booked on the timesheets."""
         return wb._cached(("leave", "half_days"),
@@ -1103,7 +1114,7 @@ class WorkloadService:
         """The working-day settings, less holidays and whoever is away."""
         today = _today()
         leave = {name: set(days) for name, days in self._leave(wb, rows).items()}
-        absences = self.store.absences()
+        absences = self.store.absences() + self._loaned_out(today)
         choice = self._holiday_choice(teams)
         site = self._official_rows()
         learned = self._learned_holidays(wb, rows, choice.get("unit"), today)
@@ -2818,6 +2829,20 @@ class WorkloadService:
             return {"steps": steps, "state": self.bring_in_state(),
                     "save": {"saved": True}}
 
+    def keep_people(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep everybody listed as they are shown, so they are not asked
+        about again."""
+        with self._lock:
+            self._commit()
+            budgets_module.keep_as_they_are(self, _objects(body.get("people") or [], "people"))
+            return self.bring_in_state()
+
+    def set_who(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """What one person is to the team, from Bring in data."""
+        with self._lock:
+            self.set_budget_person(body)
+            return self.bring_in_state()
+
     def bring_in_state(self) -> Dict[str, Any]:
         """What the unit already holds of each kind of file."""
         with self._lock:
@@ -2835,6 +2860,7 @@ class WorkloadService:
                 "spend": {"jobs": len({e["job_number"] for e in store.job_spend()})},
                 "drawings": {"deliverables": len(drawings),
                              "drawings": sum(d["total"] or 0 for d in drawings.values())},
+                "who": budgets_module.who_is_who(self),
             }
 
 

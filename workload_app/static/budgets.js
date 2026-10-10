@@ -316,7 +316,8 @@ function peoplePanel(data) {
       el('h3', {}, 'People on your jobs'),
       el('p', { class: 'muted' },
         'Everybody on the staff expenditures. Only your team counts toward your share and your spend: '
-        + 'your own unit, your draftsmen, people on loan for their dates, and people who left up to the day they left. '
+        + 'your own unit, your draftsmen, people loaned in for their dates, and people who left up to the day they left. '
+        + 'Somebody loaned out to another unit is not counted for those dates. '
         + 'Everybody else is one line, other units. Set each person once; it stays.'))),
     el('div', { class: 'table-wrap' }, el('table', { class: 'data' },
       el('thead', {}, el('tr', {}, ...['Name', 'Unit', 'MM on your jobs', 'Jobs', 'What they are', ''].map((h) => el('th', {}, h)))),
@@ -326,7 +327,7 @@ function peoplePanel(data) {
         el('td', { class: 'num' }, fmt.mm(p.mm)),
         el('td', { class: 'num' }, p.jobs),
         el('td', {}, el('span', { class: `pill pill-${p.kind === 'other' ? 'info' : 'ok'}` }, p.kind_label),
-          p.kind === 'loan' ? el('div', { class: 'muted' }, `${buDay(p.from)} to ${buDay(p.to)}`) : null,
+          p.kind === 'loan' || p.kind === 'out' ? el('div', { class: 'muted' }, `${buDay(p.from)} to ${buDay(p.to)}`) : null,
           p.kind === 'left' ? el('div', { class: 'muted' }, `left ${buDay(p.to)}`) : null,
           p.set ? null : el('div', { class: 'muted' }, 'from their unit')),
         el('td', {}, el('button', { class: 'btn btn-sm', type: 'button', onclick: () => editPerson(p) }, 'Change'))))))));
@@ -336,8 +337,8 @@ function editPerson(p) {
   const kinds = (bud.data.kinds || []).map((k) => ({ value: k.value, label: k.label }));
   openModal(`What is ${p.name} to the team?`, [
     { name: 'kind', label: 'They are', type: 'select', options: [{ value: 'default', label: 'Go by their unit' }, ...kinds] },
-    { name: 'from', label: 'On loan from', type: 'date', hint: 'only for on loan' },
-    { name: 'to', label: 'Until, or the day they left', type: 'date', hint: 'for on loan or left the team' },
+    { name: 'from', label: 'From', type: 'date', hint: 'loaned in or out' },
+    { name: 'to', label: 'Until, or the day they left', type: 'date', hint: 'loaned in or out, or left the team' },
   ], async () => {
     const values = modalValues();
     bud.data = await api('/api/budgets/people', { method: 'PUT',
