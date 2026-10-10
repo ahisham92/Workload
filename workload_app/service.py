@@ -2685,6 +2685,16 @@ class WorkloadService:
                 raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
             return budgets_module.view(self)
 
+    def set_budget_on_job(self, job: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Inside or outside the team on one job, for a person or a unit."""
+        with self._lock:
+            self._commit()
+            try:
+                budgets_module.set_on_job(self, job, body)
+            except budgets_module.BudgetError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
+            return budgets_module.view(self)
+
     def set_budget_person(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             self._commit()

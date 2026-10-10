@@ -234,7 +234,8 @@ function whoPanel(who) {
       'Everybody in your files and what they are to your team. Only your team counts toward your budgets: '
       + 'your own people, draftsmen working for you, and people loaned in for their dates. Somebody loaned out '
       + 'to another unit is left out of your budgets and your planning for those dates. Each person is set once '
-      + 'and stays; you are only asked about somebody new.'),
+      + 'and stays; you are only asked about somebody new. When somebody works for your team on one job '
+      + 'and for another team on the next, set it per job: Projects › Budgets, tap the job.'),
     ask.length ? el('ul', { class: 'request-list' }, ask.map(row)) : null,
     ask.length ? el('div', { class: 'row' },
       el('button', { class: 'btn btn-primary', type: 'button', onclick: keepAll },

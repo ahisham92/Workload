@@ -266,21 +266,62 @@ function jobDetail(job) {
         el('div', { class: 'sub' }, sub)))),
     el('div', { class: 'bu-detail-grid' },
       el('div', {},
-        el('h4', {}, 'Who spent it'),
-        (job.people || []).length || job.other_units_mm
-          ? el('ul', { class: 'bu-who' },
-            ...(job.people || []).map((p) => el('li', {},
-              el('span', {}, p.name, el('span', { class: 'muted' }, ` · ${kindLabel[p.kind] || p.kind}`)),
-              el('span', { class: 'bu-who-bar' }, el('span', { style: `width:${total ? (p.mm / total) * 100 : 0}%` })),
-              el('b', {}, fmt.mm(p.mm)))),
-            job.other_units_mm ? el('li', { class: 'bu-other' },
-              el('span', {}, 'Other units'),
-              el('span', { class: 'bu-who-bar' }, el('span', { style: `width:${total ? (job.other_units_mm / total) * 100 : 0}%` })),
-              el('b', {}, fmt.mm(job.other_units_mm))) : null)
-          : el('p', { class: 'muted' }, 'No staff expenditure for this job yet. Export it from the job\'s MH Expenditure page.')),
+        whoOnJob(job)),
       el('div', {},
         el('h4', {}, 'The team\'s man-months, month by month'),
         months)));
+}
+
+/** Who worked on the job, unit by unit, each inside or outside the team on
+    this job. One person can be on the team on one job and serving another
+    team on the next, so it is set per job; the share follows from it. */
+function whoOnJob(job) {
+  const groups = job.who || [];
+  if (!groups.length) {
+    return el('div', {}, el('h4', {}, 'Who worked on it'),
+      el('p', { class: 'muted' }, 'No staff expenditure for this job yet. Export it from the job\'s MH Expenditure page.'));
+  }
+  const total = groups.reduce((s, g) => s + (g.mm || 0), 0);
+  const inside = groups.reduce((s, g) => s + (g.inside_mm || 0), 0);
+  const outside = Math.max(0, total - inside);
+  const save = async (people, value, said) => {
+    try {
+      bud.data = await api(`/api/budgets/jobs/${encodeURIComponent(job.job_number)}/people`, {
+        method: 'PUT', body: { people: people.map((p) => ({ full_name: p.name, unit: p.unit })), inside: value } });
+      toast(said, 'ok');
+      renderBudgets();
+      registerChanged();
+    } catch (error) { toastError(error); }
+  };
+  const choice = (p) => el('span', { class: 'bu-io', role: 'group', 'aria-label': `${p.name} on this job` },
+    ...[[true, 'Inside'], [false, 'Outside']].map(([value, text]) => el('button', {
+      type: 'button', class: `bu-io-btn${(value ? p.inside : !p.inside && !p.part) ? ' is-on' : ''}`,
+      'aria-pressed': (value ? p.inside : !p.inside && !p.part) ? 'true' : 'false',
+      onclick: () => save([p], value, `${p.name}: ${value ? 'inside' : 'outside'} your team on ${job.job_number}.`),
+    }, text)));
+  return el('div', { class: 'bu-onjob' },
+    el('h4', {}, 'Who worked on it: inside or outside your team?'),
+    el('p', { class: `msg msg-${outside > 0.005 ? 'info' : 'ok'}` },
+      `Outside your team: ${fmt.pct0(total ? outside / total : 0)} of the ${fmt.mm(total)} MM spent. `
+      + (job.share_basis === 'set'
+        ? `Your share is set by hand at ${fmt.pct0(job.share)}.`
+        : `So your share of the budget is ${fmt.pct0(job.share)}`
+          + (job.team_budget_mm == null ? ' (the job has no budget yet).' : `, and your budget ${fmt.mm(job.team_budget_mm)} MM.`))),
+    el('p', { class: 'muted' }, 'Tap a unit to see its people.'),
+    ...groups.map((g) => el('details', { class: 'bu-unit', open: g.inside_mm > 0 || groups.length === 1 ? true : null },
+      el('summary', {},
+        el('b', {}, g.unit_label || 'Unit not known'),
+        el('span', { class: 'muted' }, ` · ${fmt.mm(g.mm)} MM, ${fmt.pct0(total ? g.mm / total : 0)} of the job`),
+        el('span', { class: 'bu-unit-all' },
+          el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+            onclick: (e) => { e.preventDefault(); save(g.people, true, `${g.unit_label}: all inside on ${job.job_number}.`); } }, 'All inside'),
+          el('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+            onclick: (e) => { e.preventDefault(); save(g.people, false, `${g.unit_label}: all outside on ${job.job_number}.`); } }, 'All outside'))),
+      el('ul', { class: 'bu-who' }, ...g.people.map((p) => el('li', {},
+        el('span', {}, p.name, el('span', { class: 'muted small' },
+          p.by === 'job' ? ' · set for this job' : p.part ? ' · part of the time (on loan or left)' : '')),
+        el('b', {}, fmt.mm(p.mm)),
+        choice(p)))))));
 }
 
 function editShare(job) {

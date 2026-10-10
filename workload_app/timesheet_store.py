@@ -267,6 +267,18 @@ CREATE TABLE IF NOT EXISTS spend_people (
     PRIMARY KEY (full_name, unit)
 );
 
+-- On one job, whether somebody worked for the team or not, whatever they are
+-- to the team elsewhere: one person can be on the team on one job and
+-- serving another team on the next.  Wins over spend_people for that job.
+CREATE TABLE IF NOT EXISTS job_people (
+    job_number TEXT NOT NULL,
+    full_name  TEXT NOT NULL,
+    unit       TEXT NOT NULL DEFAULT '',
+    inside     INTEGER NOT NULL,
+    set_at     TEXT NOT NULL,
+    PRIMARY KEY (job_number, full_name, unit)
+);
+
 -- Each week's plan as it was agreed: per person, the hours on each job, the
 -- tasks they were to finish, and the rest (meetings, team support).  Kept
 -- when the week is locked, so the week can be checked against what the
@@ -1143,6 +1155,27 @@ class TimesheetStore:
         with self._connect() as db:
             return {(row["full_name"], row["unit"]): dict(row) for row in
                     db.execute("SELECT * FROM spend_people")}
+
+    def job_people(self) -> Dict[Tuple[str, str, str], bool]:
+        """(job, full name, unit) -> inside the team on that job."""
+        with self._connect() as db:
+            return {(row["job_number"], row["full_name"], row["unit"]): bool(row["inside"])
+                    for row in db.execute("SELECT * FROM job_people")}
+
+    def set_job_person(self, job_number: str, full_name: str, unit: str,
+                       inside: Optional[bool]) -> None:
+        """Inside or outside the team on one job; ``None`` goes back to what
+        they are to the team in general."""
+        with self._connect() as db:
+            if inside is None:
+                db.execute("DELETE FROM job_people WHERE job_number = ? AND "
+                           "full_name = ? AND unit = ?", (job_number, full_name, unit))
+                return
+            db.execute(
+                "INSERT INTO job_people (job_number, full_name, unit, inside, set_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_number, full_name, unit) "
+                "DO UPDATE SET inside = excluded.inside, set_at = excluded.set_at",
+                (job_number, full_name, unit, 1 if inside else 0, now()))
 
     def set_spend_person(self, full_name: str, unit: str, kind: Optional[str],
                          from_day: Optional[str] = None,
