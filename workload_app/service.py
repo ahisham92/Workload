@@ -1337,7 +1337,19 @@ class WorkloadService:
             rows=inputs["rows"], tasks=inputs["tasks"], roster=inputs["roster"],
             config=inputs["config"], project_names=inputs["project_names"],
             saved=saved, slots=slots, today=today, management=inputs["management"],
-            marks=self._open_marks())
+            marks=self._open_marks(), submissions=self._submissions_sent(self.workbook))
+
+    def _submissions_sent(self, wb) -> Dict[int, Dict[str, Any]]:
+        """Each deliverable's days sent and the day it is planned for, so a
+        submission recorded as sent is never asked about again."""
+        issues = wb.issues()
+        out: Dict[int, Dict[str, Any]] = {}
+        for d in wb.deliverables():
+            sent = {i["submitted"] for i in issues.get(d.row, ()) if i.get("submitted")}
+            sent |= {day.isoformat() for day in (d.submitted_to_client, d.resubmitted) if day}
+            out[d.row] = {"sent": sorted(sent),
+                          "date": d.status_date.isoformat() if d.status_date else None}
+        return out
 
     def _open_marks(self) -> List[Dict[str, Any]]:
         """What people said from My day that the lead has not dealt with,

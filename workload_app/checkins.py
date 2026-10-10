@@ -281,15 +281,37 @@ def _is_prep_step(task: task_sheet.Task) -> bool:
     return task.kind == "Submission" and bool(task.series)
 
 
+def _settled(steps: Sequence[task_sheet.Task],
+             submissions: Optional[Mapping[int, Dict[str, Any]]]) -> bool:
+    """Whether a run-up no longer needs asking about: the submission was
+    recorded as sent, it now has another date, or the deliverable is gone."""
+    if submissions is None:
+        return False
+    row = steps[0].deliverable_row
+    if row is None:
+        return False
+    known = submissions.get(int(row))
+    if known is None:
+        return True                       # the deliverable is no longer there
+    due = steps[-1].due
+    start = steps[0].due - _dt.timedelta(days=SUBMISSION_ASK_DAYS)
+    if any(sent >= start.isoformat() for sent in known.get("sent") or ()):
+        return True                       # sent: nothing to ask
+    planned = known.get("date")
+    return bool(planned) and planned != due.isoformat()   # moved to another date
+
+
 def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
-                       today: _dt.date, soon_end: _dt.date
+                       today: _dt.date, soon_end: _dt.date,
+                       submissions: Optional[Mapping[int, Dict[str, Any]]] = None
                        ) -> List[Dict[str, Any]]:
     """One line per submission, never one per preparation day.
 
     The steps of a submission's run-up are taken together: when it is due,
     how many hours of preparation are marked done, and how many should be by
     now. A submission shows only once its preparation is behind, or a step
-    is blocked.
+    is blocked, and never once it is recorded as sent (``submissions``: by
+    deliverable row, the days it was sent and the date it is planned for).
     """
     runs: Dict[str, List[task_sheet.Task]] = {}
     for task in tasks:
@@ -297,9 +319,9 @@ def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
             runs.setdefault(task.series, []).append(task)
     out: List[Dict[str, Any]] = []
     for steps in runs.values():
-        if all(t.done for t in steps):
-            continue
         steps.sort(key=lambda t: t.due)
+        if all(t.done for t in steps) or _settled(steps, submissions):
+            continue
         due = steps[-1].due
         if due < today - _dt.timedelta(days=SUBMISSION_ASK_DAYS):
             continue                  # long gone: Submissions keeps track of it
@@ -320,7 +342,8 @@ def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
         made = f"{_hours(done)} of {_hours(total)} of preparation done"
         if due < today:
             text = (f"{label} submission was due {_short(due)}, with {made}. "
-                    f"Was it sent?")
+                    f"Was it sent? If it was, put the day it went in Planner › "
+                    f"Submissions and this goes away.")
         else:
             text = (f"{label} submission is due {_short(due)}. {made}, "
                     f"{_hours(by_now)} should be by now. Will it make it?")
@@ -332,13 +355,14 @@ def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
 def checkpoints(name: str, *, tasks: Sequence[task_sheet.Task], today: _dt.date,
                 config: Dict[str, Any], load: Dict[str, Any],
                 last_row: Optional[_dt.date], team_last: Optional[_dt.date],
-                ahead: Sequence[Dict[str, Any]], top_work: str = ""
+                ahead: Sequence[Dict[str, Any]], top_work: str = "",
+                submissions: Optional[Mapping[int, Dict[str, Any]]] = None
                 ) -> List[Dict[str, Any]]:
     """The few things worth asking this person about, most pressing first."""
     out: List[Dict[str, Any]] = []
     soon_days = planner.days_ahead(today, DUE_SOON_DAYS, config)
     soon_end = soon_days[-1] if soon_days else today
-    out.extend(_submission_points(name, tasks, today, soon_end))
+    out.extend(_submission_points(name, tasks, today, soon_end, submissions))
     for task in tasks:
         if task.done or name not in task.assignees or _is_prep_step(task):
             continue
@@ -418,7 +442,8 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
           slots: Optional[Mapping[int, Dict[str, Any]]] = None,
           today: Optional[_dt.date] = None,
           management: Optional[Any] = None,
-          marks: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+          marks: Sequence[Dict[str, Any]] = (),
+          submissions: Optional[Mapping[int, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The whole Check-ins page. ``management`` (a ``management.Plan``) puts
     the time leaders give their people into the free hours, and gives each
     leader their meetings with the agenda for each. ``marks`` are what people
@@ -460,7 +485,7 @@ def build(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
         points = checkpoints(
             name, tasks=tasks, today=today, config=config, load=load,
             last_row=last_row, team_last=through,
-            ahead=days, top_work=top)
+            ahead=days, top_work=top, submissions=submissions)
         stuck_tasks = {a["task_id"] for a in asks if a["kind"] == "stuck"}
         points = [_ask_point(a) for a in asks] + [
             p for p in points

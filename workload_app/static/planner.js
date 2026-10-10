@@ -1545,7 +1545,7 @@ function renderSubmissions() {
           el('h3', {}, 'Submissions plan'),
           el('p', { class: 'muted' },
             'Drafted by the app: a date for every deliverable not yet submitted, from how much is left before it can go '
-            + 'and how fast it is being done. Tick the ones that are right, change any date, and confirm. Each confirmed '
+            + 'and how fast it is being done. A ticked date is one the app suggests; change any date, then tap Use. Each date used '
             + `date goes on the deliverable, and its run-up (${fmt.hours(data.hours_a_day)} h a day over the ${data.lead_days} days before) `
             + 'goes into the right people’s days. '
             + (counts.typical
@@ -1553,7 +1553,10 @@ function renderSubmissions() {
                 + `${data.typical_from ? `, from ${data.typical_from} finished phase(s)` : ', a default until some finish'}).`
               : ''))),
         el('button', { class: 'btn btn-primary', type: 'button', disabled: !toConfirm.length || null,
-          onclick: confirm }, toConfirm.length ? `Confirm ${toConfirm.length}` : 'Confirm')),
+          title: 'Puts each ticked date on its deliverable and books 2 h a day of preparation in the week before.',
+          onclick: confirm }, toConfirm.length
+          ? `Use ${toConfirm.length === 1 ? 'this date' : `these ${toConfirm.length} dates`} and plan the preparation`
+          : 'Tick a date to use it')),
       el('div', { class: 'stat-strip' },
         stat('Dates in the register', String(counts.set), 'ok'),
         stat('Drafted', String(counts.estimated + counts.typical), ''),
