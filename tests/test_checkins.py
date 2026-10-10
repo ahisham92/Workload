@@ -264,6 +264,27 @@ class TestSubmissionPreparation:
         assert sum(1 for p in points if "Berth 9" in p["text"]) == 1
 
 
+class TestSentSubmissions:
+    """Ahmed (2026-10-10): a submission already sent was still asked about."""
+
+    def points(self, submissions, today=dt.date(2026, 10, 14)):
+        return checkins._submission_points("Kirolos", TestSubmissionPreparation.steps(),
+                                           today, today + dt.timedelta(days=5), submissions)
+
+    def test_recorded_as_sent_is_not_asked_about(self):
+        assert self.points({7: {"sent": ["2026-10-11"], "date": None}}) == []
+
+    def test_sent_long_before_this_run_up_does_not_count(self):
+        points = self.points({7: {"sent": ["2026-03-01"], "date": "2026-10-11"}})
+        assert len(points) == 1 and "Was it sent?" in points[0]["text"]
+
+    def test_moved_to_another_date_is_not_asked_about(self):
+        assert self.points({7: {"sent": [], "date": "2026-11-01"}}) == []
+
+    def test_a_deliverable_that_is_gone_is_not_asked_about(self):
+        assert self.points({}) == []
+
+
 def storage_config():
     from workload_app.config import TASK_DEFAULT_SETTINGS
     return dict(TASK_DEFAULT_SETTINGS)
@@ -273,7 +294,7 @@ def test_a_submission_long_gone_is_left_to_the_submissions_list():
     steps = TestSubmissionPreparation.steps()
     late = checkins._submission_points("Kirolos", steps, dt.date(2026, 10, 14),
                                        dt.date(2026, 10, 19))
-    assert len(late) == 1 and late[0]["text"].endswith("Was it sent?")
+    assert len(late) == 1 and "Was it sent?" in late[0]["text"]
     gone = checkins._submission_points("Kirolos", steps, dt.date(2026, 10, 30),
                                        dt.date(2026, 11, 4))
     assert gone == []
