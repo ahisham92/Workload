@@ -48,3 +48,19 @@
   .bu-who li { grid-template-columns: minmax(0, 1fr) 3.4em; }
   .bu-who-bar { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* Who worked on a job: inside or outside the team, unit by unit */
+.bu-onjob { display: grid; gap: 8px; }
+.bu-onjob .bu-who li { grid-template-columns: minmax(0, 1fr) 3.4em auto; }
+.bu-unit { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.bu-unit summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.bu-unit-all { margin-left: auto; display: inline-flex; gap: 4px; }
+.bu-unit .bu-who { margin-top: 8px; }
+.bu-io { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.bu-io-btn { border: 0; background: transparent; padding: 4px 10px; font: inherit; font-size: 13px;
+  color: var(--muted); cursor: pointer; }
+.bu-io-btn.is-on { background: var(--accent); color: #fff; }
+@media (max-width: 640px) {
+  .bu-onjob .bu-who li { grid-template-columns: minmax(0, 1fr) 3.4em; }
+  .bu-onjob .bu-io { grid-column: 1 / -1; justify-self: start; }
+}

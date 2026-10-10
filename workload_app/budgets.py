@@ -445,12 +445,23 @@ def bring_in(service, parsed: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
+def on_job(job: str, name: str, unit_of: str, day: Optional[str], people: Dict,
+           unit: str, per_job: Dict) -> bool:
+    """Whether a day of somebody's hours on a job is the team's: what the
+    manager said for that job, else what the person is to the team."""
+    said = per_job.get((job, name, unit_of))
+    if said is not None:
+        return said
+    return counts(kind_of(name, unit_of, people, unit), day)
+
+
 def _entries(store, job: str, rows, members: Dict[str, str], people: Dict,
              unit: str):
     """The job's spend as kept here, and the team's days it fills in."""
     entries: Dict[tuple, Dict[str, float]] = defaultdict(
         lambda: {"hours": 0.0, "overtime": 0.0, "mm": 0.0})
     covered = store.own_days(job, SPEND_SOURCE)
+    per_job = store.job_people()
     gaps: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for row in rows:
         key = (row["name"], row["unit"], row["dept"], row["day"], row["phase"],
@@ -460,7 +471,7 @@ def _entries(store, job: str, rows, members: Dict[str, str], people: Dict,
         entries[key]["mm"] += row["mm"]
         person = members.get(row["name"])
         if person is None or not row["day"] \
-                or not counts(kind_of(row["name"], row["unit"], people, unit), row["day"]):
+                or not on_job(job, row["name"], row["unit"], row["day"], people, unit, per_job):
             continue
         if (person, row["day"], row["phase"]) not in covered:
             gaps[person].append({
@@ -647,6 +658,7 @@ def _jobs(service, as_at: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
     store = service.store
     unit = own_unit(service)
     people = store.spend_people()
+    per_job = store.job_people()
     hours_per_mm = wb.hours_per_man_month() or 0.0
     team = set(wb.engineer_names())
     budgets = {j["job_number"]: j for j in store.job_budgets()}
@@ -673,7 +685,7 @@ def _jobs(service, as_at: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
                 kinds[(e["full_name"], e["unit"])] = kind_of(
                     e["full_name"], e["unit"], people, unit)
         mine = [e for e in entries
-                if counts(kinds[(e["full_name"], e["unit"])], e["day"])]
+                if on_job(number, e["full_name"], e["unit"], e["day"], people, unit, per_job)]
         dept = job.get("dept") or _most(e["dept"] for e in mine) \
             or _most(e["dept"] for e in entries)
         in_dept = [e for e in entries if not dept or not e["dept"] or e["dept"] == dept]
@@ -738,6 +750,7 @@ def _jobs(service, as_at: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
                 and project.budget_mm is not None
                 and abs(project.budget_mm - job["applied_budget_mm"]) < 0.005,
             "people": _people(mine, kinds),
+            "who": _who_on_job(number, entries, kinds, per_job, mine, dept_mm),
             "other_units_mm": _r(sum(e["mm"] for e in others)),
             "months": _months(spent_days, as_at),
             "updated": max([e["imported_at"] for e in entries]
@@ -783,6 +796,62 @@ def _people(entries, kinds) -> List[Dict[str, Any]]:
             item["last_day"] = e["day"]
     return sorted(({**p, "mm": _r(p["mm"])} for p in sums.values()),
                   key=lambda p: -p["mm"])
+
+
+def _who_on_job(job: str, entries, kinds, per_job, mine, dept_mm) -> List[Dict[str, Any]]:
+    """Everybody who booked to the job, unit by unit, inside the team or not."""
+    counted = {id(e) for e in mine}
+    units: Dict[str, Dict[str, Any]] = {}
+    for e in entries:
+        group = units.setdefault(e["unit"], {"unit": e["unit"], "mm": 0.0, "people": {}})
+        group["mm"] += e["mm"]
+        person = group["people"].setdefault(e["full_name"], {
+            "name": e["full_name"], "unit": e["unit"], "mm": 0.0, "inside_mm": 0.0,
+            "kind": kinds[(e["full_name"], e["unit"])]["kind"],
+            "set": per_job.get((job, e["full_name"], e["unit"]))})
+        person["mm"] += e["mm"]
+        if id(e) in counted:
+            person["inside_mm"] += e["mm"]
+    out = []
+    for group in units.values():
+        people = []
+        for p in group["people"].values():
+            inside = p["inside_mm"] >= p["mm"] - 1e-9 and p["mm"] > 0
+            part = 0 < p["inside_mm"] < p["mm"] - 1e-9
+            people.append({**p, "mm": _r(p["mm"]), "inside_mm": _r(p["inside_mm"]),
+                           "inside": inside, "part": part,
+                           "by": "job" if p["set"] is not None else "person"})
+        people.sort(key=lambda p: -p["mm"])
+        out.append({"unit": group["unit"],
+                    "unit_label": group["unit"].title() if group["unit"].isupper() else group["unit"],
+                    "mm": _r(group["mm"]),
+                    "percent": _r(group["mm"] / dept_mm, 4) if dept_mm else None,
+                    "inside_mm": _r(sum(p["inside_mm"] for p in group["people"].values())),
+                    "people": people})
+    out.sort(key=lambda g: -(g["inside_mm"] or 0) * 1000 - (g["mm"] or 0))
+    return out
+
+
+def set_on_job(service, job: str, body: Dict[str, Any]) -> None:
+    """Say who worked for the team on one job: one person, or a whole unit."""
+    job = _job(job)
+    if not job:
+        raise BudgetError("Which job?")
+    inside = body.get("inside")
+    if inside not in (True, False, None):
+        raise BudgetError("Say inside or outside the team.")
+    people = body.get("people")
+    if people is None:
+        people = [{"full_name": body.get("full_name"), "unit": body.get("unit")}]
+    if not isinstance(people, list) or not people:
+        raise BudgetError("Whose?")
+    for item in people:
+        name = _text((item or {}).get("full_name"))
+        if not name:
+            raise BudgetError("Whose?")
+        service.store.set_job_person(job, name, _text(item.get("unit")), inside)
+    refill(service)
+    apply_to_register(service)
 
 
 def _months(spent_days, as_at: _dt.date, count: int = 12) -> List[Dict[str, Any]]:

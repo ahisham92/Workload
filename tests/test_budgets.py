@@ -469,3 +469,48 @@ class TestWhoIsWho:
     def test_someone_on_team_with_no_staff_list_can_be_loaned_out(self, unit):
         names = {p["name"] for p in unit.bring_in_state()["who"]["people"]}
         assert names, "the team should be listed even before any staff list"
+
+
+class TestInsideOrOutsidePerJob:
+    """Ahmed (2026-10-10): somebody can be on the team on one job and serving
+    another team on the next, so inside/outside is set per job."""
+
+    def test_a_team_member_outside_on_one_job_only(self, unit):
+        unit.import_budgets([projects_list(project(JOB, 10.0, 4.0)), the_staff_list()])
+        before = job(unit)["team_spent_mm"]
+        unit.set_budget_on_job(JOB, {"full_name": "Ahmed Mockridge",
+                                     "unit": "MARINE STRUCTURES", "inside": False})
+        item = job(unit)
+        assert item["team_spent_mm"] == pytest.approx(before - 8 / 185, abs=0.01)
+        who = {p["name"]: p for g in item["who"] for p in g["people"]}
+        assert who["Ahmed Mockridge"]["inside"] is False and who["Ahmed Mockridge"]["by"] == "job"
+        # Everywhere else he is still the team's.
+        people = {p["name"]: p for p in unit.budgets()["people"]}
+        assert people["Ahmed Mockridge"]["kind"] == "team"
+
+    def test_a_whole_unit_inside_on_one_job_raises_the_share(self, unit):
+        unit.import_budgets([projects_list(project(JOB, 10.0, 4.0)), the_staff_list()])
+        before = job(unit)["share"]
+        unit.set_budget_on_job(JOB, {"people": [
+            {"full_name": "Draft Person", "unit": "CONCRETE BUILDINGS"}], "inside": True})
+        item = job(unit)
+        assert item["share"] > before
+        assert item["team_budget_mm"] == pytest.approx(10 * item["share"], abs=0.01)
+
+    def test_back_to_the_person_setting(self, unit):
+        unit.import_budgets([the_staff_list()])
+        before = job(unit)["team_spent_mm"]
+        args = {"full_name": "Osama Ashdown", "unit": "MARINE STRUCTURES"}
+        unit.set_budget_on_job(JOB, {**args, "inside": False})
+        unit.set_budget_on_job(JOB, {**args, "inside": None})
+        assert job(unit)["team_spent_mm"] == pytest.approx(before, abs=0.001)
+
+    def test_units_are_grouped_with_their_part_of_the_job(self, unit):
+        unit.import_budgets([the_staff_list()])
+        groups = {g["unit"]: g for g in job(unit)["who"]}
+        assert set(groups) == {"MARINE STRUCTURES", "STEEL STRUCTURES", "CONCRETE BUILDINGS"}
+        assert groups["STEEL STRUCTURES"]["mm"] == pytest.approx(37 / 185, abs=0.01)
+
+    def test_a_bad_answer_is_refused(self, unit):
+        with pytest.raises(ApiError):
+            unit.set_budget_on_job(JOB, {"full_name": "X", "inside": "maybe"})

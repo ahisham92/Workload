@@ -70,6 +70,7 @@
       ['Who is stuck or needs help?', 'Who needs help', ['checkins']],
       ['Which jobs need attention?', 'Projects', ['projects']],
       ['Is a job over its budget?', 'Projects › Budgets', ['budgets']],
+      ['Who worked for my team on a job, and our share of its budget', 'Projects › Budgets, tap the job', ['budgets']],
       ['What is due, and what came back with A, B or C?', 'Planner › Submissions', ['planner', 'submissions']],
       ['Record a submission, its return and the next revision', 'Planner › Submissions, or the project on Projects', ['planner', 'submissions']],
       ['Do we need more people?', 'Planner › People needed, or Who needs help › Team staffing', ['planner', 'people']],
