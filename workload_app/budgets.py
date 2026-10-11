@@ -983,6 +983,42 @@ def loaned_out(service) -> List[Dict[str, Any]]:
     return out
 
 
+KEPT_KEY = "budgets.kept_typed"
+
+
+def kept_budgets(service) -> Dict[str, float]:
+    """Budgets typed on Projects the manager said to keep, by job."""
+    try:
+        kept = json.loads(service.store.setting(KEPT_KEY) or "{}")
+    except ValueError:
+        return {}
+    return {k: float(v) for k, v in kept.items() if isinstance(v, (int, float))}
+
+
+def settle_register_budget(service, job: str, body: Dict[str, Any]) -> None:
+    """A typed budget that differs from BISpark's: use BISpark's, or keep it."""
+    job = _job(job)
+    use = (body or {}).get("use")
+    if use not in ("bispark", "mine"):
+        raise BudgetError("Say which budget to use: BISpark's or the one typed.")
+    item = next((j for j in _jobs(service) if j["job_number"] == job), None)
+    project = next((p for p in service.workbook.projects() if p.number == job), None)
+    if item is None or project is None:
+        raise BudgetError(f"{job} is not on the Projects tab.")
+    kept = kept_budgets(service)
+    if use == "mine":
+        kept[job] = float(project.budget_mm or 0)
+    else:
+        target = item["team_budget_mm"]
+        if not target:
+            raise BudgetError(f"{job} has no BISpark budget for your team yet.")
+        target = round(target, 2)
+        service.workbook.update_project(job, {**project.to_dict(), "budget_mm": target})
+        service.store.set_applied_budget(job, target)
+        kept.pop(job, None)
+    service.store.set_setting(KEPT_KEY, json.dumps(kept, sort_keys=True))
+
+
 def view(service) -> Dict[str, Any]:
     jobs = _jobs(service)
     unit = own_unit(service)
@@ -994,34 +1030,37 @@ def view(service) -> Dict[str, Any]:
     short = [j for j in live if j["state"] == "short"]
     guessed = [j for j in live if j["share_basis"] == "unknown" and j["budget_mm"]]
     needs = [j for j in live if j["needs_more"] and j["state"] != "over"]
+    kept = kept_budgets(service)
     typed = [j for j in live if j["in_register"] and j["team_budget_mm"]
              and not j["follows_bispark"] and j["project_budget_mm"] is not None
-             and abs(j["project_budget_mm"] - j["team_budget_mm"]) >= 0.05]
+             and abs(j["project_budget_mm"] - j["team_budget_mm"]) >= 0.05
+             and not (j["job_number"] in kept
+                      and abs(kept[j["job_number"]] - j["project_budget_mm"]) < 0.005)]
     people = people_on_jobs(service)
     unsure = [p for p in people if not p["set"] and p["kind"] == "other"
               and p["mm"] >= 0.25]
     if over:
-        todo.append({"level": "now", "jobs": [j["job_number"] for j in over],
+        todo.append({"level": "now", "kind": "over", "jobs": [j["job_number"] for j in over],
                      "text": f"{_count(over, 'job')} past the team's budget. Agree more "
                              "budget with the project manager, or stop booking to it."})
     if short:
-        todo.append({"level": "soon", "jobs": [j["job_number"] for j in short],
+        todo.append({"level": "soon", "kind": "short", "jobs": [j["job_number"] for j in short],
                      "text": f"{_count(short, 'job')} will run out before the end at this "
                              "pace. Slow the hours down or ask for more budget now."})
     if needs:
-        todo.append({"level": "soon", "jobs": [j["job_number"] for j in needs],
+        todo.append({"level": "soon", "kind": "needs", "jobs": [j["job_number"] for j in needs],
                      "text": f"BISpark says {_count(needs, 'job')} need more effort than "
                              "is left. Raise it at the next project meeting."})
     if guessed:
-        todo.append({"level": "note", "jobs": [j["job_number"] for j in guessed],
+        todo.append({"level": "note", "kind": "guessed", "jobs": [j["job_number"] for j in guessed],
                      "text": f"{_count(guessed, 'job')} have no staff expenditure yet, "
                              "so the team is counted as all of the budget. Set your share."})
     if unsure:
-        todo.append({"level": "note", "people": [p["name"] for p in unsure],
+        todo.append({"level": "note", "kind": "people", "people": [p["name"] for p in unsure],
                      "text": f"{_count(unsure, 'person', 'people')} from other units booked "
                              "to your jobs. Mark any draftsman or loan in People on your jobs."})
     if typed:
-        todo.append({"level": "note", "jobs": [j["job_number"] for j in typed],
+        todo.append({"level": "note", "kind": "typed", "jobs": [j["job_number"] for j in typed],
                      "text": f"{_count(typed, 'project')} have a budget typed by hand "
                              "that differs from BISpark's. Check which is right."})
     held = service.store.job_budgets()

@@ -2703,6 +2703,16 @@ class WorkloadService:
                 raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
             return budgets_module.view(self)
 
+    def settle_budget(self, job: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """A typed budget that differs from BISpark's: use BISpark's or keep it."""
+        with self._lock:
+            self._commit()
+            try:
+                budgets_module.settle_register_budget(self, job, body)
+            except budgets_module.BudgetError as error:
+                raise ApiError(HTTPStatus.BAD_REQUEST, error.message) from None
+            return budgets_module.view(self)
+
     def set_budget_person(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             self._commit()
