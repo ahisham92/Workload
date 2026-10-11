@@ -497,6 +497,17 @@ class TestInsideOrOutsidePerJob:
         assert item["share"] > before
         assert item["team_budget_mm"] == pytest.approx(10 * item["share"], abs=0.01)
 
+    def test_a_tap_that_changes_no_gap_rows_leaves_the_timesheets_alone(self, unit):
+        # Ahmed (2026-10-11): each tap brought up a ten-second wait. Somebody
+        # from another unit set outside, as they already were, changes no
+        # filled-in day, so nothing worked out from the timesheets is redone.
+        from workload_app.timesheet_store import ROWS_REVISION_KEY
+        unit.import_budgets([the_staff_list()])
+        rows_before = unit.store.setting(ROWS_REVISION_KEY)
+        unit.set_budget_on_job(JOB, {"full_name": "Draft Person",
+                                     "unit": "CONCRETE BUILDINGS", "inside": False})
+        assert unit.store.setting(ROWS_REVISION_KEY) == rows_before
+
     def test_back_to_the_person_setting(self, unit):
         unit.import_budgets([the_staff_list()])
         before = job(unit)["team_spent_mm"]

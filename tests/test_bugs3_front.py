@@ -378,6 +378,9 @@ def test_a_budget_share_or_person_change_refreshes_the_projects_tab():
       const api = async () => ({ jobs: [] }); const closeModal = () => {}; const toast = () => {};
       const renderBudgets = () => {}; const fmt = { pct0: (v) => String(v) };
       var refreshAll = async () => { refreshed += 1; };
+      // The refresh waits for the taps to stop and runs without the ship.
+      const voyage = { quietly: (work) => work() };
+      const setTimeout = (fn) => { fn(); return 0; }; const clearTimeout = () => {};
       (async () => {
         editShare({ job_number: 'J-1', share_basis: 'booked', share: 0.5 }); await save();
         editPerson({ name: 'Osama', unit: 'MS', set: false }); await save();

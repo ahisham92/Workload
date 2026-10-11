@@ -519,13 +519,16 @@ def set_person(service, body: Dict[str, Any]) -> None:
     apply_to_register(service)
 
 
-def refill(service) -> int:
-    """Work the gap rows out again from the staff expenditures held."""
+def refill(service, jobs: Optional[Sequence[str]] = None) -> int:
+    """Work the gap rows out again from the staff expenditures held: every
+    job's, or only ``jobs``."""
     store = service.store
     unit = own_unit(service)
     people = store.spend_people()
     by_job: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for e in store.job_spend():
+        if jobs is not None and e["job_number"] not in jobs:
+            continue
         by_job[e["job_number"]].append(
             {"job_number": e["job_number"], "name": e["full_name"],
              "unit": e["unit"], "dept": e["dept"], "day": e["day"],
@@ -535,6 +538,11 @@ def refill(service) -> int:
              "overtime_hours": e["overtime"], "grade": "", "job_status": ""})
     added = 0
     for job, rows in by_job.items():
+        # Keep the grade and status the staff list gave, so working the rows
+        # out again changes nothing that did not change.
+        known = store.gap_grades(job, SPEND_SOURCE)
+        for row in rows:
+            row["grade"], row["job_status"] = known.get(row["name"], ("", ""))
         members = team_members(service, rows, unit, people)
         entries, gaps = _entries(store, job, rows, members, people, unit)
         added += store.replace_job_spend(job, entries, gaps, SPEND_SOURCE)
@@ -828,7 +836,11 @@ def _who_on_job(job: str, entries, kinds, per_job, mine, dept_mm) -> List[Dict[s
                     "percent": _r(group["mm"] / dept_mm, 4) if dept_mm else None,
                     "inside_mm": _r(sum(p["inside_mm"] for p in group["people"].values())),
                     "people": people})
-    out.sort(key=lambda g: -(g["inside_mm"] or 0) * 1000 - (g["mm"] or 0))
+    # The units with the team's own people first, then by hours. Not by what
+    # is set inside on the job, so a tap never moves the lists under a finger.
+    own = {g["unit"] for g in out
+           if any(p["kind"] != "other" for p in g["people"])}
+    out.sort(key=lambda g: (g["unit"] not in own, -(g["mm"] or 0)))
     return out
 
 
@@ -850,7 +862,7 @@ def set_on_job(service, job: str, body: Dict[str, Any]) -> None:
         if not name:
             raise BudgetError("Whose?")
         service.store.set_job_person(job, name, _text(item.get("unit")), inside)
-    refill(service)
+    refill(service, [job])
     apply_to_register(service)
 
 
