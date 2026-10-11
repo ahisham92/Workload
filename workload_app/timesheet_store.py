@@ -428,28 +428,7 @@ class TimesheetStore:
     def _insert(self, db: sqlite3.Connection, person: str,
                 rows: Sequence[Dict[str, Any]], source: str) -> int:
         stamp = now()
-        payload = []
-        for row in rows:
-            day = stored_date(row.get("date") if "date" in row else row.get("day"))
-            phase = row.get("phase")
-            payload.append((
-                person,
-                str(row.get("job_type") or ""),
-                str(row.get("job_number") or "").strip(),
-                str(row.get("job_name") or ""),
-                str(row.get("full_name") or ""),
-                day.isoformat() if day else None,
-                int(phase) if isinstance(phase, (int, float)) else None,
-                float(row.get("regular_hours") or 0.0),
-                float(row.get("overtime_hours") or 0.0),
-                float(row.get("hours") or 0.0),
-                str(row.get("deliverable") or ""),
-                str(row.get("job_status") or ""),
-                str(row.get("grade") or ""),
-                str(row.get("unit") or ""),
-                str(row.get("source") or source),
-                stamp,
-            ))
+        payload = [(*self._row_values(person, row, source), stamp) for row in rows]
         db.executemany(
             "INSERT INTO rows (person, job_type, job_number, job_name, "
             "full_name, day, phase, regular_hours, overtime_hours, hours, "
@@ -457,6 +436,28 @@ class TimesheetStore:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             payload)
         return len(payload)
+
+    @staticmethod
+    def _row_values(person: str, row: Dict[str, Any], source: str) -> tuple:
+        """One row as the rows table holds it, but for when it was put in."""
+        day = stored_date(row.get("date") if "date" in row else row.get("day"))
+        phase = row.get("phase")
+        return (
+            person,
+            str(row.get("job_type") or ""),
+            str(row.get("job_number") or "").strip(),
+            str(row.get("job_name") or ""),
+            str(row.get("full_name") or ""),
+            day.isoformat() if day else None,
+            int(phase) if isinstance(phase, (int, float)) else None,
+            float(row.get("regular_hours") or 0.0),
+            float(row.get("overtime_hours") or 0.0),
+            float(row.get("hours") or 0.0),
+            str(row.get("deliverable") or ""),
+            str(row.get("job_status") or ""),
+            str(row.get("grade") or ""),
+            str(row.get("unit") or ""),
+            str(row.get("source") or source))
 
     def forget(self, person: str) -> int:
         with self._connect() as db:
@@ -1200,6 +1201,14 @@ class TimesheetStore:
                 "SELECT DISTINCT person, day, phase FROM rows "
                 "WHERE job_number = ? AND source <> ?", (job_number, source))}
 
+    def gap_grades(self, job_number: str, source: str) -> Dict[str, Tuple[str, str]]:
+        """Each person's grade and job status on the gap rows ``source`` put
+        in for a job, which the staff expenditure held does not keep."""
+        with self._connect() as db:
+            return {r[0]: (r[1], r[2]) for r in db.execute(
+                "SELECT full_name, grade, job_status FROM rows "
+                "WHERE job_number = ? AND source = ?", (job_number, source))}
+
     def replace_job_spend(self, job_number: str,
                           entries: Sequence[Dict[str, Any]],
                           gaps: Dict[str, Sequence[Dict[str, Any]]],
@@ -1222,6 +1231,18 @@ class TimesheetStore:
                   e.get("deliverable") or "", float(e.get("hours") or 0),
                   float(e.get("overtime") or 0), float(e.get("mm") or 0), stamp)
                  for e in entries])
+            wanted = sorted((self._row_values(person, row, source)
+                             for person, rows in gaps.items() for row in rows), key=repr)
+            held = sorted([tuple(r) for r in db.execute(
+                "SELECT person, job_type, job_number, job_name, full_name, day, "
+                "phase, regular_hours, overtime_hours, hours, deliverable, "
+                "job_status, grade, unit, source FROM rows "
+                "WHERE job_number = ? AND source = ?", (job_number, source))],
+                key=repr)
+            if wanted == held:
+                # The same gap rows: leaving them keeps every figure worked
+                # out from the timesheets, so the next page is instant.
+                return len(wanted)
             db.execute("DELETE FROM rows WHERE job_number = ? AND source = ?",
                        (job_number, source))
             added = 0

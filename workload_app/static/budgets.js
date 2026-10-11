@@ -284,14 +284,25 @@ function whoOnJob(job) {
   const total = groups.reduce((s, g) => s + (g.mm || 0), 0);
   const inside = groups.reduce((s, g) => s + (g.inside_mm || 0), 0);
   const outside = Math.max(0, total - inside);
+  // A tap shows at once; the figures catch up when the server answers, with
+  // nothing over the page, so several people can be set one after another.
   const save = async (people, value, said) => {
+    for (const p of people) { p.inside = value; p.part = false; p.by = 'job'; }
+    for (const g of groups) g.inside_mm = g.people.reduce((s, p) => s + (p.inside ? p.mm || 0 : 0), 0);
+    renderBudgets();
+    bud.pending = (bud.pending || 0) + 1;
     try {
-      bud.data = await api(`/api/budgets/jobs/${encodeURIComponent(job.job_number)}/people`, {
-        method: 'PUT', body: { people: people.map((p) => ({ full_name: p.name, unit: p.unit })), inside: value } });
-      toast(said, 'ok');
-      renderBudgets();
+      const fresh = await api(`/api/budgets/jobs/${encodeURIComponent(job.job_number)}/people`, {
+        method: 'PUT', quiet: true,
+        body: { people: people.map((p) => ({ full_name: p.name, unit: p.unit })), inside: value } });
+      bud.pending -= 1;
+      if (!bud.pending) { bud.data = fresh; renderBudgets(); }
       registerChanged();
-    } catch (error) { toastError(error); }
+    } catch (error) {
+      bud.pending -= 1;
+      toastError(error);
+      loadBudgets(true);
+    }
   };
   const choice = (p) => el('span', { class: 'bu-io', role: 'group', 'aria-label': `${p.name} on this job` },
     ...[[true, 'Inside'], [false, 'Outside']].map(([value, text]) => el('button', {
@@ -308,7 +319,10 @@ function whoOnJob(job) {
         : `So your share of the budget is ${fmt.pct0(job.share)}`
           + (job.team_budget_mm == null ? ' (the job has no budget yet).' : `, and your budget ${fmt.mm(job.team_budget_mm)} MM.`))),
     el('p', { class: 'muted' }, 'Tap a unit to see its people.'),
-    ...groups.map((g) => el('details', { class: 'bu-unit', open: g.inside_mm > 0 || groups.length === 1 ? true : null },
+    ...groups.map((g) => el('details', {
+      class: 'bu-unit',
+      open: (unitOpen(job, g) ?? (g.inside_mm > 0 || groups.length === 1)) ? true : null,
+      ontoggle: (e) => { bud.units = bud.units || {}; bud.units[`${job.job_number}|${g.unit}`] = e.target.open; } },
       el('summary', {},
         el('b', {}, g.unit_label || 'Unit not known'),
         el('span', { class: 'muted' }, ` · ${fmt.mm(g.mm)} MM, ${fmt.pct0(total ? g.mm / total : 0)} of the job`),
@@ -344,8 +358,18 @@ function editShare(job) {
 /** A share, a person or a new file moves the team's budget on the Projects
     tab (where it follows BISpark) and the days the staff expenditure fills
     in: the rest of the app is read again so it does not show the old ones. */
+/** Whether the person opened or closed this unit's list, so a save keeps it. */
+function unitOpen(job, g) {
+  return (bud.units || {})[`${job.job_number}|${g.unit}`];
+}
+
+/** The rest of the app catches up in the background, once the taps stop. */
 function registerChanged() {
-  if (typeof refreshAll === 'function') refreshAll().catch(() => {});
+  if (typeof refreshAll !== 'function') return;
+  clearTimeout(bud.refreshTimer);
+  bud.refreshTimer = setTimeout(() => {
+    voyage.quietly(() => refreshAll()).catch(() => {});
+  }, 2500);
 }
 
 /* ------------------------------------------------------- people on the jobs */

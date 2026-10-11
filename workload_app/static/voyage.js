@@ -160,7 +160,15 @@ const voyage = (() => {
     shown = 0;
   }
 
+  // Background work the person did not wait for: no ship over the page.
+  let hushed = 0;
+  async function quietly(work) {
+    hushed += 1;
+    try { return await work(); } finally { hushed -= 1; }
+  }
+
   function begin(label, key) {
+    if (hushed) return () => {};
     if (!veil) build();
     const named = label || 'Loading';
     const kind = key || named;
@@ -237,5 +245,5 @@ const voyage = (() => {
     return `${method.toUpperCase()} ${p}`;
   }
 
-  return { trip: begin, during, ready, labelFor, keyFor };
+  return { trip: begin, during, ready, labelFor, keyFor, quietly };
 })();
