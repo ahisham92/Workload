@@ -51,6 +51,10 @@ def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
     if task.done or not task.required_hours or task.due is None:
         return 0.0
     each = task.hours_each()
+    if task.due < today and is_prep_step(task):
+        # A run-up day that has gone is gone: piling every missed day of
+        # preparation onto today would book people for days at once.
+        return 0.0
     if task.due < today:                       # overdue: it is today's
         # (or the next working day's, when today is a weekend or a holiday)
         return each if day == _first_working(today, config) else 0.0
@@ -58,6 +62,18 @@ def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
     days = (task_sheet.working_days(first, task.due, config)
             or [_first_working(first, config)])
     return each / len(days) if day in days else 0.0
+
+
+def is_prep_step(task: task_sheet.Task) -> bool:
+    """One of the daily preparation steps the app makes before a submission."""
+    return task.kind == "Submission" and bool(task.series)
+
+
+def prep_title(task: task_sheet.Task, submitted_on: Optional[_dt.date]) -> str:
+    """A preparation step as a task reads: what to prepare and for when."""
+    what = task.deliverable_name or task.name.split(" — ")[0]
+    when = f", due {submitted_on:%d/%m}" if submitted_on else ""
+    return f"Prepare the submission: {what}{when}"
 
 
 def _first_working(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
@@ -82,6 +98,11 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
     day_end = intake._at(day, config["day_end"])
     a_day = task_sheet.hours_per_day(config)
     tasks_by_id = {t.id: t for t in tasks}
+    # A run-up's last step falls on the submission day itself.
+    submitted_on: Dict[str, _dt.date] = {}
+    for task in tasks:
+        if is_prep_step(task) and task.due:
+            submitted_on[task.series] = max(task.due, submitted_on.get(task.series, task.due))
 
     pace: Dict[str, Dict[str, float]] = defaultdict(dict)
     for (person, project), rate in rates.items():
@@ -154,7 +175,9 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                 if hours <= 0:
                     continue
                 flexible.append({"hours": hours, "kind": task.kind.lower(),
-                                 "title": task.name, "project": task.project_number,
+                                 "title": (prep_title(task, submitted_on.get(task.series))
+                                           if is_prep_step(task) else task.name),
+                                 "project": task.project_number,
                                  "task_id": task.id, "done": False})
                 if task.project_number:
                     on_task_projects[task.project_number] += hours

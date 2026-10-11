@@ -1171,7 +1171,8 @@ class WorkloadService:
                 typed=meetings_module.occurrences(
                     self.store.meetings(), *busy_calendar.window(_today()))),
             "rows": rows,
-            "tasks": wb.task_records(),
+            "tasks": checkins_module.without_settled_runs(
+                wb.task_records(), self._submissions_sent(wb)),
             "roster": roster["people"],
             "teams": roster["teams"],
             "config": config,

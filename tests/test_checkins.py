@@ -298,3 +298,38 @@ def test_a_submission_long_gone_is_left_to_the_submissions_list():
     gone = checkins._submission_points("Kirolos", steps, dt.date(2026, 10, 30),
                                        dt.date(2026, 11, 4))
     assert gone == []
+
+
+class TestPreparationOnToday:
+    """Ahmed (2026-10-11): Today stacked "submission day 1 of 6" to "day 5 of
+    6" of one submission on the same morning and booked everybody full. A
+    run-up day that has gone stays gone, a sent submission is not prepared,
+    and each step reads as the task it is."""
+
+    CONFIG = {"work_days": [6, 0, 1, 2, 3], "day_start": "08:00", "day_end": "16:30",
+              "hours_per_day": 8.5, "holidays": set(), "away": {}, "half_away": {}}
+
+    def page(self, tasks, today):
+        from workload_app import daily
+        laid = daily.plan_day(day=today, today=today, roster=[{"name": "Kirolos"}],
+                              rates={}, tasks=tasks, slots={}, config=self.CONFIG,
+                              project_names={})
+        return [b for b in laid["people"][0]["blocks"] if b["kind"] == "submission"]
+
+    def test_missed_run_up_days_do_not_pile_onto_today(self):
+        steps = TestSubmissionPreparation.steps()          # 4 to 11 Oct
+        blocks = self.page(steps, dt.date(2026, 10, 8))
+        assert len(blocks) == 1 and blocks[0]["hours"] == 2.0
+
+    def test_each_step_reads_as_a_task(self):
+        blocks = self.page(TestSubmissionPreparation.steps(), dt.date(2026, 10, 8))
+        assert blocks[0]["title"] == "Prepare the submission: Berth 9 drawings, due 11/10"
+
+    def test_a_sent_submission_is_not_prepared(self):
+        steps = TestSubmissionPreparation.steps()
+        sent = {7: {"sent": ["2026-10-07"], "date": "2026-10-11"}}
+        assert checkins.without_settled_runs(steps, sent) == []
+        moved = {7: {"sent": [], "date": "2026-10-20"}}
+        assert checkins.without_settled_runs(steps, moved) == []
+        open_ = {7: {"sent": [], "date": "2026-10-11"}}
+        assert len(checkins.without_settled_runs(steps, open_)) == 6
