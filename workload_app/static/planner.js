@@ -1545,7 +1545,8 @@ function renderSubmissions() {
           el('h3', {}, 'Submissions plan'),
           el('p', { class: 'muted' },
             'Drafted by the app: a date for every deliverable not yet submitted, from how much is left before it can go '
-            + 'and how fast it is being done. A ticked date is one the app suggests; change any date, then tap Use. Each date used '
+            + 'and how fast it is being done. Tap a date to change it: it saves at once. A ticked date is one the app '
+            + 'suggests; tap Use to keep the ticked ones. To record what was sent or came back, use the sheet above. Each '
             + `date goes on the deliverable, and its run-up (${fmt.hours(data.hours_a_day)} h a day over the ${data.lead_days} days before) `
             + 'goes into the right people’s days. '
             + (counts.typical
@@ -1574,7 +1575,8 @@ function renderSubmissions() {
                 onchange: (e) => { if (e.target.checked) plan.chosen.add(item.row); else plan.chosen.delete(item.row); renderSubmissions(); } });
               box.checked = plan.chosen.has(item.row);
               const date = el('input', { type: 'date', value: dateOf(item) || '',
-                onchange: (e) => { plan.edits[item.row] = e.target.value || null; if (e.target.value) plan.chosen.add(item.row); renderSubmissions(); } });
+                'aria-label': `Due date of ${item.name}`,
+                onchange: (e) => saveSubmissionDate(item, e.target.value) });
               const [pill, text] = BASIS[item.basis] || ['pill-neutral', item.basis];
               return el('tr', {},
                 el('td', {}, box),
@@ -1591,6 +1593,32 @@ function renderSubmissions() {
             }))))
         : el('div', { class: 'empty' }, 'Every deliverable has been submitted. Nothing to plan.')),
     waitingPanel(data));
+}
+
+/** A date changed in the plan saves at once: it goes on the deliverable and
+    its run-up moves with it. Clearing a date only unticks the row. */
+async function saveSubmissionDate(item, iso) {
+  if (!iso) {
+    plan.edits[item.row] = null;
+    plan.chosen.delete(item.row);
+    renderSubmissions();
+    return;
+  }
+  if (iso === item.date && item.basis === 'set') return;
+  try {
+    const result = await api('/api/submissions/confirm', {
+      method: 'POST', body: { items: [{ row: item.row, date: iso }], prepare: true } });
+    if (result.save) markSaved(result.save);
+    toast(`${item.name}: due ${fmt.date(iso)}, saved. Its preparation moved with it.`, 'ok');
+    if (state.tasks) state.tasks = null;
+    plan.needs = null;
+    delete plan.edits[item.row];
+    plan.chosen.delete(item.row);
+    await loadSubmissions({ quiet: true });
+  } catch (error) {
+    toastError(error);
+    renderSubmissions();
+  }
 }
 
 /** The plan again, after a submission changed above it, leaving the sheet

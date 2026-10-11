@@ -2465,7 +2465,14 @@ class WorkloadService:
 
     def update_submission(self, issue_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            issue = self.workbook.update_issue(_issue_id(issue_id), body or {})
+            wb = self.workbook
+            row = wb._issue(_issue_id(issue_id)).get("deliverable_row")
+            issue = wb.update_issue(_issue_id(issue_id), body or {})
+            series = f"submission:{row}"
+            if "planned" in (body or {}) and row is not None and any(
+                    t.series == series for t in wb.task_records()):
+                # Its run-up moves with the planned day.
+                wb.generate_submission_tasks(only_row=int(row), today=_today())
             return {"issue": issue, "save": self._commit()}
 
     def remove_submission(self, issue_id: Any) -> Dict[str, Any]:

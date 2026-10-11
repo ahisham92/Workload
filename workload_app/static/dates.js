@@ -150,7 +150,9 @@ function drawDayPicker() {
   for (let i = 0; i < first; i += 1) cells.push(make('span', { class: 'dp-blank' }));
   for (let d = 1; d <= days; d += 1) {
     const iso = isoOf(y, m + 1, d);
-    const off = (min && iso < min) || (max && iso > max);
+    // A real true or false: make() keeps an attribute for '', and an empty
+    // min would have greyed out every day of the month.
+    const off = Boolean((min && iso < min) || (max && iso > max));
     const weekend = [5, 6].includes(new Date(y, m, d).getDay());
     cells.push(make('button', {
       type: 'button', disabled: off,
