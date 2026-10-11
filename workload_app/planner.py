@@ -113,7 +113,11 @@ def pace(rows: Iterable[Dict[str, Any]], config: Dict[str, Any], *,
          lookback: int = LOOKBACK_DAYS) -> Dict[str, Any]:
     """Hours a working day each person has been putting into each project."""
     rows = list(rows)
+    # A job whose submissions have all gone, with nothing planned or come
+    # back, has no usual work to plan until something is.
+    quiet = config.get("quiet_projects") or ()
     project_rows = [r for r in rows if r.get("date") and r.get("job_number")
+                    and r.get("job_number") not in quiet
                     and derive.is_project_work(r.get("job_type") or "")]
     if not project_rows:
         return {"rates": {}, "from": None, "to": None, "days": 0}
@@ -246,6 +250,8 @@ def _apply_project_moves(rates: Dict[Tuple[str, str], float],
         out[key] = out.get(key, 0.0) - amount
         if out[key] <= 1e-9:
             out.pop(key)
+        if not move["to"]:
+            continue                  # stopped: nobody takes it on
         target = (move["to"], move["project"])
         out[target] = out.get(target, 0.0) + amount
     return out, moved

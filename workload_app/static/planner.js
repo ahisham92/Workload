@@ -507,6 +507,7 @@ function moveText(move) {
   if (move.kind === 'extra') return `New work "${move.project}" for ${move.to}, ${fmt.hours(move.hours)} h`;
   if (move.kind === 'task') return `Task "${move.name}" from ${move.from} to ${move.to}`;
   const share = move.share >= 0.999 ? 'All' : `${Math.round(move.share * 100)}%`;
+  if (!move.to) return `${share} of ${move.from}'s time on ${move.project} stopped`;
   return `${share} of ${move.from}'s time on ${move.project}${move.name && move.name !== move.project ? ` (${move.name})` : ''} to ${move.to}`;
 }
 
@@ -728,7 +729,7 @@ async function overviewNeeds() {
 /* -- today ------------------------------------------------------------- */
 
 const KIND_LABEL = { request: 'Request', submission: 'Submission', meeting: 'Meeting',
-  management: 'Team', development: 'Development', task: 'Task', work: '',
+  management: 'Team', development: 'Development', task: 'Task', work: 'Usual work',
   half_day: 'Half day off' };
 
 /** A meeting's agenda, folded away under it until it is wanted. */
@@ -1383,13 +1384,19 @@ function dayCards(day, shown) {
               : p.over_hours ? `${fmt.hours(p.over_hours)} h won't fit today`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
         el('ol', { class: 'day-blocks' }, p.blocks.map((b) => el('li', {
-          class: `block block-${b.kind} ${b.done ? 'is-done' : ''}`,
+          class: `block block-${b.kind} ${b.done ? 'is-done' : ''}${b.kind === 'work' ? ' is-tappable' : ''}`,
+          title: b.kind === 'work' ? 'Tap to hand this work to somebody else, or stop it' : null,
+          role: b.kind === 'work' ? 'button' : null, tabindex: b.kind === 'work' ? '0' : null,
+          onclick: b.kind === 'work' ? () => changeUsualWork(day, p, b) : null,
+          onkeydown: b.kind === 'work' ? (e) => { if (e.key === 'Enter') changeUsualWork(day, p, b); } : null,
         },
         el('span', { class: 'block-time' }, `${b.start}–${b.end}`),
         el('span', { class: 'block-what' },
           KIND_LABEL[b.kind] ? el('span', { class: 'block-kind' }, KIND_LABEL[b.kind]) : null,
           b.project && b.title !== b.project ? el('span', { class: 'code' }, `${b.project} `) : null,
           b.title,
+          b.kind === 'work' ? el('span', { class: 'block-note' },
+            'At the pace of their last timesheets. Tap to change.') : null,
           agendaList(b))))),
         p.away ? null : el('button', { class: 'linkish day-away', type: 'button',
           onclick: () => markAway(plan.dayData, p.name) }, 'Add a day off')))),
@@ -1397,6 +1404,37 @@ function dayCards(day, shown) {
       el('b', {}, 'Off today: '), away.map((p) => p.name).join(', '), '.') : null,
     idle.length ? el('p', { class: 'muted small' },
       `Nothing booked lately and nothing planned: ${idle.map((p) => p.name).join(', ')}.`) : null);
+}
+
+/** A tap on somebody's usual work: hand it on, or stop it, for some days.
+    Kept with the handovers under Move work, where it can be undone. */
+function changeUsualWork(day, person, block) {
+  const others = day.people.map((x) => x.name).filter((n) => n !== person.name);
+  const later = new Date(`${day.date}T00:00:00Z`);
+  later.setUTCDate(later.getUTCDate() + 27);
+  const job = block.project;
+  const name = block.title && block.title !== job ? ` (${block.title})` : '';
+  openModal(`${person.name} on ${job}`, [
+    { name: 'what', label: 'What should change', type: 'select', full: true,
+      options: [{ value: 'all', label: 'Hand all of it to somebody else' },
+        { value: 'half', label: 'Hand half of it to somebody else' },
+        { value: 'stop', label: 'Stop it: nothing to do on this job now' }] },
+    { name: 'to', label: 'Hand it to', type: 'select', hint: 'not needed to stop it',
+      options: [{ value: '', label: '—' }, ...others] },
+    { name: 'start', label: 'From', type: 'date' },
+    { name: 'end', label: 'Until', type: 'date', hint: 'the last day it applies' },
+  ], async () => {
+    const v = modalValues();
+    if (v.what !== 'stop' && !v.to) throw new Error('Choose who takes it on.');
+    await api('/api/day/work', { method: 'POST', body: {
+      project: job, person: person.name, to: v.what === 'stop' ? '' : v.to,
+      share: v.what === 'half' ? 0.5 : 1, start: v.start, end: v.end } });
+    closeModal();
+    toast(v.what === 'stop'
+      ? `${person.name}'s work on ${job}${name} is stopped until ${dateText(v.end)}. Undo it under Move work.`
+      : `${v.what === 'half' ? 'Half' : 'All'} of ${person.name}'s work on ${job} goes to ${v.to} until ${dateText(v.end)}. Undo it under Move work.`, 'ok');
+    await loadDay({ quiet: true });
+  }, { what: 'all', start: day.date, end: later.toISOString().slice(0, 10) });
 }
 
 function weekTable(data, shown) {
