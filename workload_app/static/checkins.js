@@ -129,7 +129,7 @@ function renderCheckins() {
         el('div', {},
           el('h3', {}, 'Free hours, the next two weeks'),
           el('p', { class: 'muted' },
-            'What is left of each working day once their usual project work, tasks and '
+            'What is left of each working day once their submission preparation, meetings, tasks and '
             + 'requests are laid out, the same way the Planner lays out Today. '
             + 'Darker means more free.'))),
       freeGrid(people, data),

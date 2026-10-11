@@ -38,9 +38,25 @@
     return task ? { kind: 'task', task_id: task.id, from: person.name, to } : null;
   }
 
+  /** Somebody's hours on a job for the days shown, the rest shared out by
+      the others on it (or all of it to `to`). Saved at once. */
+  async function setHours(person, item, hours, to = '') {
+    board.picked = null;
+    try {
+      await api('/api/planner/hours', { method: 'POST', quiet: true, body: {
+        project: item.project, person: person.name, hours, to, days: plan.days } });
+      const others = to || 'the others on it';
+      toast(hours > 0
+        ? `${person.name} now has ${fmt.hours(hours)} h on ${item.project}; the rest went to ${others}.`
+        : `${person.name}'s ${item.project} went to ${others}.`, 'ok');
+    } catch (error) { toastError(error); }
+    await loadPlanner({ quiet: true });
+  }
+
   async function hand(person, item, to) {
     board.picked = null;
     if (to === person.name) { renderAgain(); return; }
+    if (item.project) { await setHours(person, item, 0, to); return; }
     const move = moveFor(person, item, to);
     if (!move) { toast('Nothing here can be handed over.'); renderAgain(); return; }
     await tryMoves(plan.moves.concat([move]));
@@ -94,7 +110,7 @@
       class: `bd-token ${gone ? 'is-gone' : ''} ${picked ? 'is-picked' : ''} ${Math.abs(delta) > 0.05 ? 'is-changed' : ''}`,
       'data-drop-person': person.name,
       role: 'button', tabindex: '0',
-      'aria-label': `${person.name}, ${fmt.hours(h)} hours on ${item.project || item.name}. Tap to hand some of it over.`,
+      'aria-label': `${person.name}, ${fmt.hours(h)} hours on ${item.project || item.name}. Tap to change the hours or hand them over.`,
       title: `${person.name}: ${fmt.hours(h)} h on ${item.name}`,
     },
     avatar(person.name, size),
@@ -178,23 +194,46 @@
         el('div', {},
           el('h3', {}, 'Move work'),
           el('p', { class: 'muted' },
-            'Each column is a piece of work for the days chosen, each person sits on what they have lined up, '
-            + 'bigger for more hours. Drag someone onto another person to hand over half of it, or tap them '
-            + 'and choose who. Nothing changes until you keep the moves.')),
+            'Each column is a job with submission work in the days chosen; each person sits on their hours of it, '
+            + 'bigger for more hours. Tap someone to change their hours: the rest is shared out by the others on the job. '
+            + 'Drag someone onto another person to hand all of it to them.')),
         el('div', { class: 'row-actions' },
           el('button', { class: 'btn', type: 'button', onclick: suggestMoves }, 'Suggest moves'),
           trying ? el('button', { class: 'btn', type: 'button', onclick: () => tryMoves([]) }, 'Clear') : null,
           trying ? el('button', { class: 'btn btn-primary', type: 'button', onclick: commitMoves },
             `Keep ${plan.moves.length} move${plan.moves.length === 1 ? '' : 's'}`) : null)),
       el('div', { class: 'bd-people' }, people.map(personChip)),
-      picked
-        ? el('div', { class: 'msg msg-info bd-prompt' },
-          el('span', {}, `Hand some of ${picked.person.name}'s ${picked.item.project || picked.item.name} to who? Tap a person above.`),
-          el('button', { class: 'btn btn-sm', type: 'button', onclick: () => { board.picked = null; renderAgain(); } }, 'Cancel'))
-        : null,
+      picked ? prompt(picked) : null,
       effect,
       trying ? el('div', { class: 'bd-moves' }, plan.moves.map(moveChip)) : null,
       lanes);
+  }
+
+  /** What a tap on somebody opens: their hours on that job to change, the
+      rest shared out by the others; or a person above to hand it all to. */
+  function prompt(picked) {
+    const cancel = el('button', { class: 'btn btn-sm', type: 'button',
+      onclick: () => { board.picked = null; renderAgain(); } }, 'Cancel');
+    if (!picked.item.project) {
+      return el('div', { class: 'msg msg-info bd-prompt' },
+        el('span', {}, `Hand ${picked.person.name}'s ${picked.item.name} to who? Tap a person above.`), cancel);
+    }
+    const now = picked.item.hours_after;
+    const box = el('input', { type: 'number', min: '0', step: '0.5', value: String(now),
+      class: 'bd-hours-box', 'aria-label': `${picked.person.name}'s hours on ${picked.item.project}` });
+    const save = () => {
+      const hours = Number(box.value);
+      if (!(hours >= 0) || Math.abs(hours - now) < 0.05) return;
+      setHours(picked.person, picked.item, hours);
+    };
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+    requestAnimationFrame(() => { box.focus(); box.select(); });
+    return el('div', { class: 'msg msg-info bd-prompt bd-hours' },
+      el('span', {}, `${picked.person.name}'s hours on ${picked.item.project} in these days: `),
+      box, el('span', {}, ' h'),
+      el('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: save }, 'Change'),
+      el('span', { class: 'muted small' }, 'The rest is shared out by the others on this job. Or tap a person above to hand all of it to them.'),
+      cancel);
   }
 
   /* ------------------------------------------------------- dragging */

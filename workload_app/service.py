@@ -384,7 +384,10 @@ class WorkloadService:
 
     def update_deliverable(self, row: int, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
+            before = self.workbook.splits()
             deliverable = self.workbook.update_deliverable(row, body)
+            # A new split moves the preparation still ahead at once.
+            self.workbook.follow_splits(before, today=_today())
             return {"deliverable": deliverable.to_dict(), "save": self._commit()}
 
     def save_project_with_deliverables(self, number: Optional[str],
@@ -402,8 +405,10 @@ class WorkloadService:
             counts = [drawings_module.clean_count(item.get("drawings"))
                       if "drawings" in item else drawings_module.KEEP
                       for item in items]
+            before = self.workbook.splits()
             result = self.workbook.save_project_with_deliverables(
                 number, project, items)
+            self.workbook.follow_splits(before, today=_today())
             for written, count in zip(result["deliverables"], counts):
                 if count is not drawings_module.KEEP:
                     self.store.set_drawings(written["row"],
@@ -1202,13 +1207,13 @@ class WorkloadService:
             management=inputs["management"].taken_a_day())
 
     def _plan_day(self, inputs: Dict[str, Any], day: _dt.date,
-                  roster: Sequence[Dict[str, Any]], rates: Any,
+                  roster: Sequence[Dict[str, Any]],
                   slots: Dict[int, Dict[str, Any]], *, tasks: Any = None,
                   today: Optional[_dt.date] = None, agendas: Any = None
                   ) -> Dict[str, Any]:
         """The day plan for ``day``, for the people in ``roster``."""
         return daily.plan_day(
-            day=day, today=today or _today(), roster=roster, rates=rates,
+            day=day, today=today or _today(), roster=roster,
             tasks=inputs["tasks"] if tasks is None else tasks, slots=slots,
             config=inputs["config"], project_names=inputs["project_names"],
             **inputs["management"].for_day(day, agendas))
@@ -1305,6 +1310,24 @@ class WorkloadService:
             return {"removed": move_id,
                     "outlook": self._outlook(self.workbook, body or {})}
 
+    @staticmethod
+    def _submitting(wb) -> Dict[str, _dt.date]:
+        """Each job's last submission planned and not yet sent."""
+        issues = wb.issues()
+        out: Dict[str, _dt.date] = {}
+        for d in wb.deliverables():
+            mine = issues.get(d.row, [])
+            last = mine[-1] if mine else None
+            if last is not None:
+                day = (None if last.get("submitted")
+                       else _dt.date.fromisoformat(last["planned"]) if last.get("planned")
+                       else None)
+            else:
+                day = d.status_date
+            if day and (d.project_number not in out or day > out[d.project_number]):
+                out[d.project_number] = day
+        return out
+
     @_remembered
     def needs(self) -> Dict[str, Any]:
         with self._lock:
@@ -1325,7 +1348,8 @@ class WorkloadService:
                           for name in t.assignees],
                 planned=self.store.planned_work(),
                 team_names={t["id"]: t["name"] for t in self.store.teams()},
-                management=inputs["management"].taken_a_day())
+                management=inputs["management"].taken_a_day(),
+                submitting=self._submitting(wb))
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",
@@ -1436,45 +1460,6 @@ class WorkloadService:
             return {"removed": item_id, "needs": self.needs()}
 
     # -- the day, requests as they come in, and the submissions plan -------
-    @_remembered
-    def change_usual_work(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        """From the day plan: hand somebody's usual work on a job to somebody
-        else, or stop it, for some days. Kept with the other handovers."""
-        with self._lock:
-            wb = self.workbook
-            body = body or {}
-            project = str(body.get("project") or "").strip()
-            person = str(body.get("person") or "").strip()
-            to = str(body.get("to") or "").strip()
-            errors = []
-            if not project:
-                errors.append("Which job?")
-            names = set(wb.engineer_names())
-            if person not in names:
-                errors.append(f"{person or 'Nobody'} is not on the team.")
-            if to and (to not in names or to == person):
-                errors.append("Hand it to somebody else on the team.")
-            try:
-                share = float(body.get("share", 1))
-            except (TypeError, ValueError):
-                share = -1
-            if not 0 < share <= 1:
-                errors.append("Hand all of it or half of it.")
-            try:
-                start = _dt.date.fromisoformat(str(body.get("start")))
-                end = _dt.date.fromisoformat(str(body.get("end")))
-            except ValueError:
-                start = end = None
-                errors.append("Give the first and the last day, as dates.")
-            if start and end and end < start:
-                errors.append("The last day is before the first.")
-            if errors:
-                raise ValidationError(errors)
-            move_id = self.store.add_plan_move(
-                project=project, from_person=person, to_person=to, share=share,
-                start=start.isoformat(), end=end.isoformat())
-            return {"id": move_id}
-
     def day_plan(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
         """Everybody's day -- or week -- laid out from what is already known."""
         with self._lock:
@@ -1494,8 +1479,7 @@ class WorkloadService:
             out = []
             for each in days:
                 out.append(self._plan_day(
-                    inputs, each, inputs["roster"],
-                    daily.rates_on(each, inputs["rows"], config, saved), slots,
+                    inputs, each, inputs["roster"], slots,
                     today=today, agendas=agendas))
             requests = []
             for task in inputs["tasks"]:
@@ -1698,8 +1682,7 @@ class WorkloadService:
             page = pages[day]
             if page is None or page.get("away"):
                 continue
-            taken = sum(float(b.get("hours") or 0.0) for b in page.get("blocks", [])
-                        if b.get("kind") != "work")
+            taken = sum(float(b.get("hours") or 0.0) for b in page.get("blocks", []))
             left = a_day - taken
             if day == now.date():
                 left = min(left, max(0.0, (intake._at(day, config["day_end"]) - now)
@@ -1714,7 +1697,7 @@ class WorkloadService:
         return max(now, _dt.datetime.combine(following, _dt.time(0, 0)))
 
     def _pages(self, inputs: Dict[str, Any], person: str,
-               days: Sequence[_dt.date], rates: Dict[_dt.date, Any],
+               days: Sequence[_dt.date],
                extra: Optional[tuple] = None) -> Dict[_dt.date, Dict[str, Any]]:
         """One person's page of the day plan for each of ``days``; ``extra``
         is a (task, slot) being tried, not saved."""
@@ -1726,7 +1709,7 @@ class WorkloadService:
             slots[extra[0].id] = extra[1]
         out = {}
         for day in days:
-            page = self._plan_day(inputs, day, me, rates[day], slots, tasks=tasks)
+            page = self._plan_day(inputs, day, me, slots, tasks=tasks)
             out[day] = page["people"][0] if page["people"] else None
         return out
 
@@ -1745,7 +1728,7 @@ class WorkloadService:
             if urgency == urgent_module.ROOM:
                 days = planner_module.days_ahead(now.date(), urgent_module.WINDOW_DAYS,
                                                  inputs["config"])
-                pages = self._pages(inputs, person, days, self._rates_by_day(inputs, days))
+                pages = self._pages(inputs, person, days)
             start, end = self._slot_for(inputs, person, request["hours"], now,
                                         urgency, pages)
             task = wb.save_task({
@@ -1770,11 +1753,6 @@ class WorkloadService:
                     "late": end.date() > request["due"],
                     "save": self._commit()}
 
-    def _rates_by_day(self, inputs: Dict[str, Any], days: Sequence[_dt.date]):
-        measured = planner_module.pace(inputs["rows"], inputs["config"])["rates"]
-        saved = self.store.plan_moves()
-        return {day: planner_module.rates_in_force(measured, saved, day) for day in days}
-
     def request_preview(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """What a new request would push, and what it would cost, before it
         is added: for whoever it would go to, and for a few others."""
@@ -1788,19 +1766,18 @@ class WorkloadService:
             person = self._choose_person(inputs, request, today, engineers)
             now = self._request_now(body, today)
             days = planner_module.days_ahead(now.date(), urgent_module.WINDOW_DAYS, config)
-            rates = self._rates_by_day(inputs, days)
             tasks_by_id = {t.id: t for t in inputs["tasks"] if not t.done}
             a_day = task_sheet.hours_per_day(config)
             per_mm = wb.hours_per_man_month() or 0.0
 
             def option(name: str, urgency: str) -> Dict[str, Any]:
-                before = self._pages(inputs, name, days, rates)
+                before = self._pages(inputs, name, days)
                 start, end = self._slot_for(inputs, name, request["hours"], now,
                                             urgency, before)
                 trial = urgent_module.trial_task(request, name, start, end)
                 slot = {"person": name, "start": start.isoformat(timespec="minutes"),
                         "end": end.isoformat(timespec="minutes")}
-                after = self._pages(inputs, name, days, rates, (trial, slot))
+                after = self._pages(inputs, name, days, (trial, slot))
                 view = urgent_module.effect(
                     person=name, days=days,
                     plan=lambda day, new: (after if new else before).get(day),
@@ -1823,7 +1800,7 @@ class WorkloadService:
                         or p["name"] not in engineers or p["name"] in away_today
                         or people_module.role_of(p.get("grade")) != role):
                     continue
-                pages = self._pages(inputs, p["name"], days[:5], rates)
+                pages = self._pages(inputs, p["name"], days[:5])
                 free = sum((page or {}).get("free_hours", 0.0) for page in pages.values())
                 others.append((-free, p["name"]))
             others.sort()
@@ -1876,9 +1853,8 @@ class WorkloadService:
         roster = inputs["roster"]
         if people is not None:
             roster = [p for p in roster if p["name"] in set(people)]
-        rates = self._rates_by_day(inputs, days)
         slots = self.store.slots()
-        pages = [self._plan_day(inputs, day, roster, rates[day], slots)
+        pages = [self._plan_day(inputs, day, roster, slots)
                  for day in days]
         return weekplan.snapshot(pages, inputs["tasks"], inputs["project_names"])
 
@@ -2047,9 +2023,7 @@ class WorkloadService:
         (those carry what the leader is told about other people)."""
         me = [p for p in inputs["roster"] if p["name"] == engineer]
         return self._plan_day(
-            inputs, day, me,
-            daily.rates_on(day, inputs["rows"], inputs["config"], self.store.plan_moves()),
-            self.store.slots())
+            inputs, day, me, self.store.slots())
 
     @_remembered
     def my_day(self, engineer: str, query: Dict[str, List[str]]) -> Dict[str, Any]:
@@ -2532,6 +2506,75 @@ class WorkloadService:
                 # Its run-up moves with the planned day.
                 wb.generate_submission_tasks(only_row=int(row), today=_today())
             return {"issue": issue, "save": self._commit()}
+
+    def change_job_hours(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """From Move work: somebody's hours on a job for the days shown, the
+        rest shared out by the others on it. Saved at once."""
+        body = body or {}
+        project = str(body.get("project") or "").strip()
+        person = str(body.get("person") or "").strip()
+        try:
+            hours = float(body.get("hours"))
+        except (TypeError, ValueError):
+            raise ValidationError(["Give the hours as a number."])
+        with self._lock:
+            wb = self.workbook
+            today = _today()
+            days = planner_module.clean_days(body.get("days"))
+            window = planner_module.days_ahead(today, days, self._planning(wb)["config"])
+            end = window[-1] if window else today
+            result = wb.set_job_hours(project, person, hours, end=end, today=today,
+                                      to=str(body.get("to") or "").strip())
+            return {**result, "save": self._commit()}
+
+    def submission_card(self, row: Any) -> Dict[str, Any]:
+        """One submission, as a tap on its preparation opens it: where it
+        stands, its revisions, and who prepares it on which days."""
+        row = _row_number(row)
+        with self._lock:
+            wb = self.workbook
+            deliverable = next((d for d in wb.deliverables() if d.row == row), None)
+            if deliverable is None:
+                raise ApiError(HTTPStatus.NOT_FOUND, "That submission is not on the list any more.")
+            register = self.submission_register({"project": [deliverable.project_number]})
+            item = next((i for i in register["items"] if i["row"] == row), None)
+            series = f"submission:{row}"
+            today = _today()
+            days = sorted((t for t in wb.task_records() if t.series == series),
+                          key=lambda t: t.due or today)
+            ahead = [t for t in days if not t.done and t.due and t.due >= today]
+            return {
+                "today": register["today"], "item": item,
+                "engineers": wb.engineer_names(),
+                "prep": {
+                    "people": list(ahead[0].assignees) if ahead else [],
+                    "hours": ahead[0].required_hours if ahead else None,
+                    "days": [{"date": iso(t.due), "done": t.done,
+                              "people": list(t.assignees), "hours": t.required_hours}
+                             for t in days],
+                },
+            }
+
+    def change_run_up(self, row: Any, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Who prepares a submission, and for how long a day, from today on."""
+        row = _row_number(row)
+        body = body or {}
+        change: Dict[str, Any] = {}
+        if "people" in body:
+            people = body["people"]
+            if not isinstance(people, list):
+                raise ValidationError(["Choose the people as a list."])
+            change["people"] = people
+        if "hours" in body:
+            try:
+                change["hours"] = float(body["hours"])
+            except (TypeError, ValueError):
+                raise ValidationError(["Give the hours a day as a number."])
+        if not change:
+            raise ValidationError(["Nothing to change."])
+        with self._lock:
+            result = self.workbook.set_run_up(row, today=_today(), **change)
+            return {**result, "save": self._commit()}
 
     def remove_submission(self, issue_id: Any) -> Dict[str, Any]:
         with self._lock:
@@ -3093,6 +3136,13 @@ def _duplicates(existing: Sequence[Dict[str, Any]],
                 round(float(row.get("hours") or 0.0), 4))
     seen = {key(row) for row in existing}
     return sum(1 for row in incoming if key(row) in seen)
+
+
+def _row_number(row: Any) -> int:
+    try:
+        return int(row)
+    except (TypeError, ValueError):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Choose the submission by its row.")
 
 
 def _issue_id(value: Any) -> int:

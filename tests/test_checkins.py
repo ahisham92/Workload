@@ -135,11 +135,14 @@ class TestHowLoaded:
 
 class TestFreeHours:
     def test_free_hours_follow_the_planners_day(self, unit):
+        # Only planned work fills a day: a task that takes all of Osama's week.
+        unit.add_task({"name": "Check piles", "assignees": ["Osama"], "required_hours": 80,
+                       "due": "2026-10-09", "project_number": "N2-0100D"})
         view = unit.checkins()
         kirolos = person(view, "Kirolos")
         osama = person(view, "Osama")
         assert len(view["days"]) == checkins.AHEAD_DAYS
-        assert kirolos["free_week"] > 0 and osama["free_week"] == 0
+        assert kirolos["free_week"] > 0 and osama["days"][0]["free"] == 0
         today = unit.day_plan({})["days"][0]
         planned = next(p for p in today["people"] if p["name"] == "Kirolos")
         assert kirolos["days"][0]["free"] == planned["free_hours"]
@@ -312,7 +315,7 @@ class TestPreparationOnToday:
     def page(self, tasks, today):
         from workload_app import daily
         laid = daily.plan_day(day=today, today=today, roster=[{"name": "Kirolos"}],
-                              rates={}, tasks=tasks, slots={}, config=self.CONFIG,
+                              tasks=tasks, slots={}, config=self.CONFIG,
                               project_names={})
         return [b for b in laid["people"][0]["blocks"] if b["kind"] == "submission"]
 
@@ -333,3 +336,13 @@ class TestPreparationOnToday:
         assert checkins.without_settled_runs(steps, moved) == []
         open_ = {7: {"sent": [], "date": "2026-10-11"}}
         assert len(checkins.without_settled_runs(steps, open_)) == 6
+
+
+def test_a_submission_on_a_weekend_keeps_its_run_up():
+    # The run-up of a Sunday submission ends on the Friday: not a move.
+    from workload_app import tasks as task_sheet
+    steps = [task_sheet.Task(id=1, kind="Submission", series="submission:4",
+                             deliverable_row=4, due=dt.date(2026, 10, 30))]
+    assert not checkins._settled(steps, {4: {"sent": [], "date": "2026-11-01"}})
+    assert checkins._settled(steps, {4: {"sent": [], "date": "2026-11-20"}})
+    assert checkins._settled(steps, {4: {"sent": [], "date": "2026-10-20"}})

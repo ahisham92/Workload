@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import config as cfg, progress
 from .xlsx_io import from_serial
@@ -55,6 +56,9 @@ class Task:
     revisions: int = 0
     #: Only for a pro-rata task: the fraction somebody typed.
     pro_rata: Optional[float] = None
+    #: How a shared task's hours are split, as weights by person, when not
+    #: evenly: somebody's hours on a job were changed and the rest shared out.
+    shares: Dict[str, float] = field(default_factory=dict)
 
     @property
     def done(self) -> bool:
@@ -71,6 +75,16 @@ class Task:
         if not self.required_hours:
             return 0.0
         return self.required_hours / max(1, len(self.assignees))
+
+    def hours_for(self, name: str) -> float:
+        """What this task costs ``name``: their share of it."""
+        if not self.required_hours or name not in self.assignees:
+            return 0.0
+        weights = {n: float(self.shares.get(n, 0.0)) for n in self.assignees}
+        total = sum(weights.values())
+        if not self.shares or total <= 0 or any(w <= 0 for w in weights.values()):
+            return self.hours_each()
+        return self.required_hours * weights[name] / total
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -92,6 +106,7 @@ class Task:
             "done": self.done,
             "shared": len(self.assignees) > 1,
             "hours_each": round(self.hours_each(), 2),
+            "hours_by_person": {n: round(self.hours_for(n), 2) for n in self.assignees},
             "progress_mode": self.progress_mode,
             "stage": self.stage,
             "stage_label": progress.STAGE_LABEL.get(self.stage, self.stage),
@@ -403,6 +418,9 @@ def save(wb: Any, data: Dict[str, Any], *, engineers: Sequence[str],
             raise TaskError([f"There is no task {task_id} to change."])
         # A generated task keeps its series even when edited by hand.
         task.series = task.series or existing[position].series
+        # The split stays while the same people share it.
+        if set(task.assignees) == set(existing[position].assignees):
+            task.shares = dict(existing[position].shares)
         existing[position] = task
     write_all(wb, existing)
     return task
@@ -473,6 +491,155 @@ def submission_series(deliverable_row: int) -> str:
     return f"submission:{deliverable_row}"
 
 
+def _split(shares: Mapping[str, Any], engineers: Sequence[str]
+           ) -> Tuple[List[str], Dict[str, float]]:
+    """A deliverable's split as a run-up's people, and their weights when
+    they are not even."""
+    weights = {n: float(shares.get(n) or 0) for n in engineers}
+    people = [n for n in engineers if weights[n] > 0]
+    first = weights[people[0]] if people else 0.0
+    even = all(abs(weights[n] - first) < 1e-9 for n in people)
+    return people, ({} if even else {n: weights[n] for n in people})
+
+
+def follow_split(wb: Any, row: int, shares: Mapping[str, Any], *,
+                 engineers: Sequence[str], today: Optional[_dt.date] = None
+                 ) -> int:
+    """The run-up of deliverable ``row`` from today on, shared the way its
+    split says: who prepares it and how much of it each. Days done or gone
+    keep what they had. Nobody in the split leaves it as it is."""
+    today = today or _today()
+    people, weights = _split(shares, engineers)
+    if not people:
+        return 0
+    series = submission_series(int(row))
+    existing = read(wb)
+    changed = 0
+    for task in existing:
+        if task.series != series or task.done or (task.due and task.due < today):
+            continue
+        if task.assignees == people and task.shares == weights:
+            continue
+        task.assignees = list(people)
+        task.shares = dict(weights)
+        changed += 1
+    if changed:
+        write_all(wb, existing)
+    return changed
+
+
+def set_run_up(wb: Any, row: int, *, engineers: Sequence[str],
+               people: Optional[Sequence[str]] = None,
+               hours: Optional[float] = None,
+               today: Optional[_dt.date] = None) -> Dict[str, Any]:
+    """Who prepares a submission, and for how many hours a day, from today
+    on. Days already done or gone keep what they had."""
+    today = today or _today()
+    series = submission_series(int(row))
+    errors = []
+    if people is not None:
+        people = list(dict.fromkeys(str(n).strip() for n in people if str(n).strip()))
+        unknown = [n for n in people if n not in engineers]
+        if unknown:
+            errors.append(f"{', '.join(unknown)} not on the team.")
+        if not people:
+            errors.append("Choose at least one person to prepare it.")
+    if hours is not None and not 0 < hours <= 12:
+        errors.append("Give between a quarter of an hour and 12 hours a day.")
+    if errors:
+        raise TaskError(errors)
+    existing = read(wb)
+    changed = 0
+    for task in existing:
+        if task.series != series or task.done or (task.due and task.due < today):
+            continue
+        if people is not None:
+            if set(people) != set(task.assignees):
+                task.shares = {}
+            task.assignees = list(people)
+        if hours is not None:
+            task.required_hours = float(hours)
+        changed += 1
+    if changed:
+        write_all(wb, existing)
+    return {"changed": changed}
+
+
+def set_job_hours(wb: Any, project: str, person: str, hours: float, *,
+                  engineers: Sequence[str], end: _dt.date, today: _dt.date,
+                  to: str = "") -> Dict[str, Any]:
+    """Give ``person`` ``hours`` of the work on ``project`` due by ``end``,
+    the rest shared out by everybody else on it in proportion to what they
+    have (or all of it to ``to``). The job's hours stay what they were."""
+    tasks = read(wb)
+    mine = [t for t in tasks
+            if t.project_number == project and not t.done and t.assignees
+            and t.required_hours and t.due is not None and t.due <= end
+            and not (t.due < today and t.kind == "Submission" and t.series)]
+    now: Dict[int, Dict[str, float]] = {
+        t.id: {n: t.hours_for(n) for n in t.assignees} for t in mine}
+    held: Dict[str, float] = defaultdict(float)
+    for split in now.values():
+        for name, h in split.items():
+            held[name] += h
+    total = sum(held.values())
+    old = held.get(person, 0.0)
+    errors = []
+    if not mine:
+        errors.append(f"Nothing is planned on {project} in these days.")
+    if to and (to not in engineers or to == person):
+        errors.append("Hand it to somebody else on the team.")
+    if hours < 0:
+        errors.append("Give the hours as a number, 0 or more.")
+    elif mine and hours > total + 1e-6:
+        errors.append(f"There are only {total:.1f} h on {project} in these days.")
+    others = {n: h for n, h in held.items() if n != person and h > 1e-6}
+    if to:
+        others = {to: 1.0}       # all of what is freed goes to them
+    if mine and not others and abs(hours - old) > 1e-6:
+        errors.append(f"Nobody else is on {project}: choose who takes it.")
+    if errors:
+        raise TaskError(errors)
+    weight = sum(others.values())
+    after: Dict[int, Dict[str, float]] = {}
+    if hours <= old:
+        keep = hours / old if old else 0.0
+        for task_id, split in now.items():
+            new = dict(split)
+            freed = split.get(person, 0.0) * (1 - keep)
+            if person in new:
+                new[person] = split[person] * keep
+            for name, h in others.items():
+                new[name] = new.get(name, 0.0) + freed * h / weight
+            after[task_id] = new
+    else:
+        # More for them: everybody else gives up the same part of theirs.
+        cut = (hours - old) / weight
+        for task_id, split in now.items():
+            new = dict(split)
+            taken = 0.0
+            for name in others:
+                if name in new:
+                    taken += new[name] * cut
+                    new[name] *= 1 - cut
+            if taken:
+                new[person] = new.get(person, 0.0) + taken
+            after[task_id] = new
+    for task in mine:
+        split = {n: h for n, h in after[task.id].items() if h > 1e-6}
+        if not split:
+            continue
+        order = [n for n in task.assignees if n in split] + sorted(
+            n for n in split if n not in task.assignees)
+        task.assignees = order
+        hours_each = task.required_hours / len(order)
+        even = all(abs(h - hours_each) < 1e-6 for h in split.values())
+        task.shares = {} if even else {n: round(split[n], 4) for n in order}
+    write_all(wb, tasks)
+    return {"project": project, "person": person, "hours": round(hours, 2),
+            "tasks": len(mine)}
+
+
 def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
                          engineers: Sequence[str],
                          config: Optional[Dict[str, Any]] = None,
@@ -528,8 +695,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             removed += len(stale)
         if not days:
             continue
-        shares = deliverable.get("shares") or {}
-        assignees = [name for name in engineers if (shares.get(name) or 0) > 0]
+        assignees, weights = _split(deliverable.get("shares") or {}, engineers)
         name = deliverable.get("name") or f"Deliverable on row {row}"
         for position, day in enumerate(days, start=1):
             if (series, day) in have:
@@ -551,6 +717,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
                 status=cfg.TASK_STATUSES[0],
                 kind="Submission",
                 series=series,
+                shares=dict(weights),
             )
             existing.append(task)
             added.append(task)
@@ -688,11 +855,10 @@ def load(tasks: Sequence[Task], engineers: Sequence[str],
     unassigned = {"hours": 0.0, "tasks": 0}
 
     for task in tasks:
-        share = task.hours_each()
         holders = [a for a in task.assignees if a in per]
         if task.done:
             for name in holders:
-                per[name]["done_hours"] += share
+                per[name]["done_hours"] += task.hours_for(name)
                 per[name]["done_tasks"] += 1
                 per[name]["actual_hours"] += (task.actual_hours or 0.0) / max(
                     1, len(task.assignees))
@@ -703,6 +869,7 @@ def load(tasks: Sequence[Task], engineers: Sequence[str],
             continue
         for name in holders:
             entry = per[name]
+            share = task.hours_for(name)
             entry["actual_hours"] += (task.actual_hours or 0.0) / max(
                 1, len(task.assignees))
             if task.due is None:

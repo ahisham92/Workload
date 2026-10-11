@@ -95,7 +95,7 @@ def today_page(*, engineer: str, day: Dict[str, Any], tasks: Sequence[task_sheet
             "done": task.done, "due": task.due.isoformat() if task.due else None,
             "overdue": bool(task.due and task.due < today and not task.done),
             "due_today": bool(task.due and task.due == today),
-            "hours": round(task.hours_each(), 2),
+            "hours": round(task.hours_for(engineer), 2),
             "mark": _mark_view(mark) if mark else None,
         }
 

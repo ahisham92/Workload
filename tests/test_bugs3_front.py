@@ -283,6 +283,8 @@ def test_a_hand_over_target_on_the_board_answers_the_keyboard():
       const plan = { moves: [], team: 'all', data: { open_tasks: [], moves: [] } };
       const tried = [];
       const tryMoves = async (moves) => { tried.push(moves); };
+      const api = async (path, { body }) => { tried.push([path, body.person, body.to, body.hours]); return {}; };
+      const loadPlanner = async () => {};
       const suggestMoves = () => {}; const commitMoves = () => {};
       let shown = null;
       const person = (name, items) => ({ name, team_id: null, before: { load: 0.5 }, after: { load: 0.5 }, items });
@@ -302,9 +304,11 @@ def test_a_hand_over_target_on_the_board_answers_the_keyboard():
         && n.className.includes('is-target'))[0];
       fire(target, 'keydown', { key: 'Enter' });
       (async () => { await tick(); console.log(JSON.stringify({
-        role: target.attrs.role, tried: tried.map((m) => m.map((x) => [x.from, x.to])) })); })();
+        role: target.attrs.role, tried })); })();
     """)
-    assert _node(code) == {"role": "button", "tried": [[["Ahmed", "Kirolos"]]]}
+    # A job's hours go straight across, all of them, saved at once.
+    assert _node(code) == {"role": "button",
+                           "tried": [["/api/planner/hours", "Ahmed", "Kirolos", 0]]}
 
 
 # ----------------------------------------------------------- busycal.js
@@ -432,3 +436,24 @@ def test_the_task_timeline_never_says_null_for_a_task_with_no_project():
     source = _read("tabs.js")
     assert "${t.project_number} ${projectName" not in source
     assert "t.project_number || " in source
+
+
+@needs_node
+def test_picking_submitted_marks_a_submission_sent_without_a_start_button():
+    # Ahmed (2026-10-11): "any submission submitted means that work started
+    # and submitted" -- picking a status writes the dates that make it so.
+    code = _page(_function("subStatusChange", "subs.js"), r"""
+      const today = '2026-10-11';
+      console.log(JSON.stringify([
+        subStatusChange('with_client', { planned: '2026-10-05' }, today),
+        subStatusChange('with_client', { planned: '2026-10-20' }, today),
+        subStatusChange('returned', { planned: '2026-10-05', submitted: '2026-10-06' }, today),
+        subStatusChange('planned', { planned: '2026-10-05', submitted: '2026-10-06' }, today),
+      ]));
+    """)
+    assert _node(code) == [
+        {"submitted": "2026-10-05", "returned": "", "code": ""},
+        {"submitted": "2026-10-11", "returned": "", "code": ""},
+        {"submitted": "2026-10-06", "returned": "2026-10-11", "code": "C"},
+        {"submitted": "", "returned": "", "code": ""},
+    ]

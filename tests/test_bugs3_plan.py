@@ -190,3 +190,38 @@ class TestPortfolioMap:
         circle = next(c for c in data["projects"] if c["number"] == "20-1")
         assert circle["recent_hours"] == 300.0
         assert data["recent_months"] == ["2026-07", "2026-08", "2026-09"]
+
+
+class TestPeopleNeededMakesSense:
+    """Ahmed (2026-10-11): "ask for 15 more engineers" made no sense. A job
+    past its end date is no longer squeezed into six weeks; work is spread to
+    the job's submissions; the card says which jobs make up the number."""
+
+    def _forecast(self, end, submitting=None):
+        from types import SimpleNamespace
+        today = dt.date(2026, 10, 12)
+        roster = [{"name": "Ahmed", "grade": "engineer", "team_id": "T", "team_name": "Berths"}]
+        rows = [{"engineer": "Ahmed", "job_number": "J-1", "job_type": "1-Projects",
+                 "hours": 8.0, "date": dt.date(2026, 10, 9)}]
+        project = SimpleNamespace(number="J-1", name="Berth", notes="", end=end)
+        return needs.forecast(
+            rows=rows, project_rows=[{"number": "J-1", "remaining_mm": 4}],
+            projects=[project], roster=roster, config=_config(), hours_per_mm=185,
+            drawings_left={}, drafting_hours_per_drawing=None, today=today,
+            submitting=submitting or {})
+
+    def test_a_job_past_its_end_with_nothing_planned_is_listed_not_counted(self):
+        data = self._forecast(dt.date(2026, 9, 1))
+        assert [p["number"] for p in data["late"]] == ["J-1"]
+        assert not any(w["demand_hours"] for g in data["groups"] for w in g["weeks"])
+
+    def test_the_work_is_spread_to_the_last_submission_planned(self):
+        data = self._forecast(dt.date(2026, 9, 1), {"J-1": dt.date(2026, 11, 20)})
+        group = data["groups"][0]
+        assert not data["late"]
+        busy = [w for w in group["weeks"] if w["demand_hours"]]
+        assert busy[-1]["to"] >= "2026-11-20" and busy[-1]["from"] <= "2026-11-20"
+        assert sum(w["demand_hours"] for w in group["weeks"]) == pytest.approx(4 * 185, abs=1)
+        assert group["jobs"][0]["number"] == "J-1"
+        need = next(a for a in data["alerts"] if a["kind"] == "need")
+        assert "J-1" in need["detail"]

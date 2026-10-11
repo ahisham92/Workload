@@ -180,6 +180,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     pro_rata         REAL
 );
 
+-- How a shared task's hours are split when not evenly, by task.
+CREATE TABLE IF NOT EXISTS task_shares (
+    task_id INTEGER PRIMARY KEY,
+    shares  TEXT NOT NULL DEFAULT '{}'
+);
+
 -- Planned man-months typed in for a project and a quarter, instead of the
 -- straight-line spread of its budget.
 CREATE TABLE IF NOT EXISTS phasing (
@@ -1743,6 +1749,8 @@ class Unit:
             with self._connect() as db:
                 rows = db.execute(
                     "SELECT * FROM tasks ORDER BY position, id").fetchall()
+                split = {r["task_id"]: r["shares"] for r in db.execute(
+                    "SELECT task_id, shares FROM task_shares")}
             out = []
             for row in rows:
                 try:
@@ -1770,16 +1778,22 @@ class Unit:
                     review_code=(row["review_code"] or "").upper(),
                     revisions=int(row["revisions"] or 0),
                     pro_rata=row["pro_rata"],
+                    shares=_shares(split.get(int(row["id"]))),
                 ))
             return out
         # Callers change the tasks they are handed, so each gets its own.
-        return [task_list.Task(**{**t.__dict__, "assignees": list(t.assignees)})
+        return [task_list.Task(**{**t.__dict__, "assignees": list(t.assignees),
+                                  "shares": dict(t.shares)})
                 for t in self._cached("tasks", build)]
 
     def write_tasks(self, tasks: Sequence["task_list.Task"]) -> None:
         with self._write() as db:
             db.execute("DELETE FROM tasks")
+            db.execute("DELETE FROM task_shares")
             for position, task in enumerate(tasks):
+                if task.shares:
+                    db.execute("INSERT INTO task_shares (task_id, shares) VALUES (?, ?)",
+                               (int(task.id), json.dumps(task.shares, sort_keys=True)))
                 db.execute(
                     "INSERT INTO tasks (id, position, name, definition, "
                     "project_number, deliverable_row, deliverable_name, assignees, "
@@ -1841,6 +1855,36 @@ class Unit:
 
     def delete_task_series(self, series: str) -> Dict[str, Any]:
         return task_list.delete_series(self, series)
+
+    def set_job_hours(self, project: str, person: str, hours: float,
+                      **window: Any) -> Dict[str, Any]:
+        return task_list.set_job_hours(self, project, person, hours,
+                                       engineers=self.engineer_names(), **window)
+
+    def set_run_up(self, row: int, **change: Any) -> Dict[str, Any]:
+        result = task_list.set_run_up(self, row, engineers=self.engineer_names(), **change)
+        if change.get("people") is not None:
+            # Who prepares it is the deliverable's split: one place to say it.
+            people = list(dict.fromkeys(change["people"]))
+            split = {n: (1.0 / len(people) if n in people else None)
+                     for n in self.engineer_names()}
+            with self._write() as db:
+                self._write_shares(db, "deliverable_shares", "deliverable_row", row, split)
+        return result
+
+    def follow_splits(self, before: Dict[int, Dict[str, Any]], *,
+                      today: Optional[_dt.date] = None) -> int:
+        """Run-ups follow every deliverable whose split changed from ``before``."""
+        changed = 0
+        for deliverable in self.deliverables():
+            if before.get(deliverable.row) != deliverable.shares:
+                changed += task_list.follow_split(
+                    self, deliverable.row, deliverable.shares,
+                    engineers=self.engineer_names(), today=today)
+        return changed
+
+    def splits(self) -> Dict[int, Dict[str, Any]]:
+        return {d.row: dict(d.shares) for d in self.deliverables()}
 
     def generate_submission_tasks(self, *, only_row: Optional[int] = None,
                                   today: Optional[_dt.date] = None,
@@ -2013,3 +2057,19 @@ def shared(path: Union[str, Path]) -> Unit:
             _open_units.popitem(last=False)
     return unit
 
+
+def _shares(text: Optional[str]) -> Dict[str, float]:
+    """A task's split as kept: weights by person, or nothing when even."""
+    try:
+        value = json.loads(text or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for name, weight in value.items():
+        try:
+            out[str(name)] = float(weight)
+        except (TypeError, ValueError):
+            continue
+    return out

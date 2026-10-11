@@ -65,6 +65,9 @@ DUE_SOON_DAYS = 3
 #: A submission whose date passed more than this many days ago is no longer
 #: asked about here: the Submissions list keeps track of whether it went.
 SUBMISSION_ASK_DAYS = 7
+#: A run-up ending this few days before its submission date ends on the
+#: last working day before it (a weekend, a holiday): the same date.
+SAME_DATE_GAP_DAYS = 4
 
 SIGNALS = {
     "rest": "Needs to ease off",
@@ -248,11 +251,9 @@ def free_hours(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Tas
     never disagree about whether somebody has room.
     """
     window = planner.days_ahead(today, days, config)
-    measured = planner.pace(rows, config)["rates"]
     per: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for day in window:
-        rates = planner.rates_in_force(measured, saved, day)
-        laid = daily.plan_day(day=day, today=today, roster=roster, rates=rates,
+        laid = daily.plan_day(day=day, today=today, roster=roster,
                               tasks=tasks, slots=slots, config=config,
                               project_names=project_names,
                               **(management.for_day(day) if management else {}))
@@ -298,7 +299,12 @@ def _settled(steps: Sequence[task_sheet.Task],
     if any(sent >= start.isoformat() for sent in known.get("sent") or ()):
         return True                       # sent: nothing to ask
     planned = known.get("date")
-    return bool(planned) and planned != due.isoformat()   # moved to another date
+    if not planned or planned == due.isoformat():
+        return False
+    # A submission on a weekend or a holiday has its run-up end the working
+    # day before: that is the same date, not a move.
+    gap = (_dt.date.fromisoformat(planned) - due).days
+    return not 0 < gap <= SAME_DATE_GAP_DAYS              # moved to another date
 
 
 def without_settled_runs(tasks: Sequence[task_sheet.Task],
