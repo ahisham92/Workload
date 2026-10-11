@@ -301,6 +301,23 @@ def _settled(steps: Sequence[task_sheet.Task],
     return bool(planned) and planned != due.isoformat()   # moved to another date
 
 
+def without_settled_runs(tasks: Sequence[task_sheet.Task],
+                         submissions: Optional[Mapping[int, Dict[str, Any]]]
+                         ) -> List[task_sheet.Task]:
+    """Every task but the preparation of submissions already sent, moved to
+    another date, or whose deliverable is gone: nobody prepares those."""
+    runs: Dict[str, List[task_sheet.Task]] = {}
+    for task in tasks:
+        if _is_prep_step(task) and task.due:
+            runs.setdefault(task.series, []).append(task)
+    gone = set()
+    for series, steps in runs.items():
+        steps.sort(key=lambda t: t.due)
+        if _settled(steps, submissions):
+            gone.add(series)
+    return [t for t in tasks if not (_is_prep_step(t) and t.series in gone)]
+
+
 def _submission_points(name: str, tasks: Sequence[task_sheet.Task],
                        today: _dt.date, soon_end: _dt.date,
                        submissions: Optional[Mapping[int, Dict[str, Any]]] = None
