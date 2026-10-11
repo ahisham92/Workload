@@ -494,6 +494,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
     have = {(t.series, t.due) for t in existing}
     identifier = next_id(existing, wb)
     added: List[Task] = []
+    removed = 0
     covered = 0
     past = 0
 
@@ -514,6 +515,17 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             # Run-up days already gone would be overdue the moment they exist.
             window_start = max(window_start, today)
         days = working_days(window_start, due, config)
+        # The date moved: run-up days for the old date that nobody has done
+        # yet go, so the run-up is never prepared twice.
+        run_up = set(working_days(
+            due - _dt.timedelta(days=int(config["submission_lead_days"])), due, config))
+        stale = [t for t in existing
+                 if t.series == series and not t.done and t.due not in run_up]
+        if stale:
+            gone = {id(t) for t in stale}
+            existing = [t for t in existing if id(t) not in gone]
+            have = {(t.series, t.due) for t in existing}
+            removed += len(stale)
         if not days:
             continue
         shares = deliverable.get("shares") or {}
@@ -545,10 +557,11 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             have.add((series, day))
             identifier += 1
 
-    if added:
+    if added or removed:
         write_all(wb, existing)
     return {
         "added": len(added),
+        "removed": removed,
         "deliverables": covered,
         "past_deliverables": past,
         "tasks": [t.to_dict() for t in added],

@@ -640,3 +640,19 @@ class TestTheSubmissionsPlan:
         # The run-up is in Osama's day.
         day = unit.day_plan({"date": ["2026-10-12"]})["days"][0]
         assert any(b["kind"] == "submission" for b in person(day, "Osama")["blocks"])
+
+    def test_moving_the_date_moves_the_run_up(self, unit):
+        # Ahmed (2026-10-11): he changes a date in the plan and it saves; the
+        # run-up for the old date must not stay behind as a second one.
+        item = next(i for i in unit.submissions()["items"]
+                    if i["project_number"] == "N2-0100D")
+        unit.confirm_submissions({"items": [{"row": item["row"], "date": "2026-10-16"}]})
+        unit.confirm_submissions({"items": [{"row": item["row"], "date": "2026-10-30"}]})
+        steps = [t for t in unit.workbook.task_records()
+                 if t.series == f"submission:{item['row']}"]
+        assert steps and all(dt.date(2026, 10, 19) <= t.due <= dt.date(2026, 10, 30)
+                             for t in steps)
+        day = unit.day_plan({"date": ["2026-10-29"]})["days"][0]
+        assert any(b["kind"] == "submission" for b in person(day, "Osama")["blocks"])
+        day = unit.day_plan({"date": ["2026-10-12"]})["days"][0]
+        assert not any(b["kind"] == "submission" for b in person(day, "Osama")["blocks"])
