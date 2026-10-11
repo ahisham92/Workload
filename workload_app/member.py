@@ -155,7 +155,7 @@ def _my_tasks(wb: Unit, engineer: str) -> Dict[str, Any]:
             task.assignees)
         record["shared_with"] = max(0, len(task.assignees) - 1)
         if not task.done:
-            open_hours += task.hours_each()
+            open_hours += task.hours_for(engineer)
             if task.due and task.due < today:
                 overdue += 1
                 record["overdue"] = True

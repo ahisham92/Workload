@@ -10,9 +10,9 @@ knows, in this order:
 2. for somebody who leads people, their daily **team support**;
 3. **tasks** on the list for that day -- the submission run-ups the
    submissions plan put there, meetings, anything else dated -- a task over
-   several days taking its share of each;
-4. **their usual project work** in what is left, at the pace their newest
-   timesheets set, with any handover in force for that day applied.
+   several days taking its share of each.
+
+Nothing is guessed from past timesheets: what is left of the day is free.
 
 Each goes into the first free stretch of the working day, so the result reads
 like a page of a pocket diary: 09:00 to 10:30 this, 10:30 to 11:00 that.
@@ -26,7 +26,6 @@ The week is the same thing, day by day.
 from __future__ import annotations
 
 import datetime as _dt
-from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import busy_calendar
@@ -40,17 +39,12 @@ from . import tasks as task_sheet
 MEETING_KINDS = {"client": "Client meeting", "trade": "Meeting with another trade",
                  "internal": "Internal meeting"}
 
-#: Usual project work shorter than this in a day is folded into the largest,
-#: so a diary page is not cut into ten-minute slivers.
-SMALLEST_BLOCK_HOURS = 0.5
-
-
 def task_hours_on(task: task_sheet.Task, day: _dt.date, today: _dt.date,
-                  config: Dict[str, Any]) -> float:
-    """The part of a task that falls on ``day``."""
+                  config: Dict[str, Any], name: Optional[str] = None) -> float:
+    """The part of a task that falls on ``day`` (``name``'s part of it)."""
     if task.done or not task.required_hours or task.due is None:
         return 0.0
-    each = task.hours_each()
+    each = task.hours_for(name) if name else task.hours_each()
     if task.due < today and is_prep_step(task):
         # A run-up day that has gone is gone: piling every missed day of
         # preparation onto today would book people for days at once.
@@ -82,7 +76,7 @@ def _first_working(day: _dt.date, config: Dict[str, Any]) -> _dt.date:
 
 
 def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]],
-             rates: Mapping[Tuple[str, str], float], tasks: Sequence[task_sheet.Task],
+             tasks: Sequence[task_sheet.Task],
              slots: Mapping[int, Dict[str, Any]], config: Dict[str, Any],
              project_names: Mapping[str, str],
              meetings: Sequence[Dict[str, Any]] = (),
@@ -103,10 +97,6 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
     for task in tasks:
         if is_prep_step(task) and task.due:
             submitted_on[task.series] = max(task.due, submitted_on.get(task.series, task.due))
-
-    pace: Dict[str, Dict[str, float]] = defaultdict(dict)
-    for (person, project), rate in rates.items():
-        pace[person][project] = rate
 
     people = []
     for person in roster:
@@ -167,37 +157,19 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                                           f"replies ({count} "
                                           f"{'person' if count == 1 else 'people'})",
                                  "project": "", "task_id": None, "done": False})
-            on_task_projects: Dict[str, float] = defaultdict(float)
             for task in tasks:
                 if intake.is_request(task) or name not in task.assignees:
                     continue
-                hours = task_hours_on(task, day, today, config)
+                hours = task_hours_on(task, day, today, config, name)
                 if hours <= 0:
                     continue
                 flexible.append({"hours": hours, "kind": task.kind.lower(),
                                  "title": (prep_title(task, submitted_on.get(task.series))
                                            if is_prep_step(task) else task.name),
                                  "project": task.project_number,
-                                 "task_id": task.id, "done": False})
-                if task.project_number:
-                    on_task_projects[task.project_number] += hours
-            work = []
-            for project, rate in pace.get(name, {}).items():
-                hours = max(0.0, rate - on_task_projects.get(project, 0.0))
-                if hours > 0:
-                    work.append([project, hours])
-            work.sort(key=lambda item: -item[1])
-            # Fold slivers into the biggest piece of work.
-            if len(work) > 1:
-                kept = [w for w in work if w[1] >= SMALLEST_BLOCK_HOURS]
-                spare = sum(w[1] for w in work if w[1] < SMALLEST_BLOCK_HOURS)
-                if kept:
-                    kept[0][1] += spare
-                    work = kept
-            for project, hours in work:
-                flexible.append({"hours": hours, "kind": "work",
-                                 "title": project_names.get(project) or project,
-                                 "project": project, "task_id": None, "done": False})
+                                 "task_id": task.id, "done": False,
+                                 "row": (task.deliverable_row
+                                         if is_prep_step(task) else None)})
         blocks, over = _lay_out(fixed, flexible, day_start, day_end)
         booked = sum((b["end"] - b["start"]).total_seconds() / 3600 for b in blocks)
         people.append({
@@ -263,7 +235,8 @@ def _lay_out(fixed: List[Dict[str, Any]], flexible: List[Dict[str, Any]],
             end = first + _dt.timedelta(minutes=used)
             blocks.append({"start": first, "end": end, "kind": item["kind"],
                            "title": item["title"], "project": item["project"],
-                           "task_id": item["task_id"], "done": item["done"]})
+                           "task_id": item["task_id"], "done": item["done"],
+                           **({"row": item["row"]} if item.get("row") is not None else {})})
             remaining -= used
             if end >= last:
                 gaps.pop(0)
@@ -272,22 +245,8 @@ def _lay_out(fixed: List[Dict[str, Any]], flexible: List[Dict[str, Any]],
         if remaining > 0.5:
             over += remaining / 60.0
     blocks.sort(key=lambda b: b["start"])
-    # Two pieces of the same work back to back read as one.
-    merged: List[Dict[str, Any]] = []
-    for block in blocks:
-        if merged and merged[-1]["end"] == block["start"] \
-                and merged[-1]["kind"] == block["kind"] == "work" \
-                and merged[-1]["project"] == block["project"]:
-            merged[-1]["end"] = block["end"]
-        else:
-            merged.append(dict(block))
-    return merged, over
+    return [dict(b) for b in blocks], over
 
-
-def rates_on(day: _dt.date, rows: Sequence[Dict[str, Any]], config: Dict[str, Any],
-             saved: Sequence[Dict[str, Any]]) -> Dict[Tuple[str, str], float]:
-    """Each person's pace on a project, with the handovers in force that day."""
-    return planner.rates_in_force(planner.pace(rows, config)["rates"], saved, day)
 
 
 def week_of(day: _dt.date, config: Dict[str, Any]) -> List[_dt.date]:

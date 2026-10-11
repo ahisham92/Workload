@@ -93,7 +93,7 @@ class TestHalfDayExcuse:
                   "away": {}, "half_away": {"Nour": {"2026-03-02"}}}
         try:
             page = daily.plan_day(day=_dt.date(2026, 3, 2), today=_dt.date(2026, 3, 2),
-                                  roster=[{"name": "Nour"}], rates={}, tasks=[],
+                                  roster=[{"name": "Nour"}], tasks=[],
                                   slots={}, config=config, project_names={})
         except KeyError:
             pytest.skip("the day settings need more keys than this test gives")

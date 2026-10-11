@@ -319,10 +319,14 @@ def _state(*, rates, assignees, tasks_by_id, window: List[_dt.date],
         task = tasks_by_id[task_id]
         if task.due is None or task.due > end or not task.required_hours:
             continue
-        each = task.required_hours / max(1, len(names))
+        if task.due < today and task.kind == "Submission" and task.series:
+            continue        # a day of preparation that has gone is gone
         key = task.project_number or f"task:{task.id}"
         bucket = extra_hours if task.kind == cfg.TASK_REQUEST_KIND else task_hours
         for name in names:
+            # A task handed on keeps its split only while the same people share it.
+            each = (task.hours_for(name) if set(names) == set(task.assignees)
+                    else task.required_hours / max(1, len(names)))
             bucket[name][key] += each
             task_ids[name][key].append(task.id)
 
@@ -382,7 +386,9 @@ def outlook(*, rows: Sequence[Dict[str, Any]], tasks: Sequence[task_sheet.Task],
     a_day = task_sheet.hours_per_day(config)
     measured = pace(rows, config)
     active_saved = _active_saved(saved, today, end)
-    base_rates, _ = _apply_project_moves(measured["rates"], active_saved)
+    # The work is what is planned -- submissions' preparation, tasks and
+    # requests. Past timesheets put no work of their own on anybody.
+    base_rates: Dict[Tuple[str, str], float] = {}
 
     open_tasks = [t for t in tasks if not t.done]
     tasks_by_id = {t.id: t for t in open_tasks}

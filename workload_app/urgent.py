@@ -93,11 +93,8 @@ def effect(*, person: str, days: Sequence[_dt.date],
             if lost > 1e-6:
                 pushed[key] += lost
                 pushed_on.setdefault(key, day)
-        # A task that is pushed catches up in free time and in usual project
-        # work before it is due: dated work wins over the usual pace.
-        free_after[day] = float((after or {}).get("free_hours") or 0.0) + sum(
-            float(b.get("hours") or 0.0) for b in (after or {}).get("blocks", [])
-            if b.get("kind") == "work")
+        # A task that is pushed catches up in free time before it is due.
+        free_after[day] = float((after or {}).get("free_hours") or 0.0)
         over_before += float((before or {}).get("over_hours") or 0.0)
         over_after += float((after or {}).get("over_hours") or 0.0)
 

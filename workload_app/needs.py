@@ -4,9 +4,10 @@ The work ahead is the projects' own forecast, week by week:
 
 * a **confirmed** project still to finish has its effort to complete
   (``remaining_mm``, the same figure the Map draws) spread evenly from today to
-  its end date -- or, when that date has already gone, over the next
-  ``LATE_SPREAD_WEEKS``, because the work is still there to do and the date is
-  what was wrong;
+  its last submission planned ahead -- the work is for the submissions -- or,
+  with none planned, to its end date. A project past its end date with no
+  submission planned is not counted: it is listed, to be given a date, since
+  spreading it over a guess made the team look short by a dozen people;
 * a project the timesheets set up and nobody has confirmed yet has no budget
   worth forecasting from, so its recent **pace** is taken to carry on while it
   is live.  It is marked as assumed, and confirming the project replaces the
@@ -110,8 +111,11 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
              requests: Sequence[Tuple[str, _dt.date, float]] = (),
              planned: Sequence[Dict[str, Any]] = (),
              team_names: Optional[Mapping[str, str]] = None,
-             management: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
+             management: Optional[Mapping[str, float]] = None,
+             submitting: Optional[Mapping[str, _dt.date]] = None) -> Dict[str, Any]:
+    """``submitting`` is each job's last submission planned ahead."""
     today = today or _today()
+    submitting = submitting or {}
     # Leading people takes part of a leader's day; that part does no project work.
     management = management or {}
     hours_per_mm = float(hours_per_mm or 0) or 185.0
@@ -160,6 +164,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
 
     register = {p.number: p for p in projects}
     demand: Dict[Tuple[str, str], List[float]] = defaultdict(lambda: [0.0] * len(span))
+    # Which jobs make up each team's work, so the number can be checked.
+    makers: Dict[Tuple[str, str], Dict[str, List[float]]] = defaultdict(dict)
 
     # -- work coming: projects just assigned, on their rough hours -------
     by_team: Dict[str, Dict[Tuple[str, str], float]] = defaultdict(dict)
@@ -229,11 +235,13 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         weekly = [0.0] * len(span)
         confirmed = not derive.needs_confirming(getattr(project, "notes", "") or "")
         remaining = max(0.0, float(figures.get("remaining_mm") or 0.0)) * hours_per_mm
+        finish = None
         if confirmed and remaining > 0:
-            if project.end is not None and project.end < today:
+            finish = _finish(project, submitting.get(number), today)
+            if finish is None:
                 late.append(number)
-            weekly = _spread(remaining, today, _spread_end(project, today, confirmed),
-                             span, config)
+                continue
+            weekly = _spread(remaining, today, finish, span, config)
         elif not confirmed:
             seen = last_booked.get(number)
             if seen and (today - seen).days <= LIVE_WITHIN_DAYS and rate_by_project.get(number):
@@ -252,7 +260,7 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         by_drawings = None
         if confirmed and left and drafting_hours_per_drawing and drafting_keys:
             by_drawings = _spread(left * drafting_hours_per_drawing, today,
-                                  _spread_end(project, today, confirmed), span, config)
+                                  finish, span, config)
         drafting_share = sum(shares[k] for k in drafting_keys)
         for key, value in shares.items():
             fraction = value / total_share
@@ -264,6 +272,9 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
             target = demand[key]
             for i, hours in enumerate(series):
                 target[i] += hours
+            mine = makers[key].setdefault(number, [0.0] * len(span))
+            for i, hours in enumerate(series):
+                mine[i] += hours
 
     # Requests that came in sit on top of the projects' own work, in the
     # week they are due, with the team and kind of whoever has them.
@@ -312,9 +323,14 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                 "load": round(work[i] / cap, 3) if cap else None,
                 "gap_people": round(gap, 2),
             })
+        jobs = sorted(((n, sum(w), sum(1 for h in w if h > 0.05))
+                       for n, w in makers.get(key, {}).items()), key=lambda j: -j[1])
         group = {"team_id": team_id, "team_name": team_name, "role": role,
                  "role_label": people_module.role_label(role),
-                 "people": heads, "weeks": series}
+                 "people": heads, "weeks": series,
+                 "jobs": [{"number": n, "hours": round(h, 1),
+                           "per_week": round(h / max(1, weeks_on), 1)}
+                          for n, h, weeks_on in jobs if h >= 1][:5]}
         groups.append(group)
         alerts.extend(_alerts(group, today))
 
@@ -371,11 +387,17 @@ def _teams(roster: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(seen.values())
 
 
-def _spread_end(project: Any, today: _dt.date, confirmed: bool) -> _dt.date:
+def _finish(project: Any, submitting: Optional[_dt.date],
+            today: _dt.date) -> Optional[_dt.date]:
+    """When a job's work is to be done by: its last submission planned ahead,
+    else its end date; never sooner than a week from today. None when both
+    have gone."""
     end = getattr(project, "end", None)
-    if confirmed and end and end >= today + _dt.timedelta(days=7):
-        return end
-    return today + _dt.timedelta(weeks=LATE_SPREAD_WEEKS) - _dt.timedelta(days=1)
+    due = submitting if submitting and submitting >= today else (
+        end if end and end >= today else None)
+    if due is None:
+        return None
+    return max(due, today + _dt.timedelta(days=6))
 
 
 def _spread(hours: float, start: _dt.date, end: _dt.date,
@@ -450,6 +472,9 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
         detail += (f", {peak:.1f} at the peak. " if peak - average >= 0.1 else ". ")
         detail += ("Ask now." if severity == "now"
                    else f"Ask by {ask_by:%d %b} so they are there in time.")
+        if group.get("jobs"):
+            detail += " Most of it is " + ", ".join(
+                f"{j['number']} ({j['per_week']:g} h a week)" for j in group["jobs"][:3]) + "."
         out.append({
             "kind": "need", "severity": severity,
             "team_id": group["team_id"], "team_name": group["team_name"],

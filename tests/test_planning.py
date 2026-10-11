@@ -150,25 +150,62 @@ class TestDrawings:
 
 
 class TestTheComingDays:
-    def test_pace_is_read_from_the_newest_two_weeks(self, unit):
+    def test_the_coming_days_hold_only_planned_work(self, unit):
+        # Ahmed (2026-10-11): "every work is for submissions". Past timesheets
+        # put nothing on anybody; what is planned does.
         view = unit.planner({"days": 5})
-        osama = person(view, "Osama")
-        assert osama["before"]["hours"] == pytest.approx(60)    # 12 h a day
-        assert osama["verdict_before"] == "over"
-        assert person(view, "Kirolos")["verdict_before"] == "room"
+        assert person(view, "Osama")["before"]["hours"] == 0
         assert view["pace_to"] == LAST.isoformat()
         assert view["from"] == TODAY.isoformat()
+        unit.add_task({"name": "Check piles", "assignees": ["Osama"],
+                       "required_hours": 10, "due": "2026-10-09",
+                       "project_number": "N2-0100D"})
+        osama = person(unit.planner({"days": 5}), "Osama")
+        assert osama["before"]["hours"] == pytest.approx(10)
+        assert [i["project"] for i in osama["items"]] == ["N2-0100D"]
 
-    def test_moving_half_a_project_shows_its_effect_before_committing(self, unit):
-        move = {"kind": "project", "project": "N2-0100D", "from": "Osama",
-                "to": "Kirolos", "share": 0.5}
-        view = unit.planner({"days": 5, "moves": [move]})
-        assert person(view, "Osama")["after"]["hours"] == pytest.approx(50)
-        assert person(view, "Kirolos")["after"]["hours"] == pytest.approx(25)
-        assert view["moves"][0]["hours"] == pytest.approx(10)
-        # Nothing was written.
-        assert person(unit.planner({"days": 5}), "Osama")["after"]["hours"] \
-            == pytest.approx(60)
+    def test_changing_somebody_s_hours_shares_the_rest_out(self, unit):
+        # Ahmed (2026-10-11): tap somebody's hours on a job; the rest goes to
+        # the others on it.
+        unit.add_task({"name": "Prepare", "assignees": ["Osama", "Kirolos", "Mariam"],
+                       "required_hours": 30, "due": "2026-10-09",
+                       "project_number": "N2-0100D"})
+        unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": 4,
+                               "days": 5})
+        view = unit.planner({"days": 5})
+        hours = {n: person(view, n)["before"]["hours"] for n in ("Osama", "Kirolos", "Mariam")}
+        assert hours == {"Osama": pytest.approx(4), "Kirolos": pytest.approx(13),
+                         "Mariam": pytest.approx(13)}
+        # More for somebody: the others give up the same part of theirs.
+        unit.change_job_hours({"project": "N2-0100D", "person": "Kirolos", "hours": 20,
+                               "days": 5})
+        view = unit.planner({"days": 5})
+        assert person(view, "Kirolos")["before"]["hours"] == pytest.approx(20)
+        assert person(view, "Osama")["before"]["hours"] + \
+            person(view, "Mariam")["before"]["hours"] == pytest.approx(10)
+        task = unit.tasks()["tasks"][0]
+        assert sum(task["hours_by_person"].values()) == pytest.approx(30)
+
+    def test_all_of_somebody_s_hours_can_go_to_one_person(self, unit):
+        unit.add_task({"name": "Prepare", "assignees": ["Osama"], "required_hours": 8,
+                       "due": "2026-10-09", "project_number": "N2-0100D"})
+        unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": 0,
+                               "to": "Kirolos", "days": 5})
+        assert unit.tasks()["tasks"][0]["assignees"] == ["Kirolos"]
+        assert person(unit.planner({"days": 5}), "Kirolos")["before"]["hours"] \
+            == pytest.approx(8)
+
+    def test_job_hours_that_cannot_be_shared_out_are_refused(self, unit):
+        from workload_app.model import ValidationError
+        unit.add_task({"name": "Prepare", "assignees": ["Osama"], "required_hours": 8,
+                       "due": "2026-10-09", "project_number": "N2-0100D"})
+        with pytest.raises(ValidationError):      # nobody else on it
+            unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": 2})
+        with pytest.raises(ValidationError):      # more than the job has
+            unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": 9,
+                                   "to": "Kirolos"})
+        with pytest.raises(ValidationError):
+            unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": "x"})
 
     def test_drawings_in_hand_follow_the_work(self, unit):
         rows = {d.project_number: d.row for d in unit.workbook.deliverables()}
@@ -180,27 +217,6 @@ class TestTheComingDays:
         assert osama["after"]["drawings"] == 0
         assert kirolos["after"]["drawings"] == pytest.approx(
             kirolos["before"]["drawings"] + osama["before"]["drawings"], abs=0.2)
-
-    def test_a_suggestion_relieves_the_overloaded_with_like_for_like(self, unit):
-        view = unit.planner_suggest({"days": 5})
-        assert view["suggested"]
-        assert person(view, "Osama")["verdict_after"] != "over"
-        for move in view["suggested"]:
-            assert move["to"] != "Hany"            # no design to the drawing office
-        # Somebody who already knows the project comes first.
-        assert view["suggested"][0]["to"] == "Kirolos"
-
-    def test_committing_keeps_the_handover_for_its_days(self, unit):
-        move = {"kind": "project", "project": "N2-0100D", "from": "Osama",
-                "to": "Kirolos", "share": 1}
-        result = unit.planner_commit({"days": 5, "moves": [move]})
-        assert result["projects_moved"] == 1
-        view = unit.planner({"days": 5})
-        assert person(view, "Osama")["before"]["hours"] == pytest.approx(40)
-        assert len(view["saved"]) == 1
-        unit.remove_plan_move(view["saved"][0]["id"], {"days": 5})
-        assert person(unit.planner({"days": 5}), "Osama")["before"]["hours"] \
-            == pytest.approx(60)
 
     def test_a_task_changes_hands(self, unit):
         engineers = unit.workbook.engineer_names()
@@ -403,55 +419,73 @@ class TestWorkComing:
 
 
 class TestTheDayFillsItself:
-    def test_everybody_s_day_is_laid_out_from_their_pace(self, unit):
-        data = unit.day_plan({})
-        day = data["days"][0]
+    def test_the_day_holds_only_planned_work(self, unit):
+        # Ahmed (2026-10-11): "no need for usual work". Timesheets put nothing
+        # on the day; a task does.
+        day = unit.day_plan({})["days"][0]
         assert day["date"] == TODAY.isoformat() and day["working_day"]
         osama = person(day, "Osama")
+        assert not osama["blocks"] and osama["free_hours"] == pytest.approx(8.5, abs=0.3)
+        unit.add_task({"name": "Check piles", "assignees": ["Osama"],
+                       "required_hours": 3, "due": TODAY.isoformat(),
+                       "project_number": "N2-0100D"})
+        osama = person(unit.day_plan({})["days"][0], "Osama")
+        assert [b["project"] for b in osama["blocks"]] == ["N2-0100D"]
         assert osama["blocks"][0]["start"] == "09:00"
-        assert {b["project"] for b in osama["blocks"]} == {"N1-0100D", "N2-0100D"}
-        # Twelve hours of pace in an eight and a half hour day.
-        assert osama["over_hours"] == pytest.approx(3.5, abs=0.3)
-        kirolos = person(day, "Kirolos")
-        assert kirolos["free_hours"] == pytest.approx(5.5, abs=0.3)
+        assert osama["free_hours"] == pytest.approx(5.5, abs=0.3)
 
-    def test_usual_work_can_be_stopped_from_the_day(self, unit):
-        # Ahmed (2026-10-11): tap somebody's usual work to change who does it.
-        unit.change_usual_work({"project": "N2-0100D", "person": "Osama",
-                                "start": TODAY.isoformat(), "end": "2026-10-20"})
+    def test_a_shared_task_s_hours_follow_its_split(self, unit):
+        unit.add_task({"name": "Prepare", "assignees": ["Osama", "Kirolos"],
+                       "required_hours": 4, "due": TODAY.isoformat(),
+                       "project_number": "N2-0100D"})
+        unit.change_job_hours({"project": "N2-0100D", "person": "Osama", "hours": 1,
+                               "days": 5})
         day = unit.day_plan({})["days"][0]
-        assert {b["project"] for b in person(day, "Osama")["blocks"]} == {"N1-0100D"}
-        later = unit.day_plan({"date": ["2026-10-21"]})["days"][0]
-        assert "N2-0100D" in {b["project"] for b in person(later, "Osama")["blocks"]}
+        assert person(day, "Osama")["hours"] == pytest.approx(1)
+        assert person(day, "Kirolos")["hours"] == pytest.approx(3)
 
-    def test_usual_work_can_be_handed_on_from_the_day(self, unit):
-        before = person(unit.day_plan({})["days"][0], "Kirolos")["free_hours"]
-        unit.change_usual_work({"project": "N2-0100D", "person": "Osama", "to": "Kirolos",
-                                "share": 1, "start": TODAY.isoformat(), "end": "2026-10-20"})
-        kirolos = person(unit.day_plan({})["days"][0], "Kirolos")
-        assert "N2-0100D" in {b["project"] for b in kirolos["blocks"]}
-        assert kirolos["free_hours"] == pytest.approx(before - 4, abs=0.3)
-
-    def test_a_handover_needs_somebody_and_dates(self, unit):
-        from workload_app.model import ValidationError
-        with pytest.raises(ValidationError):
-            unit.change_usual_work({"project": "N2-0100D", "person": "Osama", "to": "Nobody",
-                                    "start": TODAY.isoformat(), "end": "2026-10-20"})
-        with pytest.raises(ValidationError):
-            unit.change_usual_work({"project": "N2-0100D", "person": "Osama",
-                                    "start": "2026-10-20", "end": "2026-10-01"})
-
-    def test_a_job_with_everything_sent_drops_out_of_the_day(self, unit):
-        # Ahmed (2026-10-11): "I updated that N25178 is submitted, why is it
-        # shown again".
-        rows = [d.row for d in unit.workbook.deliverables()
-                if d.project_number == "N2-0100D"]
-        assert rows
-        for row in rows:
-            unit.start_submission({"row": row, "planned": "2026-10-05",
-                                   "submitted": "2026-10-05"})
+    def test_a_submission_opens_from_its_preparation(self, unit):
+        # Ahmed (2026-10-11): tap the submission work to see and change it.
+        row = next(d.row for d in unit.workbook.deliverables()
+                   if d.project_number == "N2-0100D")
+        unit.start_submission({"row": row, "planned": "2026-10-12"})
+        unit.generate_submission_tasks({"deliverable_row": row})
         day = unit.day_plan({})["days"][0]
-        assert {b["project"] for b in person(day, "Osama")["blocks"]} == {"N1-0100D"}
+        prep = [b for p in day["people"] for b in p["blocks"] if b.get("row") == row]
+        assert prep and all(b["kind"] == "submission" for b in prep)
+        card = unit.submission_card(row)
+        assert card["item"]["row"] == row and card["item"]["issues"][0]["planned"] == "2026-10-12"
+        assert card["prep"]["days"]
+        unit.change_run_up(row, {"people": ["Kirolos"], "hours": 3})
+        card = unit.submission_card(row)
+        assert card["prep"]["people"] == ["Kirolos"] and card["prep"]["hours"] == 3
+        with pytest.raises(Exception):
+            unit.change_run_up(row, {"people": []})
+        with pytest.raises(Exception):
+            unit.change_run_up(row, {"people": ["Nobody"]})
+
+    def test_a_new_split_moves_the_preparation_at_once(self, unit):
+        # Ahmed (2026-10-11): "I updated the percentages of Kirolos and Osama
+        # although still Osama is having berth 9 & 10".
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N2-0100D")
+        row = deliverable.row
+        unit.start_submission({"row": row, "planned": "2026-10-12"})
+        unit.generate_submission_tasks({"deliverable_row": row})
+        body = deliverable.to_dict()
+        body["shares"] = {"Osama": 0.25, "Kirolos": 0.75}
+        unit.update_deliverable(row, body)
+        ahead = [t for t in unit.tasks()["tasks"]
+                 if t["series"] == f"submission:{row}" and t["due"] >= TODAY.isoformat()]
+        assert ahead
+        for task in ahead:
+            assert task["assignees"] == ["Osama", "Kirolos"]
+            assert task["hours_by_person"]["Kirolos"] == pytest.approx(
+                3 * task["hours_by_person"]["Osama"])
+        # Who prepares it, from the submission, is the split too.
+        unit.change_run_up(row, {"people": ["Kirolos"]})
+        shares = next(d for d in unit.workbook.deliverables() if d.row == row).shares
+        assert shares["Kirolos"] == 1 and not shares.get("Osama")
 
     def test_the_week_is_the_same_day_by_day(self, unit):
         data = unit.day_plan({"span": ["week"]})
@@ -472,8 +506,6 @@ class TestTimeAway:
         after = person(unit.planner({"days": 5}), "Kirolos")
         assert after["away_days"] == 2
         assert after["capacity"] == pytest.approx(before["capacity"] * 3 / 5)
-        # Three days of his usual three hours, not five.
-        assert after["before"]["hours"] == pytest.approx(9)
         day = person(unit.day_plan({"date": ["2026-10-08"]})["days"][0], "Kirolos")
         assert day["away"] and not day["blocks"] and day["free_hours"] == 0
         listed = unit.day_plan({})["away"]

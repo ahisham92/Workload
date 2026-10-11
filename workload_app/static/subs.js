@@ -27,6 +27,31 @@ const SUB_WORDS = {
 const SUB_CODES = [['', '—'], ['A', 'A · Accepted'], ['B', 'B · With comments'], ['C', 'C · Revise']];
 const SUB_PURPOSES = ['', 'IFA', 'IFC', 'IFT', 'IFR', 'IFI'];
 
+/** What can be picked as where a sending stands; the dates follow. */
+const SUB_PICK = [['planned', 'Planned'], ['with_client', 'Submitted'],
+  ['accepted', 'Back: A, accepted'], ['comments', 'Back: B, with comments'], ['returned', 'Back: C, revise']];
+
+/** What picking a status writes: the dates and the code that make it so. A
+    submission marked submitted went on its planned day when that has passed,
+    else today; the date box is there to put it right. */
+function subStatusChange(to, issue, today) {
+  const planned = issue.planned || issue.status_date || '';
+  const sent = issue.submitted || (planned && planned <= today ? planned : today);
+  if (to === 'planned') return { submitted: '', returned: '', code: '' };
+  if (to === 'with_client') return { submitted: sent, returned: '', code: '' };
+  const back = issue.returned && issue.returned >= sent ? issue.returned : (today >= sent ? today : sent);
+  return { submitted: sent, returned: back, code: { accepted: 'A', comments: 'B', returned: 'C' }[to] };
+}
+
+/** The status as a box to change: pick Submitted and it is submitted. */
+function subStatusBox(status, choices, onPick) {
+  const box = el('select', { class: 'sub-pick', 'aria-label': 'Change where it stands' },
+    ...choices.map(([value, text]) => el('option', { value }, text)));
+  box.value = status === 'late' ? 'planned' : status;
+  box.addEventListener('change', () => onPick(box.value));
+  return box;
+}
+
 /** Where one sending stands; the same rules as revisions.issue_status. */
 function subStatus(issue, today) {
   if (issue.code === 'A') return 'accepted';
@@ -87,15 +112,15 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       el('div', {},
         el('h3', {}, project ? 'Submissions and revisions' : 'All submissions'),
         el('p', { class: 'muted' },
-          'Start a submission with the day it is planned to go, then put in the day it really went. '
-          + 'When it comes back, give the day, the client’s code and the reason, and start the next revision. '
+          'Put in the day a submission is planned to go, or pick Submitted when it has gone. '
+          + 'When it comes back, pick its code (or give the day and the reason), and start the next revision. '
           + 'Every change saves as you make it, here and on '
           + (project ? 'Planner › Submissions.' : 'each project’s own page.')))),
     body);
 
-  const reload = async () => {
+  const reload = async ({ quiet = Boolean(view.data) } = {}) => {
     try {
-      view.data = await api(`/api/submission-issues${project ? `?project=${encodeURIComponent(project)}` : ''}`);
+      view.data = await api(`/api/submission-issues${project ? `?project=${encodeURIComponent(project)}` : ''}`, { quiet });
       draw();
     } catch (error) {
       setChildren(body, el('p', { class: 'v-bad' }, errorText(error)));
@@ -188,24 +213,35 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
   }
 
   function notStartedRow(item, who) {
+    const today = view.data.today;
     const planned = el('input', { type: 'date', value: item.status_date || '', 'aria-label': 'Planned to go' });
+    const submitted = el('input', { type: 'date', 'aria-label': 'Really submitted' });
     const start = async (extra = {}) => {
       try {
-        await api('/api/submission-issues', { method: 'POST', body: { row: item.row, ...extra } });
-        toast(`${item.name}: submission started.`, 'ok');
+        await api('/api/submission-issues', { method: 'POST', quiet: true, body: { row: item.row, ...extra } });
+        toast(extra.submitted ? `${item.name}: submitted ${dateText(extra.submitted)}.` : `${item.name}: planned.`, 'ok');
         changed();
         await reload();
       } catch (error) { toastError(error); }
     };
     planned.addEventListener('change', () => { if (planned.value) start({ planned: planned.value }); });
+    submitted.addEventListener('change', () => {
+      if (submitted.value) start({ ...(planned.value ? { planned: planned.value } : {}), submitted: submitted.value });
+    });
+    const pick = (to) => {
+      if (to === 'none') return;
+      const extra = planned.value ? { planned: planned.value } : {};
+      if (to === 'planned') { start(extra); return; }
+      start({ ...extra, ...subStatusChange(to, { planned: planned.value }, today) });
+    };
     return el('tr', { class: 'sub-row is-none' },
       who,
-      el('td', {}, subChip('none', '')),
-      el('td', { class: 'sub-hint muted small', colspan: 2 }, 'Pick the day it is planned to go →'),
+      el('td', {}, subStatusBox('none', [['none', 'Not started'], ...SUB_PICK], pick)),
+      el('td', { class: 'sub-hint muted small', colspan: 2 }, 'Put in a date, or pick Submitted'),
       el('td', {}, planned),
-      el('td', { class: 'muted small', colspan: 4 }, item.step_name ? `Step reached: ${item.step_name}` : ''),
-      el('td', {}, el('button', { type: 'button', class: 'btn btn-sm btn-primary',
-        onclick: () => start(planned.value ? { planned: planned.value } : {}) }, 'Start')));
+      el('td', {}, submitted),
+      el('td', { class: 'muted small', colspan: 3 }, item.step_name ? `Step reached: ${item.step_name}` : ''),
+      el('td', {}));
   }
 
   function issueRow(item, issue, who, latest) {
@@ -217,7 +253,8 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
     const paint = () => {
       const status = subStatus(issue, today);
       tr.dataset.status = status;
-      setChildren(statusCell, subChip(status, subWhen(issue, status, today)));
+      setChildren(statusCell, subChip(status, subWhen(issue, status, today)),
+        latest ? subStatusBox(status, SUB_PICK, pickStatus) : null);
       if (latest) {
         item.status = status;
         const again = status === 'returned' || status === 'comments';
@@ -232,9 +269,22 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       }
     };
 
+    const pickStatus = (to) => {
+      const change = subStatusChange(to, issue, today);
+      tr.classList.add('is-saving');
+      send(issue.id, async () => {
+        try {
+          const result = await api(`/api/submission-issues/${issue.id}`, { method: 'PUT', quiet: true, body: change });
+          if (result.save) markSaved(result.save);
+          changed();
+        } catch (error) { toastError(error); }
+        await reload();
+      });
+    };
+
     const nextRevision = async () => {
       try {
-        await api('/api/submission-issues', { method: 'POST', body: { row: item.row } });
+        await api('/api/submission-issues', { method: 'POST', quiet: true, body: { row: item.row } });
         toast(`${item.name}: Rev ${nextRev(issue.rev)} started. Put in the day it is planned to go.`, 'ok');
         changed();
         await reload();
@@ -243,7 +293,7 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
     const remove = async () => {
       if (!window.confirm(`Remove Rev ${issue.rev || '—'} of ${item.name}? The other revisions stay.`)) return;
       try {
-        await api(`/api/submission-issues/${issue.id}`, { method: 'DELETE' });
+        await api(`/api/submission-issues/${issue.id}`, { method: 'DELETE', quiet: true });
         changed();
         await reload();
       } catch (error) { toastError(error); }
@@ -313,4 +363,211 @@ function nextRev(previous) {
   const last = text[text.length - 1];
   if (/[a-y]/i.test(last)) return text.slice(0, -1) + String.fromCharCode(last.charCodeAt(0) + 1);
   return `${text}1`;
+}
+
+/* ---------------------------------------------------------------------------
+ * One submission, on the right of the page: a tap on its preparation on
+ * Planner › Today opens it. Where it stands, its dates and the client's code,
+ * and who prepares it for how long a day. Every box saves as it is changed.
+ * ------------------------------------------------------------------------- */
+
+/** The sheet on the right. Opening another one swaps what it shows. */
+function openSide(title, content) {
+  let sheet = document.getElementById('side-sheet');
+  if (!sheet) {
+    const close = () => { sheet.hidden = true; document.body.classList.remove('side-open'); };
+    sheet = el('aside', { id: 'side-sheet', class: 'side-sheet', 'aria-label': 'Details' },
+      el('header', { class: 'side-head' },
+        el('h3', { class: 'side-title' }),
+        el('button', { type: 'button', class: 'btn btn-ghost side-close', 'aria-label': 'Close', onclick: close }, '✕')),
+      el('div', { class: 'side-body' }));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) close(); });
+    document.body.append(sheet);
+  }
+  sheet.querySelector('.side-title').textContent = title;
+  setChildren(sheet.querySelector('.side-body'), content);
+  sheet.hidden = false;
+  document.body.classList.add('side-open');
+  return sheet;
+}
+
+function openSubmission(row, { onChange = null } = {}) {
+  const body = el('div', { class: 'sub-card' }, el('p', { class: 'muted' }, 'Opening the submission…'));
+  openSide('Submission', body);
+  const changed = () => { if (typeof onChange === 'function') onChange(); };
+  let queue = Promise.resolve();
+  const later = (work) => { queue = queue.then(work, work); return queue; };
+
+  const load = async () => {
+    try {
+      draw(await api(`/api/submissions/${row}`, { quiet: true }));
+    } catch (error) {
+      setChildren(body, el('p', { class: 'v-bad' }, errorText(error)));
+    }
+  };
+
+  const field = (label, box, hint) => el('label', { class: 'sub-field' },
+    el('span', { class: 'sub-label' }, label), box, hint ? el('small', { class: 'muted' }, hint) : null);
+
+  function draw(data) {
+    const item = data.item;
+    if (!item) {
+      setChildren(body, el('p', { class: 'muted' }, 'This submission is not on the list any more.'));
+      return;
+    }
+    const today = data.today;
+    const sheet = document.getElementById('side-sheet');
+    if (sheet) sheet.querySelector('.side-title').textContent = item.name;
+    const issues = item.issues || [];
+    const issue = issues[issues.length - 1];
+    const chip = el('div', { class: 'sub-card-chip' });
+    const paintChip = () => {
+      const status = issue ? subStatus(issue, today) : 'none';
+      setChildren(chip, subChip(status, issue ? subWhen(issue, status, today) : ''));
+      return status;
+    };
+
+    const pickStatus = async (to) => {
+      try {
+        if (!issue) {
+          await api('/api/submission-issues', { method: 'POST', quiet: true,
+            body: { row: item.row, ...(to === 'planned' ? {} : subStatusChange(to, { planned: item.status_date }, today)) } });
+        } else {
+          const result = await api(`/api/submission-issues/${issue.id}`, { method: 'PUT', quiet: true,
+            body: subStatusChange(to, issue, today) });
+          if (result.save) markSaved(result.save);
+        }
+        changed();
+      } catch (error) { toastError(error); }
+      await load();
+    };
+    const parts = [
+      el('p', { class: 'sub-card-job' }, el('span', { class: 'code' }, `${item.project_number} `), item.project_name),
+      el('div', { class: 'sub-card-status' }, chip,
+        subStatusBox(issue ? subStatus(issue, today) : 'none',
+          issue ? SUB_PICK : [['none', 'Not started'], ...SUB_PICK], (to) => { if (to !== 'none') pickStatus(to); })),
+    ];
+
+    if (!issue) {
+      const planned = el('input', { type: 'date', value: item.status_date || '' });
+      const start = async () => {
+        try {
+          await api('/api/submission-issues', { method: 'POST', quiet: true,
+            body: { row: item.row, ...(planned.value ? { planned: planned.value } : {}) } });
+          toast(`${item.name}: submission started.`, 'ok');
+          changed();
+          await load();
+        } catch (error) { toastError(error); }
+      };
+      planned.addEventListener('change', () => { if (planned.value) start(); });
+      parts.push(el('section', { class: 'sub-card-part' },
+        el('h4', {}, 'When is it planned to go?'),
+        field('Planned to go', planned, 'Pick the day: the submission starts with it.')));
+    } else {
+      /** A box that saves itself the moment it is changed. */
+      const box = (key, input) => {
+        input.value = issue[key] ?? '';
+        input.addEventListener('change', () => {
+          const value = input.value;
+          if ((issue[key] ?? '') === value) return;
+          const was = issue[key];
+          issue[key] = value;
+          paintChip();
+          later(async () => {
+            try {
+              const result = await api(`/api/submission-issues/${issue.id}`, { method: 'PUT', quiet: true, body: { [key]: value } });
+              Object.assign(issue, result.issue);
+              if (result.save) markSaved(result.save);
+              input.classList.add('is-saved');
+              setTimeout(() => input.classList.remove('is-saved'), 900);
+              paintChip();
+              changed();
+              if (key === 'planned') await load();      // its preparation days move with it
+            } catch (error) {
+              issue[key] = was;
+              input.value = was ?? '';
+              paintChip();
+              toastError(error);
+            }
+          });
+        });
+        return input;
+      };
+      const select = (options) => el('select', {}, ...options.map(([value, text]) => el('option', { value }, text)));
+      const status = paintChip();
+      const again = status === 'returned' || status === 'comments';
+      parts.push(el('section', { class: 'sub-card-part' },
+        el('h4', {}, `Revision ${issue.rev || '—'}: its dates`),
+        el('div', { class: 'sub-card-grid' },
+          field('Planned to go', box('planned', el('input', { type: 'date' }))),
+          field('Really sent', box('submitted', el('input', { type: 'date' })), 'Put the day in once it has gone.'),
+          field('Came back', box('returned', el('input', { type: 'date' }))),
+          field('Client’s code', box('code', select(SUB_CODES))),
+          field('Revision', box('rev', el('input', { type: 'text', maxlength: 12 }))),
+          field('Sent for', box('purpose', select(SUB_PURPOSES.map((p) => [p, p || '—']))))),
+        field('Reason or comments', box('reason', el('input', { type: 'text', maxlength: 300, placeholder: 'why it came back' }))),
+        again ? el('button', { type: 'button', class: 'btn btn-primary', onclick: async () => {
+          try {
+            await api('/api/submission-issues', { method: 'POST', quiet: true, body: { row: item.row } });
+            toast(`${item.name}: Rev ${nextRev(issue.rev)} started. Put in the day it is planned to go.`, 'ok');
+            changed();
+            await load();
+          } catch (error) { toastError(error); }
+        } }, `Start revision ${nextRev(issue.rev)}`) : null,
+        issues.length > 1 ? el('p', { class: 'muted small' }, 'Revisions so far: ', subTrail(issues, today)) : null));
+    }
+    parts.push(prepPart(data));
+    setChildren(body, ...parts);
+  }
+
+  /** Who prepares it, how long a day, and on which days. */
+  function prepPart(data) {
+    const prep = data.prep;
+    const ahead = prep.days.filter((d) => !d.done && d.date >= data.today);
+    if (!ahead.length) {
+      return el('section', { class: 'sub-card-part' },
+        el('h4', {}, 'Who prepares it?'),
+        el('p', { class: 'muted' }, prep.days.length
+          ? 'No preparation days left: they are all done or gone.'
+          : 'No preparation days yet. They are put in the week before the planned day.'));
+    }
+    const chosen = new Set(prep.people);
+    const save = (change, done) => later(async () => {
+      try {
+        const result = await api(`/api/submissions/${row}/prep`, { method: 'PUT', quiet: true, body: change });
+        if (result.save) markSaved(result.save);
+        if (done) done();
+        changed();
+      } catch (error) { toastError(error); await load(); }
+    });
+    const people = el('div', { class: 'sub-people' }, data.engineers.map((name) => {
+      const chip = el('button', { type: 'button', class: `sub-person${chosen.has(name) ? ' is-on' : ''}`,
+        'aria-pressed': chosen.has(name) ? 'true' : 'false' }, name);
+      chip.addEventListener('click', () => {
+        if (chosen.has(name) && chosen.size === 1) { toast('Somebody has to prepare it.', 'warn'); return; }
+        if (chosen.has(name)) chosen.delete(name); else chosen.add(name);
+        chip.classList.toggle('is-on', chosen.has(name));
+        chip.setAttribute('aria-pressed', chosen.has(name) ? 'true' : 'false');
+        save({ people: data.engineers.filter((n) => chosen.has(n)) });
+      });
+      return chip;
+    }));
+    const hours = el('input', { type: 'number', min: '0.25', max: '12', step: '0.25', value: String(prep.hours ?? '') });
+    hours.addEventListener('change', () => {
+      const value = Number(hours.value);
+      if (!(value > 0)) return;
+      save({ hours: value }, () => {
+        hours.classList.add('is-saved');
+        setTimeout(() => hours.classList.remove('is-saved'), 900);
+      });
+    });
+    return el('section', { class: 'sub-card-part' },
+      el('h4', {}, 'Who prepares it?'),
+      el('p', { class: 'muted small' }, 'Tap a name to add or take them off. It applies from today to the planned day.'),
+      people,
+      field('Hours a day, all of them together', hours, 'Shared between the people chosen.'),
+      el('p', { class: 'muted small' }, `Preparation days left: ${ahead.map((d) => dateText(d.date, { day: 'numeric', month: 'short' })).join(', ')}.`));
+  }
+
+  load();
 }

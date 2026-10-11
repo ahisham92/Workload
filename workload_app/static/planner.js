@@ -1,8 +1,9 @@
 /* Selecao+ — the coming days, drawings, and when to ask for people.
  *
- * The Planner tab: each person's next few working days as their recent pace
- * says they will go, work handed from one person to another to see what it
- * does before anything changes, and the forecast that says which team needs
+ * The Planner tab: each person's next few working days as their submission
+ * work, tasks and requests lay them out, work handed from one person to
+ * another to see what it does before anything changes, and the forecast that
+ * says which team needs
  * more people, how many, and for how long.
  *
  * Built on app.js's helpers (el, api, state, fmt, tone, openModal...). The
@@ -190,9 +191,6 @@ function renderPlanner() {
 
   setChildren(host,
     el('div', { class: 'plan-toolbar' }, daySelect),
-    data.stale ? el('div', { class: 'msg msg-warn' },
-      `The newest timesheet is from ${dateText(data.pace_to)}. A pace that old is a guess: `
-      + 'import this month’s timesheets for an outlook worth acting on.') : null,
     plannerCards(data),
     window.board ? window.board.render(data) : null,
     window.board
@@ -349,7 +347,7 @@ function needsFootnote(needs) {
       + ` (${needs.assumed.slice(0, 4).map((p) => p.number).join(', ')}${needs.assumed.length > 4 ? '…' : ''}).`);
   }
   if (needs.late && needs.late.length) {
-    notes.push(`${needs.late.length} project(s) are past their end date; their remaining work is spread over the next ${needs.rules.late_spread_weeks} weeks.`);
+    notes.push(`Not counted: ${needs.late.map((p) => p.number).join(', ')} ${needs.late.length === 1 ? 'is' : 'are'} past the end date with no submission planned. Give a new end date on Projects, or a submission date, to count ${needs.late.length === 1 ? 'it' : 'them'}.`);
   }
   if (needs.unstaffed && needs.unstaffed.length) {
     notes.push(`${needs.unstaffed.length} project(s) have work left and nobody booking to them.`);
@@ -380,8 +378,7 @@ function whoHasWhat(data) {
       el('div', {},
         el('h3', {}, `Who has what, ${dateText(data.from)} to ${dateText(data.to)}`),
         el('p', { class: 'muted' },
-          `Each person at the pace their timesheets set from ${dateText(data.pace_from)} to ${dateText(data.pace_to)}, `
-          + 'with their open tasks where those need more. '
+          'Each person’s submission preparation, tasks and requests due by then. '
           + (trying ? 'The faint bar is before the handovers you are trying, the solid one after.'
             : 'Open someone to hand some of their work to somebody else.'))),
       el('span', { class: 'legend' },
@@ -435,18 +432,17 @@ function personRow(person) {
 function personWork(person) {
   const trying = plan.moves.length > 0;
   if (!person.items.length) {
-    return el('div', { class: 'plan-work muted' }, 'Nothing booked lately and no tasks due.');
+    return el('div', { class: 'plan-work muted' }, 'No submission work or tasks due in these days.');
   }
   return el('div', { class: 'plan-work' }, el('div', { class: 'table-wrap' }, el('table', { 'data-plain': '' },
     el('thead', {}, el('tr', {},
-      el('th', {}, 'Work'), el('th', { class: 'num' }, 'Hours a day'),
+      el('th', {}, 'Work'),
       el('th', { class: 'num' }, 'Hours'), el('th', { class: 'num' }, 'Drawings in hand'),
       el('th', {}, ''))),
     el('tbody', {}, person.items.map((item) => el('tr', {},
       el('td', { class: 'wide' }, item.project ? el('span', { class: 'code' }, `${item.project} `) : null,
         item.name !== item.project ? item.name : '',
         item.task_hours ? el('span', { class: 'muted small' }, ` · ${fmt.hours(item.task_hours)} h of tasks`) : null),
-      el('td', { class: 'num' }, item.pace_after ? fmt.hours(item.pace_after) : '—'),
       el('td', { class: 'num' }, trying && item.hours_before !== item.hours_after
         ? `${fmt.hours(item.hours_before)} → ${fmt.hours(item.hours_after)}` : fmt.hours(item.hours_after)),
       el('td', { class: 'num' }, item.drawings_after || item.drawings_before
@@ -729,7 +725,7 @@ async function overviewNeeds() {
 /* -- today ------------------------------------------------------------- */
 
 const KIND_LABEL = { request: 'Request', submission: 'Submission', meeting: 'Meeting',
-  management: 'Team', development: 'Development', task: 'Task', work: 'Usual work',
+  management: 'Team', development: 'Development', task: 'Task',
   half_day: 'Half day off' };
 
 /** A meeting's agenda, folded away under it until it is wanted. */
@@ -1384,57 +1380,24 @@ function dayCards(day, shown) {
               : p.over_hours ? `${fmt.hours(p.over_hours)} h won't fit today`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
         el('ol', { class: 'day-blocks' }, p.blocks.map((b) => el('li', {
-          class: `block block-${b.kind} ${b.done ? 'is-done' : ''}${b.kind === 'work' ? ' is-tappable' : ''}`,
-          title: b.kind === 'work' ? 'Tap to hand this work to somebody else, or stop it' : null,
-          role: b.kind === 'work' ? 'button' : null, tabindex: b.kind === 'work' ? '0' : null,
-          onclick: b.kind === 'work' ? () => changeUsualWork(day, p, b) : null,
-          onkeydown: b.kind === 'work' ? (e) => { if (e.key === 'Enter') changeUsualWork(day, p, b); } : null,
+          class: `block block-${b.kind} ${b.done ? 'is-done' : ''}${b.row != null ? ' is-tappable' : ''}`,
+          title: b.row != null ? 'Tap to see and change this submission' : null,
+          role: b.row != null ? 'button' : null, tabindex: b.row != null ? '0' : null,
+          onclick: b.row != null ? () => openSubmission(b.row, { onChange: () => loadDay({ quiet: true }) }) : null,
+          onkeydown: b.row != null ? (e) => { if (e.key === 'Enter') openSubmission(b.row, { onChange: () => loadDay({ quiet: true }) }); } : null,
         },
         el('span', { class: 'block-time' }, `${b.start}–${b.end}`),
         el('span', { class: 'block-what' },
           KIND_LABEL[b.kind] ? el('span', { class: 'block-kind' }, KIND_LABEL[b.kind]) : null,
           b.project && b.title !== b.project ? el('span', { class: 'code' }, `${b.project} `) : null,
           b.title,
-          b.kind === 'work' ? el('span', { class: 'block-note' },
-            'At the pace of their last timesheets. Tap to change.') : null,
           agendaList(b))))),
         p.away ? null : el('button', { class: 'linkish day-away', type: 'button',
           onclick: () => markAway(plan.dayData, p.name) }, 'Add a day off')))),
     away.length ? el('p', { class: 'small' },
       el('b', {}, 'Off today: '), away.map((p) => p.name).join(', '), '.') : null,
     idle.length ? el('p', { class: 'muted small' },
-      `Nothing booked lately and nothing planned: ${idle.map((p) => p.name).join(', ')}.`) : null);
-}
-
-/** A tap on somebody's usual work: hand it on, or stop it, for some days.
-    Kept with the handovers under Move work, where it can be undone. */
-function changeUsualWork(day, person, block) {
-  const others = day.people.map((x) => x.name).filter((n) => n !== person.name);
-  const later = new Date(`${day.date}T00:00:00Z`);
-  later.setUTCDate(later.getUTCDate() + 27);
-  const job = block.project;
-  const name = block.title && block.title !== job ? ` (${block.title})` : '';
-  openModal(`${person.name} on ${job}`, [
-    { name: 'what', label: 'What should change', type: 'select', full: true,
-      options: [{ value: 'all', label: 'Hand all of it to somebody else' },
-        { value: 'half', label: 'Hand half of it to somebody else' },
-        { value: 'stop', label: 'Stop it: nothing to do on this job now' }] },
-    { name: 'to', label: 'Hand it to', type: 'select', hint: 'not needed to stop it',
-      options: [{ value: '', label: '—' }, ...others] },
-    { name: 'start', label: 'From', type: 'date' },
-    { name: 'end', label: 'Until', type: 'date', hint: 'the last day it applies' },
-  ], async () => {
-    const v = modalValues();
-    if (v.what !== 'stop' && !v.to) throw new Error('Choose who takes it on.');
-    await api('/api/day/work', { method: 'POST', body: {
-      project: job, person: person.name, to: v.what === 'stop' ? '' : v.to,
-      share: v.what === 'half' ? 0.5 : 1, start: v.start, end: v.end } });
-    closeModal();
-    toast(v.what === 'stop'
-      ? `${person.name}'s work on ${job}${name} is stopped until ${dateText(v.end)}. Undo it under Move work.`
-      : `${v.what === 'half' ? 'Half' : 'All'} of ${person.name}'s work on ${job} goes to ${v.to} until ${dateText(v.end)}. Undo it under Move work.`, 'ok');
-    await loadDay({ quiet: true });
-  }, { what: 'all', start: day.date, end: later.toISOString().slice(0, 10) });
+      `Nothing planned today: ${idle.map((p) => p.name).join(', ')}.`) : null);
 }
 
 function weekTable(data, shown) {

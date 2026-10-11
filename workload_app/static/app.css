@@ -1397,8 +1397,40 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 .official-add .grow { flex: 1 1 160px; min-width: 0; }
 .official-day.is-off .request-what b { text-decoration: line-through; color: var(--muted); }
 
-/* Usual work on the day plan: what the timesheets say, tap to change it */
-.block-work .block-kind { color: var(--muted); }
-.block-note { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+/* A submission's preparation on the day plan: tap it to open the submission */
 .block.is-tappable { cursor: pointer; }
 .block.is-tappable:hover, .block.is-tappable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The sheet on the right: one submission, opened from its preparation */
+.side-sheet {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+  width: min(420px, 100vw); display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -10px 0 30px rgba(10, 14, 20, .18);
+}
+.side-sheet[hidden] { display: none; }
+.side-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px; background: var(--navy, #1f2a44); color: #fff;
+}
+.side-head h3 { margin: 0; font-size: 16px; color: inherit; }
+.side-head .side-close { color: inherit; }
+.side-body { overflow-y: auto; padding: 14px 16px 24px; }
+@media (min-width: 900px) { body.side-open main { margin-right: 420px; } }
+.sub-card { display: flex; flex-direction: column; gap: 12px; }
+.sub-card-job { margin: 0; font-size: 13px; color: var(--muted); }
+.sub-card-part { display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.sub-card-part h4 { margin: 0; }
+.sub-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.sub-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sub-field .sub-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.sub-field input, .sub-field select { width: 100%; min-width: 0; }
+.sub-field .is-saved { outline: 2px solid var(--ok); }
+.sub-people { display: flex; flex-wrap: wrap; gap: 6px; }
+.sub-person { border: 1px solid var(--border); background: var(--surface); border-radius: 999px;
+  padding: 5px 12px; font: inherit; cursor: pointer; }
+.sub-person.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bd-hours .bd-hours-box { width: 80px; }
+.sub-card-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sub-pick { max-width: 220px; }
