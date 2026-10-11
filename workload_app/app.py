@@ -1975,6 +1975,7 @@ class WorkloadApp:
              lambda ctx, q, b, item_id: ctx.service.remove_planned_work(_int(item_id)),
              "manager"),
             ("GET", "/api/day", lambda ctx, q, b: ctx.service.day_plan(q), "manager"),
+            ("POST", "/api/day/work", s("change_usual_work", body=True), "manager"),
             ("GET", "/api/meetings", s("meetings"), "manager"),
             ("POST", "/api/meetings",
              lambda ctx, q, b: ctx.service.add_meeting(b or {}), "manager"),

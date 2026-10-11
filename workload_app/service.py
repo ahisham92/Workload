@@ -1161,6 +1161,7 @@ class WorkloadService:
         rows = self.store.all_rows()
         config, absences, leave, public, choice = self._calendar(
             wb, rows, roster["people"], roster["teams"])
+        config = {**config, "quiet_projects": self._quiet_projects(wb)}
         return {
             "management": management_module.Plan(
                 roster["people"], roster["teams"], config,
@@ -1351,6 +1352,25 @@ class WorkloadService:
             saved=saved, slots=slots, today=today, management=inputs["management"],
             marks=self._open_marks(), submissions=self._submissions_sent(self.workbook))
 
+    def _quiet_projects(self, wb) -> set:
+        """Jobs with something sent and nothing to prepare: every submission
+        has gone or been accepted, none is planned, late or back for a
+        revision. Their usual work leaves the day plan until one is."""
+        issues = wb.issues()
+        today = _today()
+        state: Dict[str, Dict[str, bool]] = {}
+        for d in wb.deliverables():
+            mine = issues.get(d.row, [])
+            status = revisions_module.describe(mine, today)["status"] if mine else "none"
+            seen = state.setdefault(d.project_number, {"sent": False, "open": False})
+            if status in ("with_client", "accepted"):
+                seen["sent"] = True
+            elif status in ("planned", "late", "returned", "comments"):
+                seen["open"] = True
+            elif d.status_date and not d.submitted_to_client:
+                seen["open"] = True       # dated, with no submission started yet
+        return {job for job, seen in state.items() if seen["sent"] and not seen["open"]}
+
     def _submissions_sent(self, wb) -> Dict[int, Dict[str, Any]]:
         """Each deliverable's days sent and the day it is planned for, so a
         submission recorded as sent is never asked about again."""
@@ -1417,6 +1437,44 @@ class WorkloadService:
 
     # -- the day, requests as they come in, and the submissions plan -------
     @_remembered
+    def change_usual_work(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """From the day plan: hand somebody's usual work on a job to somebody
+        else, or stop it, for some days. Kept with the other handovers."""
+        with self._lock:
+            wb = self.workbook
+            body = body or {}
+            project = str(body.get("project") or "").strip()
+            person = str(body.get("person") or "").strip()
+            to = str(body.get("to") or "").strip()
+            errors = []
+            if not project:
+                errors.append("Which job?")
+            names = set(wb.engineer_names())
+            if person not in names:
+                errors.append(f"{person or 'Nobody'} is not on the team.")
+            if to and (to not in names or to == person):
+                errors.append("Hand it to somebody else on the team.")
+            try:
+                share = float(body.get("share", 1))
+            except (TypeError, ValueError):
+                share = -1
+            if not 0 < share <= 1:
+                errors.append("Hand all of it or half of it.")
+            try:
+                start = _dt.date.fromisoformat(str(body.get("start")))
+                end = _dt.date.fromisoformat(str(body.get("end")))
+            except ValueError:
+                start = end = None
+                errors.append("Give the first and the last day, as dates.")
+            if start and end and end < start:
+                errors.append("The last day is before the first.")
+            if errors:
+                raise ValidationError(errors)
+            move_id = self.store.add_plan_move(
+                project=project, from_person=person, to_person=to, share=share,
+                start=start.isoformat(), end=end.isoformat())
+            return {"id": move_id}
+
     def day_plan(self, query: Dict[str, List[str]]) -> Dict[str, Any]:
         """Everybody's day -- or week -- laid out from what is already known."""
         with self._lock:

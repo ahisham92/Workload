@@ -415,6 +415,44 @@ class TestTheDayFillsItself:
         kirolos = person(day, "Kirolos")
         assert kirolos["free_hours"] == pytest.approx(5.5, abs=0.3)
 
+    def test_usual_work_can_be_stopped_from_the_day(self, unit):
+        # Ahmed (2026-10-11): tap somebody's usual work to change who does it.
+        unit.change_usual_work({"project": "N2-0100D", "person": "Osama",
+                                "start": TODAY.isoformat(), "end": "2026-10-20"})
+        day = unit.day_plan({})["days"][0]
+        assert {b["project"] for b in person(day, "Osama")["blocks"]} == {"N1-0100D"}
+        later = unit.day_plan({"date": ["2026-10-21"]})["days"][0]
+        assert "N2-0100D" in {b["project"] for b in person(later, "Osama")["blocks"]}
+
+    def test_usual_work_can_be_handed_on_from_the_day(self, unit):
+        before = person(unit.day_plan({})["days"][0], "Kirolos")["free_hours"]
+        unit.change_usual_work({"project": "N2-0100D", "person": "Osama", "to": "Kirolos",
+                                "share": 1, "start": TODAY.isoformat(), "end": "2026-10-20"})
+        kirolos = person(unit.day_plan({})["days"][0], "Kirolos")
+        assert "N2-0100D" in {b["project"] for b in kirolos["blocks"]}
+        assert kirolos["free_hours"] == pytest.approx(before - 4, abs=0.3)
+
+    def test_a_handover_needs_somebody_and_dates(self, unit):
+        from workload_app.model import ValidationError
+        with pytest.raises(ValidationError):
+            unit.change_usual_work({"project": "N2-0100D", "person": "Osama", "to": "Nobody",
+                                    "start": TODAY.isoformat(), "end": "2026-10-20"})
+        with pytest.raises(ValidationError):
+            unit.change_usual_work({"project": "N2-0100D", "person": "Osama",
+                                    "start": "2026-10-20", "end": "2026-10-01"})
+
+    def test_a_job_with_everything_sent_drops_out_of_the_day(self, unit):
+        # Ahmed (2026-10-11): "I updated that N25178 is submitted, why is it
+        # shown again".
+        rows = [d.row for d in unit.workbook.deliverables()
+                if d.project_number == "N2-0100D"]
+        assert rows
+        for row in rows:
+            unit.start_submission({"row": row, "planned": "2026-10-05",
+                                   "submitted": "2026-10-05"})
+        day = unit.day_plan({})["days"][0]
+        assert {b["project"] for b in person(day, "Osama")["blocks"]} == {"N1-0100D"}
+
     def test_the_week_is_the_same_day_by_day(self, unit):
         data = unit.day_plan({"span": ["week"]})
         assert [d["date"] for d in data["days"]] == [
