@@ -282,6 +282,41 @@ class TestTheProjectsTab:
         assert unit.workbook.project(JOB).budget_mm == 7.5
         assert any("typed by hand" in t["text"] for t in unit.budgets()["todo"])
 
+    def typed(self, unit):
+        p = unit.workbook.project(JOB)
+        unit.update_project(JOB, {**p.to_dict(), "budget_mm": 7.5, "notes": ""})
+        unit.import_budgets([projects_list(project(JOB, 10.0, 4.0))])
+        return next(t for t in unit.budgets()["todo"] if t.get("kind") == "typed")
+
+    def test_each_typed_budget_is_listed_with_both_figures(self, unit):
+        # Ahmed (2026-10-11): "I want to see those jobs which have issues".
+        line = self.typed(unit)
+        assert line["jobs"] == [JOB]
+        item = job(unit)
+        assert item["project_budget_mm"] == 7.5 and item["team_budget_mm"] == 10.0
+
+    def test_use_bispark_puts_it_on_the_projects_tab(self, unit):
+        self.typed(unit)
+        view = unit.settle_budget(JOB, {"use": "bispark"})
+        assert unit.workbook.project(JOB).budget_mm == 10.0
+        assert not any(t.get("kind") == "typed" for t in view["todo"])
+        assert job(unit)["follows_bispark"] is True
+
+    def test_keep_mine_stops_asking_until_it_changes(self, unit):
+        self.typed(unit)
+        view = unit.settle_budget(JOB, {"use": "mine"})
+        assert unit.workbook.project(JOB).budget_mm == 7.5
+        assert not any(t.get("kind") == "typed" for t in view["todo"])
+        p = unit.workbook.project(JOB)
+        unit.update_project(JOB, {**p.to_dict(), "budget_mm": 6.0})
+        assert any(t.get("kind") == "typed" for t in unit.budgets()["todo"])
+
+    def test_a_choice_must_be_named(self, unit):
+        from workload_app.service import ApiError
+        self.typed(unit)
+        with pytest.raises(ApiError):
+            unit.settle_budget(JOB, {"use": "maybe"})
+
 
 class TestRunningOut:
     def test_over_budget_comes_first(self, unit):

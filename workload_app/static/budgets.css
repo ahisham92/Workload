@@ -64,3 +64,14 @@
   .bu-onjob .bu-who li { grid-template-columns: minmax(0, 1fr) 3.4em; }
   .bu-onjob .bu-io { grid-column: 1 / -1; justify-self: start; }
 }
+
+/* What to do: the jobs behind one line */
+.bu-todo-jobs { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.bu-todo-jobs > li { display: grid; grid-template-columns: minmax(160px, 1.2fr) 2fr auto; gap: 6px 14px;
+  align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.bu-todo-why { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.bu-todo-act { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 700px) {
+  .bu-todo-jobs > li { grid-template-columns: 1fr; }
+  .bu-todo-act { justify-content: flex-start; }
+}

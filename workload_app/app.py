@@ -1950,6 +1950,8 @@ class WorkloadApp:
              s("set_budget_share", body=True), "manager"),
             ("PUT", "/api/budgets/jobs/{}/people",
              s("set_budget_on_job", body=True), "manager"),
+            ("PUT", "/api/budgets/jobs/{}/register",
+             s("settle_budget", body=True), "manager"),
             ("GET", "/api/bring-in", s("bring_in_state"), "manager"),
             ("PUT", "/api/bring-in/who", s("set_who", body=True), "manager"),
             ("POST", "/api/bring-in/who/keep", s("keep_people", body=True), "manager"),
