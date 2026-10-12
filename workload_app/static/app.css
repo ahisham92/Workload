@@ -1399,6 +1399,10 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 
 /* A submission's preparation on the day plan: tap it to open the submission */
 .block.is-tappable { cursor: pointer; }
+.needs-sources { margin: 12px 0 4px; }
+.needs-sources summary { cursor: pointer; font-weight: 600; }
+.needs-sources tr.is-tappable { cursor: pointer; }
+.needs-sources tr.is-tappable:hover, .needs-sources tr.is-tappable:focus-visible { background: var(--accent-soft, rgba(80, 90, 200, .08)); }
 .block.is-tappable:hover, .block.is-tappable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* The sheet on the right: one submission, opened from its preparation */

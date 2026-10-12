@@ -274,6 +274,19 @@ class TestWhenToAskForPeople:
                    and a["team_name"] == "BERTHS")
         assert ask["people"] == 2                  # 74 h a week over: two
 
+    def test_the_card_shows_where_the_hours_come_from(self, unit):
+        # Ahmed (2026-10-12): "we need to understand the details of this,
+        # where is it coming from".
+        days = [d.isoformat() for d in weekdays(10, last=dt.date(2026, 10, 23))]
+        self._prepare(unit, ["Osama", "Kirolos"], "N1-0100D", 8.5, days)
+        self._prepare(unit, ["Osama"], "N2-0100D", 6, days, series="submission:901")
+        listed = unit.needs()["submissions"]
+        assert [s["job"] for s in listed] == ["N1-0100D", "N2-0100D"]
+        first = listed[0]
+        assert first["people"] == ["Osama", "Kirolos"] and first["days"] == len(days)
+        assert first["per_day"] == 17.0 and first["hours"] == 17.0 * len(days)
+        assert first["due"] == days[-1] and first["planned_share"] == 60
+
     def test_a_team_with_room_is_told_it_needs_nobody(self, unit):
         data = unit.needs()
         coastal = [a for a in data["alerts"] if a["team_name"] == "COASTAL"]

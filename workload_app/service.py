@@ -1328,6 +1328,36 @@ class WorkloadService:
                                 task.hours_for(name) if name else task.required_hours or 0.0))
         return out
 
+    def _prep_list(self, wb, inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Each submission behind People needed: its preparation still ahead,
+        on how many days, by whom, and the budget hours it came from."""
+        today = _today()
+        left = self._hours_left(wb)
+        share = wb.task_settings().get("planned_share") or 100
+        runs: Dict[str, Dict[str, Any]] = {}
+        for task in inputs["tasks"]:
+            if not (daily.is_prep_step(task) and not task.done and task.due
+                    and task.due >= today):
+                continue
+            run = runs.setdefault(task.series, {
+                "row": task.deliverable_row, "job": task.project_number,
+                "name": task.deliverable_name or task.name, "due": task.due,
+                "people": [], "hours": 0.0, "days": 0})
+            run["due"] = max(run["due"], task.due)
+            run["hours"] += task.required_hours or 0.0
+            run["days"] += 1
+            for name in task.assignees:
+                if name not in run["people"]:
+                    run["people"].append(name)
+        out = []
+        for run in runs.values():
+            out.append({**run, "due": iso(run["due"]), "hours": round(run["hours"], 1),
+                        "per_day": round(run["hours"] / max(1, run["days"]), 1),
+                        "budget_left": (round(left[run["row"]], 1)
+                                        if run["row"] in left else None),
+                        "planned_share": share})
+        return sorted(out, key=lambda r: -r["hours"])
+
     @staticmethod
     def _submitting(wb) -> Dict[str, _dt.date]:
         """Each job's last submission planned and not yet sent."""
@@ -1369,6 +1399,7 @@ class WorkloadService:
                 management=inputs["management"].taken_a_day(),
                 submitting=self._submitting(wb),
                 prep=self._prep_hours(inputs))
+            data["submissions"] = self._prep_list(wb, inputs)
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",

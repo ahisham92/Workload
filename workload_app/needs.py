@@ -473,8 +473,10 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
         # One more person for each full week of hours over, and one for any
         # part of one: 60 h a week over is two (Ahmed, 2026-10-12).
         count = max(1, math.ceil(peak - 1e-6))
-        extra = max(w.get("gap_hours", 0.0) for w in run)
-        one = max((w.get("person_week") or 0.0) for w in run)
+        busiest = max(run, key=lambda w: w["gap_people"])
+        extra = busiest.get("gap_hours", 0.0)
+        one = busiest.get("person_week") or 0.0
+        full = max((w.get("person_week") or 0.0) for w in weeks)
         start = _dt.date.fromisoformat(run[0]["from"])
         end = _dt.date.fromisoformat(run[-1]["to"])
         open_ended = j == len(weeks) - 1
@@ -506,7 +508,9 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
                   f"{' and beyond' if open_ended else ''}, the work planned is up to "
                   f"{extra:.0f} h a week more than the {has} "
                   f"{people_module.role_label(role, has)} the team has can do. "
-                  f"One {people_module.role_label(role, 1)} does {one:g} h a week, "
+                  f"One {people_module.role_label(role, 1)} does {one:g} h "
+                  f"{'that week' if one < full - 0.05 else 'a week'}"
+                  f"{' (it has fewer working days)' if one < full - 0.05 else ''}, "
                   f"so that is {count} more. ")
         detail += ("Ask now." if severity == "now"
                    else f"Ask by {ask_by:%d %b} so they are there in time.")
