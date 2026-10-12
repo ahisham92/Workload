@@ -328,6 +328,30 @@ class TestPreparationOnToday:
         blocks = self.page(TestSubmissionPreparation.steps(), dt.date(2026, 10, 8))
         assert blocks[0]["title"] == "Prepare the submission: Berth 9 drawings, due 11/10"
 
+    def test_preparation_fills_the_day_and_is_never_too_much(self):
+        # Ahmed (2026-10-12): "what does it mean won't fit today?" The
+        # preparation is the time left around meetings, not overtime.
+        from workload_app import daily
+        from workload_app.tasks import Task
+        today = dt.date(2026, 10, 8)
+        big = Task(id=1, name="Berth 9 drawings", project_number="25-0100",
+                   deliverable_row=7, deliverable_name="Berth 9 drawings",
+                   assignees=["Kirolos"], required_hours=30.0, start=today,
+                   due=today, kind="Submission", series="submission:7")
+        other = Task(id=2, name="Check loads", project_number="25-0100",
+                     assignees=["Kirolos"], required_hours=3.0, start=today,
+                     due=today, kind="Task")
+        meeting = {"leader": "Kirolos", "with": [], "kind": "typed",
+                   "start": dt.datetime(2026, 10, 8, 12), "end": dt.datetime(2026, 10, 8, 13),
+                   "what": "Progress"}
+        laid = daily.plan_day(day=today, today=today, roster=[{"name": "Kirolos"}],
+                              tasks=[big, other], slots={}, config=self.CONFIG,
+                              project_names={}, meetings=[meeting])
+        me = laid["people"][0]
+        assert me["over_hours"] == 0 and me["free_hours"] == 0
+        kinds = [b["kind"] for b in me["blocks"]]
+        assert kinds[0] == "task" and "submission" in kinds and "meeting" in kinds
+
     def test_a_sent_submission_is_not_prepared(self):
         steps = TestSubmissionPreparation.steps()
         sent = {7: {"sent": ["2026-10-07"], "date": "2026-10-11"}}

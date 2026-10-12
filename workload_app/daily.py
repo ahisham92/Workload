@@ -169,7 +169,11 @@ def plan_day(*, day: _dt.date, today: _dt.date, roster: Sequence[Dict[str, Any]]
                                  "project": task.project_number,
                                  "task_id": task.id, "done": False,
                                  "row": (task.deliverable_row
-                                         if is_prep_step(task) else None)})
+                                         if is_prep_step(task) else None),
+                                 "fills": is_prep_step(task)})
+            # Preparation fills whatever time is left, so it goes last and
+            # what does not fit is not "too much": it is the free time.
+            flexible.sort(key=lambda item: bool(item.get("fills")))
         blocks, over = _lay_out(fixed, flexible, day_start, day_end)
         booked = sum((b["end"] - b["start"]).total_seconds() / 3600 for b in blocks)
         people.append({
@@ -242,7 +246,7 @@ def _lay_out(fixed: List[Dict[str, Any]], flexible: List[Dict[str, Any]],
                 gaps.pop(0)
             else:
                 gaps[0] = (end, last)
-        if remaining > 0.5:
+        if remaining > 0.5 and not item.get("fills"):
             over += remaining / 60.0
     blocks.sort(key=lambda b: b["start"])
     return [dict(b) for b in blocks], over
