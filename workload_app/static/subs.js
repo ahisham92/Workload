@@ -567,6 +567,16 @@ function openSubmission(row, { onChange = null } = {}) {
       });
       return chip;
     }));
+    const starts = el('input', { type: 'date', value: prep.starts || '' });
+    starts.addEventListener('change', () => {
+      const value = starts.value;
+      if (value && planned && value > planned) {
+        toast('The work has to start before the day it goes.', 'warn');
+        starts.value = prep.starts || '';
+        return;
+      }
+      save({ starts: value || '' }, async () => { await load(); });
+    });
     const hours = el('input', { type: 'number', min: '0.25', max: '12', step: '0.25', value: String(prep.hours ?? '') });
     hours.addEventListener('change', () => {
       const value = Number(hours.value);
@@ -578,11 +588,27 @@ function openSubmission(row, { onChange = null } = {}) {
     });
     return el('section', { class: 'sub-card-part' },
       el('h4', {}, 'Who prepares it?'),
-      el('p', { class: 'muted small' }, 'Tap a name to add or take them off. It applies from today to the planned day.'),
+      el('p', { class: 'muted small' }, 'Tap a name to add or take them off. It applies from the day the work starts to the planned day.'),
       people,
-      field('Hours a day, each person', hours, 'Their whole day unless you change it.'),
+      field('Work starts', starts, prep.starts
+        ? 'The hours are spread from this day to the day it goes. Clear it to start after the job’s previous submission.'
+        : 'Empty: after the job’s previous submission has gone, or today. Put a day in to start later.'),
+      prep.budget_left != null
+        ? el('p', { class: 'muted small' }, `From the budget: ${fmt.hours(prep.budget_left)} h to do (${prep.planned_share}% of its hours not yet booked), `
+          + `over ${ahead.length} working day${ahead.length === 1 ? '' : 's'}.`)
+        : null,
+      (() => {
+        if (prep.budget_left == null) return null;
+        const fits = ahead.reduce((sum, d) => sum + (d.hours || 0), 0);
+        return fits < prep.budget_left - 0.5
+          ? el('p', { class: 'small v-warn' }, `These days hold ${fmt.hours(fits)} h with these people, so ${fmt.hours(prep.budget_left - fits)} h of it would not be done. Start earlier or add people.`)
+          : null;
+      })(),
+      field('Hours a day, each person', hours, prep.budget_left != null
+        ? 'Worked out from the budget hours above; change it to set your own.'
+        : 'Their whole day unless you change it.'),
       ahead.length
-        ? el('p', { class: 'muted small' }, `Preparation days left: ${ahead.map((d) => dateText(d.date, { day: 'numeric', month: 'short' })).join(', ')}.`)
+        ? el('p', { class: 'muted small' }, `Preparation: ${dateText(ahead[0].date, { day: 'numeric', month: 'short', year: 'numeric' })} to ${dateText(ahead[ahead.length - 1].date, { day: 'numeric', month: 'short', year: 'numeric' })}, ${ahead.length} working day${ahead.length === 1 ? '' : 's'}.`)
         : el('p', { class: 'muted small' }, 'Choose who, and the preparation goes on their days before it.'));
   }
 

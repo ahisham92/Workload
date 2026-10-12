@@ -77,6 +77,7 @@
       ['What is due, and what came back with A, B or C?', 'Planner › Submissions', ['planner', 'submissions']],
       ['Record a submission, its return and the next revision', 'Planner › Submissions, or the project on Projects', ['planner', 'submissions']],
       ['How much of each budget the preparation is planned on (the rest is kept for comments and profit)', 'Planner › Tasks › Working hours', ['tasks']],
+      ['Set the day a submission\'s work starts', 'Tap the submission (Today, Submissions or People needed), then Work starts', ['planner', 'submissions']],
       ['Where does People needed get its hours?', 'Planner › People needed › Where the hours come from', ['planner', 'people']],
       ['Do we need more people?', 'Planner › People needed, or Who needs help › Team staffing', ['planner', 'people']],
       ['Move work from one person to another', 'Planner › Move work', ['planner', 'handovers']],

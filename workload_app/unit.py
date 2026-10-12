@@ -1944,6 +1944,7 @@ class Unit:
         job's previous submission still to go, so a job's submissions are
         prepared one after another rather than all from today (Ahmed,
         2026-10-12: a submission a year away was being worked on today)."""
+        typed = self.work_starts()
         issues = self.issues()
         going: Dict[str, List[_dt.date]] = {}
         for d in self.deliverables():
@@ -1955,10 +1956,36 @@ class Unit:
         for d in self.deliverables():
             if not d.status_date:
                 continue
+            if d.row in typed:
+                # The day the manager says the work starts wins.
+                out[d.row] = typed[d.row]
+                continue
             before = [day for day in going.get(d.project_number, ()) if day < d.status_date]
             if before:
                 out[d.row] = max(before) + _dt.timedelta(days=1)
         return out
+
+    def work_starts(self) -> Dict[int, _dt.date]:
+        """The day each submission's work starts, where somebody set one."""
+        try:
+            stored = json.loads(self._setting("work_starts") or "{}")
+        except ValueError:
+            stored = {}
+        out: Dict[int, _dt.date] = {}
+        for row, day in stored.items():
+            try:
+                out[int(row)] = _dt.date.fromisoformat(day)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def set_work_start(self, row: int, day: Optional[_dt.date]) -> None:
+        starts = {str(k): v.isoformat() for k, v in self.work_starts().items()}
+        if day is None:
+            starts.pop(str(row), None)
+        else:
+            starts[str(row)] = day.isoformat()
+        self.mark_setting("work_starts", json.dumps(starts, sort_keys=True))
 
     def generate_weekly_meetings(self, data: Dict[str, Any]) -> Dict[str, Any]:
         number = str(data.get("project_number") or "").strip()

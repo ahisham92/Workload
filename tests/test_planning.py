@@ -600,6 +600,30 @@ class TestTheDayFillsItself:
         unit.update_submission(issue["id"], {"planned": "2026-10-20"})
         assert days(second)[0] == "2026-10-21"
 
+    def test_the_day_the_work_starts_can_be_set(self, unit):
+        # Ahmed (2026-10-12): "the start date need to be amended".
+        project = unit.workbook.project("N2-0100D")
+        body = project.to_dict()
+        body["budget_mm"] = 4
+        unit.update_project("N2-0100D", body)
+        row = next(d.row for d in unit.workbook.deliverables()
+                   if d.project_number == "N2-0100D")
+        unit.start_submission({"row": row, "planned": "2026-10-30"})
+
+        def days():
+            return sorted(t["due"] for t in unit.tasks()["tasks"]
+                          if t["series"] == f"submission:{row}" and t["status"] != "Done")
+        assert days()[0] == "2026-10-07"
+        unit.change_run_up(row, {"starts": "2026-10-19"})
+        assert days()[0] == "2026-10-19" and days()[-1] == "2026-10-30"
+        card = unit.submission_card(row)
+        assert card["prep"]["starts"] == "2026-10-19" and card["prep"]["budget_left"]
+        unit.change_run_up(row, {"starts": ""})
+        assert days()[0] == "2026-10-07"
+        from workload_app.model import ValidationError
+        with pytest.raises(ValidationError):
+            unit.change_run_up(row, {"starts": "soon"})
+
     def test_only_part_of_the_budget_is_planned(self, unit):
         # Ahmed (2026-10-12): "we can work on 60% and leave like 40 for
         # comments and profit".
