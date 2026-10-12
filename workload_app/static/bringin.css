@@ -45,3 +45,11 @@
 .bi-steps li.is-done .bi-step-text strong { text-decoration: line-through; opacity: .7; }
 .bi-step-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .bi-step-text .muted { font-size: .85rem; }
+/* What a workbook from Excel would change, before it is saved. */
+.bi-plan { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.bi-plan h4 { margin: 0 0 4px; }
+.bi-plan-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 420px; overflow-y: auto; }
+.bi-plan-list > li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.bi-plan-list > li:last-child { border-bottom: 0; }
+.bi-plan-fields { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.bi-plan-old { text-decoration: line-through; color: var(--muted); }

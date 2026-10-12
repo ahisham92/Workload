@@ -250,8 +250,52 @@ function renderNeeds(needs) {
         el('p', { class: 'muted' }, dayFirstText(a.detail)),
         a.kind === 'need' ? needWeeks(needs, a) : null)))
       : el('p', { class: 'muted' }, 'Nobody to forecast for yet.'),
+    needsByMonth(needs),
     needsSources(needs),
     needsFootnote(needs));
+}
+
+/** The months ahead: people needed against people we have, with the 85%
+ *  line. One sentence on top says what it means. */
+function needsByMonth(needs) {
+  const data = needs.by_month;
+  if (!data || !data.months || !data.months.length || !window.charts) return null;
+  const one = (n) => `${fmt.hours(n)} ${Math.abs(n - 1) < 0.05 ? 'engineer' : 'engineers'}`;
+  const months = data.months.map((m) => ({
+    label: fmt.month(m.month).replace(/ (\d{2})(\d{2})$/, ' ’$2'),
+    needed: m.needed, have: m.have, well: m.well_used, pending: m.nothing_planned && !m.hours,
+    tip: `<b>${charts.escape(fmt.month(m.month))}</b><br>`
+      + (m.nothing_planned && !m.hours ? 'No submission planned this far ahead yet.'
+        : `${charts.escape(fmt.hours(m.hours))} h of submission work over ${m.working_days} working days = ${charts.escape(one(m.needed))}`
+          + `<br>We have ${charts.escape(one(m.have))} after leave and holidays`
+          + (m.jobs.length ? `<br>Most from: ${m.jobs.map((j) => charts.escape(`${j.number} (${fmt.hours(j.hours)} h)`)).join(', ')}` : '')),
+  }));
+  const planned = data.months.filter((m) => !(m.nothing_planned && !m.hours));
+  const over = planned.filter((m) => m.needed > m.have + 1e-9);
+  const busy = planned.filter((m) => m.needed > m.well_used + 1e-9 && m.needed <= m.have + 1e-9);
+  const top = planned.reduce((a, m) => (!a || m.needed > a.needed ? m : a), null);
+  let answer;
+  if (!planned.length) answer = 'No submission is planned in the months ahead yet, so there is nothing to count. Plan the submission dates on Planner › Submissions.';
+  else if (over.length) answer = `${over.map((m) => fmt.month(m.month)).join(', ')}: more work than people. `
+    + `The busiest, ${fmt.month(top.month)}, needs ${one(top.needed)} and we have ${one(top.have)}.`;
+  else if (busy.length) answer = `${busy.map((m) => fmt.month(m.month)).join(', ')}: above 85% busy, little room for anything new.`;
+  else answer = `Every month ahead is under 85% busy: room for more. The busiest, ${fmt.month(top.month)}, needs ${one(top.needed)} of the ${one(top.have)} we have.`;
+  const pending = data.months.filter((m) => m.nothing_planned && !m.hours);
+  return el('section', { class: 'needs-months' },
+    el('h4', {}, 'Month by month: how many engineers the work needs'),
+    el('p', { class: over.length ? 'v-bad' : busy.length ? 'v-warn' : 'v-ok' }, answer),
+    charts.monthForecast(months, {
+      note: 'Each column is the submission work planned that month, in engineers: its hours over one engineer’s hours that month. '
+        + 'The solid line is the engineers we have after leave and holidays; the dashed line is 85% of them, a well-used team. '
+        + 'Tap or hover a column for its hours and jobs.',
+    }),
+    pending.length ? el('p', { class: 'muted small' },
+      `${pending.map((m) => fmt.month(m.month)).join(', ')}: not planned yet. No submission is dated that far ahead`
+      + (data.planned_until ? ` (the last is ${dateText(data.planned_until, { day: 'numeric', month: 'short', year: 'numeric' })})` : '')
+      + ', so these months are not free, just not planned.') : null,
+    (needs.unplanned || []).length ? el('p', { class: 'muted small' },
+      `Left out: ${needs.unplanned.length} job${needs.unplanned.length === 1 ? '' : 's'} with work left and no submission dated yet. `
+      + 'Date their submissions and their hours show here.') : null);
 }
 
 /** Where the hours come from: each submission's preparation still ahead.

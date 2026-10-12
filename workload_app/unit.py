@@ -212,6 +212,33 @@ CREATE TABLE IF NOT EXISTS submission_issues (
     ref             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS submission_issues_row ON submission_issues(deliverable_row, seq);
+
+-- Each time a submission's planned day moved before it went: the day it was,
+-- the day it became, and when that was saved, so a slip shows instead of
+-- being overwritten (Ahmed, 2026-10-12).  Kept by the trigger below, so every
+-- way a planned day changes -- the sheet, the register, a confirmed plan, the
+-- Excel brought back -- is caught.
+CREATE TABLE IF NOT EXISTS date_moves (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    deliverable_row INTEGER NOT NULL,
+    issue_id        INTEGER,
+    rev             TEXT NOT NULL DEFAULT '',
+    old_date        TEXT NOT NULL,
+    new_date        TEXT NOT NULL,
+    saved_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS date_moves_row ON date_moves(deliverable_row, id);
+CREATE TRIGGER IF NOT EXISTS date_moves_planned
+AFTER UPDATE OF planned ON submission_issues
+WHEN OLD.planned IS NOT NULL AND OLD.planned <> ''
+     AND NEW.planned IS NOT NULL AND NEW.planned <> ''
+     AND OLD.planned <> NEW.planned
+     AND (NEW.submitted IS NULL OR NEW.submitted = '')
+BEGIN
+    INSERT INTO date_moves (deliverable_row, issue_id, rev, old_date, new_date, saved_at)
+    VALUES (NEW.deliverable_row, NEW.id, NEW.rev, OLD.planned, NEW.planned,
+            strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+END;
 """
 
 #: Settings this module keeps in the store's ``settings`` table.
@@ -1333,6 +1360,7 @@ class Unit:
         db.execute("DELETE FROM drawings WHERE row = ?", (row,))
         db.execute("DELETE FROM drawing_list WHERE row = ?", (row,))
         db.execute("DELETE FROM submission_issues WHERE deliverable_row = ?", (row,))
+        db.execute("DELETE FROM date_moves WHERE deliverable_row = ?", (row,))
 
     def delete_deliverable(self, row: int) -> Dict[str, Any]:
         if self.deliverable(row) is None:
@@ -1503,6 +1531,20 @@ class Unit:
                 out.setdefault(r["deliverable_row"], []).append(dict(r))
             return out
         return fresh_copy(self._cached("issues", build))
+
+    def date_moves(self) -> Dict[int, List[Dict[str, Any]]]:
+        """Every move of a planned day, oldest first, by deliverable row."""
+        def build() -> Dict[int, List[Dict[str, Any]]]:
+            with self._connect() as db:
+                rows = db.execute("SELECT * FROM date_moves "
+                                  "ORDER BY deliverable_row, id").fetchall()
+            out: Dict[int, List[Dict[str, Any]]] = {}
+            for r in rows:
+                out.setdefault(r["deliverable_row"], []).append(
+                    {k: r[k] for k in ("id", "issue_id", "rev", "old_date",
+                                       "new_date", "saved_at")})
+            return out
+        return fresh_copy(self._cached("date_moves", build))
 
     def _issue(self, issue_id: int) -> Dict[str, Any]:
         for issues in self.issues().values():

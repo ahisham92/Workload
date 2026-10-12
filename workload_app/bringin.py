@@ -20,10 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Optional, Tuple
 
-from . import budgets, drawing_list, timesheets
+from . import budgets, drawing_list, plan_book, timesheets
 
-#: In the order they are brought in.
-KINDS = ("timesheets", "projects", "spend", "drawings")
+#: In the order they are brought in.  The plan workbook goes last: it is the
+#: manager's own word on dates and budgets, so it has the final say.
+KINDS = ("timesheets", "projects", "spend", "drawings", "plan")
 
 #: What each kind is, in the words the screen uses.
 LABELS = {
@@ -31,6 +32,7 @@ LABELS = {
     "projects": "Projects list (budgets)",
     "spend": "Staff expenditure (who spent a job's hours)",
     "drawings": "Drawing list",
+    "plan": "Your projects and submissions, from Excel",
 }
 
 #: Where each kind ends up, for the line under it.
@@ -39,6 +41,7 @@ FILLS = {
     "projects": "each job's budget, spend and what is left on Budgets and Projects",
     "spend": "how much of a job is this team's, on Budgets",
     "drawings": "drawing counts, issues and review codes on Projects and Planner",
+    "plan": "the changes you made in Excel, on Projects and Planner › Submissions",
 }
 
 #: Headings only a staff expenditure carries, never a timesheet export.
@@ -65,6 +68,11 @@ def classify(filename: str, data: bytes) -> Tuple[Optional[str], Any]:
     drawing list comes back as its drawings, for the count; a timesheet export
     comes back as ``None``, since the timesheet importer reads it itself.
     """
+    if plan_book.is_plan_book(filename, data):
+        try:
+            return "plan", plan_book.read(filename, data)
+        except plan_book.PlanBookError as error:
+            return None, str(error)
     try:
         grid = timesheets.read_grid(filename, data)
     except timesheets.ImportError_:
@@ -83,4 +91,5 @@ def classify(filename: str, data: bytes) -> Tuple[Optional[str], Any]:
         pass
     return None, (f"{filename}: not a file the app knows. It takes BISpark "
                   "timesheet exports, the Projects list, a job's staff "
-                  "expenditure and the drawing list.")
+                  "expenditure, the drawing list and the projects and "
+                  "submissions workbook written out from the app.")

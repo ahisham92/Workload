@@ -99,6 +99,88 @@ function subTrail(issues, today) {
       issue.rev || '·', issue.code ? el('b', {}, issue.code) : null)));
 }
 
+/* ---------------------------------------------------- date history */
+
+/** "11 days later", "3 days earlier", "same day". */
+function slipWords(days) {
+  if (!days) return 'same day';
+  const n = Math.abs(days);
+  return `${n} day${n === 1 ? '' : 's'} ${days > 0 ? 'later' : 'earlier'}`;
+}
+
+/** When a change was saved, in the phone's own time, day first. */
+function savedWhen(stamp) {
+  const d = new Date(stamp);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit' });
+}
+
+/** The little mark beside a planned day that has moved: tap it for the history. */
+function slipBadge(item, onOpen) {
+  const slip = item.slip;
+  if (!slip) return null;
+  return el('button', {
+    type: 'button', class: `sub-slip${slip.days > 0 ? ' is-later' : ''}`,
+    title: `First planned for ${dateText(slip.first)}. Tap to see each move and when it was saved.`,
+    onclick: onOpen,
+  }, `moved ${slip.times}×, ${slipWords(slip.days)}`);
+}
+
+/** A planned day's moves as a line: a hollow dot for each day it was
+    planned for, a dashed line on to the next, and a full dot for where it is
+    now. */
+function slipStrip(moves) {
+  if (!moves.length) return null;
+  const days = [moves[0].old_date, ...moves.map((m) => m.new_date)];
+  const t = (iso) => new Date(`${iso}T00:00:00Z`).getTime();
+  const lo = Math.min(...days.map(t)); const hi = Math.max(...days.map(t));
+  const W = 320; const pad = 34; const y = 34;
+  const x = (iso) => (hi === lo ? W / 2 : pad + ((t(iso) - lo) / (hi - lo)) * (W - pad * 2));
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} 70`, class: 'slip-strip', role: 'img',
+    'aria-label': `Planned for ${days.map((d) => dateText(d)).join(', then ')}` });
+  svg.append(svgEl('line', { x1: pad - 14, x2: W - pad + 14, y1: y, y2: y, class: 'slip-axis' }));
+  for (let i = 1; i < days.length; i += 1) {
+    const a = x(days[i - 1]); const b = x(days[i]);
+    const lift = 10 + (i % 2) * 8;
+    svg.append(svgEl('path', { d: `M${a} ${y} Q${(a + b) / 2} ${y - lift * 2} ${b} ${y}`, class: 'slip-move' }));
+  }
+  days.forEach((iso, i) => {
+    const last = i === days.length - 1;
+    svg.append(svgEl('circle', { cx: x(iso), cy: y, r: last ? 6 : 5, class: last ? 'slip-now' : 'slip-was' }));
+    svg.append(svgEl('text', { x: x(iso), y: i % 2 ? 62 : 56, 'text-anchor': 'middle',
+      class: `slip-day${last ? ' is-now' : ''}` }, dateText(iso, { day: 'numeric', month: 'short' })));
+  });
+  return svg;
+}
+
+/** "Has the date moved?": the line for the sending on its way, and every
+    move, newest first, with when it was saved. */
+function slipPart(item) {
+  const moves = item.moves || [];
+  if (!moves.length) return null;
+  const issues = item.issues || [];
+  const latest = issues[issues.length - 1];
+  const mine = latest ? moves.filter((m) => m.issue_id === latest.id) : [];
+  const slip = item.slip;
+  return el('section', { class: 'sub-card-part sub-history' },
+    el('h4', {}, 'Has the date moved?'),
+    slip
+      ? el('p', { class: slip.days > 0 ? 'small v-warn' : 'muted small' },
+        `First planned for ${dateText(slip.first, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}, `
+        + `now ${dateText(slip.now, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}: `
+        + `moved ${slip.times} time${slip.times === 1 ? '' : 's'}, ${slipWords(slip.days)} in all.`)
+      : el('p', { class: 'muted small' }, 'This revision has kept its day. Earlier revisions moved:'),
+    mine.length ? slipStrip(mine) : null,
+    mine.length ? el('p', { class: 'muted small slip-key' },
+      el('span', { class: 'slip-key-was' }), 'a day it was planned for ',
+      el('span', { class: 'slip-key-now' }), 'the day it is planned for now') : null,
+    el('ul', { class: 'slip-log' }, moves.slice().reverse().map((m) => el('li', {},
+      el('span', {}, `${issues.length > 1 ? `Rev ${m.rev || '—'}: ` : ''}${dateText(m.old_date)} → `,
+        el('b', {}, dateText(m.new_date)), ` (${slipWords(Math.round((new Date(`${m.new_date}T00:00:00Z`) - new Date(`${m.old_date}T00:00:00Z`)) / 86400000))})`),
+      el('small', { class: 'muted' }, `saved ${savedWhen(m.saved_at)}`)))));
+}
+
 /**
  * The sheet. `project` limits it to one project's deliverables (its own
  * page); without it every project's are there, with filters (Planner).
@@ -115,7 +197,10 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
           'Put in the day a submission is planned to go, or pick Submitted when it has gone. '
           + 'When it comes back, pick its code (or give the day and the reason), and start the next revision. '
           + 'Every change saves as you make it, here and on '
-          + (project ? 'Planner › Submissions.' : 'each project’s own page.')))),
+          + (project ? 'Planner › Submissions.' : 'each project’s own page.'))),
+      project ? null : el('div', { class: 'panel-actions' },
+        el('button', { type: 'button', class: 'btn btn-sm', title: 'Change many at once in Excel, then bring the file back in on Bring in data',
+          onclick: () => window.bringin && window.bringin.downloadPlanBook() }, '⭳ Change many in Excel'))),
     body);
 
   const reload = async ({ quiet = Boolean(view.data) } = {}) => {
@@ -330,6 +415,7 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
             tr.classList.add('is-saved');
             setTimeout(() => tr.classList.remove('is-saved'), 900);
             changed();
+            if (key === 'planned') reload();       // its date history shows the move
           } catch (error) {
             issue[key] = was;
             show(was);
@@ -351,7 +437,13 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       cell('rev', el('input', { type: 'text', maxlength: 12, 'aria-label': 'Revision', class: 'sub-revbox' })),
       cell('purpose', select(SUB_PURPOSES.map((p) => [p, p || '—']), 'Sent for')),
       latest ? whoCell(item) : el('td', {}),
-      cell('planned', el('input', { type: 'date', 'aria-label': 'Planned to go' })),
+      (() => {
+        const td = cell('planned', el('input', { type: 'date', 'aria-label': 'Planned to go' }));
+        if (latest && !issue.submitted) {
+          td.append(slipBadge(item, () => openSubmission(item.row, { onChange: () => { changed(); reload(); } })) || '');
+        }
+        return td;
+      })(),
       cell('submitted', el('input', { type: 'date', 'aria-label': 'Really submitted' })),
       cell('returned', el('input', { type: 'date', 'aria-label': 'Came back' })),
       cell('code', select(SUB_CODES, 'Client code')),
@@ -528,6 +620,7 @@ function openSubmission(row, { onChange = null } = {}) {
         } }, `Start revision ${nextRev(issue.rev)}`) : null,
         issues.length > 1 ? el('p', { class: 'muted small' }, 'Revisions so far: ', subTrail(issues, today)) : null));
     }
+    parts.push(slipPart(item));
     parts.push(prepPart(data));
     setChildren(body, ...parts);
   }

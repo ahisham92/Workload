@@ -1440,3 +1440,40 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 .sub-pick { max-width: 220px; }
 .sub-who-btn { border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; text-align: left; padding: 2px 0; }
 .sub-who-btn.is-empty { color: var(--warn); font-weight: 600; }
+/* Date history: a planned day that moved keeps where it was (subs.js). */
+.sub-slip { display: block; margin-top: 3px; border: 0; padding: 1px 7px; border-radius: 999px; font: inherit;
+  font-size: 11px; font-weight: 600; cursor: pointer; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.sub-slip.is-later { background: var(--warn-soft); color: var(--warn); }
+.slip-strip { width: 100%; max-width: 360px; height: auto; display: block; }
+.slip-axis { stroke: var(--border); stroke-width: 2; }
+.slip-move { fill: none; stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 4 4; }
+.slip-was { fill: var(--surface); stroke: var(--muted); stroke-width: 2; }
+.slip-now { fill: var(--accent); stroke: var(--accent); stroke-width: 2; }
+.slip-day { font-size: 10.5px; fill: var(--muted); }
+.slip-day.is-now { fill: var(--text); font-weight: 700; }
+.slip-key { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0; }
+.slip-key-was, .slip-key-now { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.slip-key-was { border: 2px solid var(--muted); background: var(--surface); }
+.slip-key-now { background: var(--accent); }
+.slip-log { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.slip-log li small { display: block; }
+/* People needed, month by month (planner.js, charts.monthForecast). */
+.mf-bar { fill: var(--series-1); }
+.mf-bar.is-busy { fill: var(--series-4); }
+.mf-bar.is-over { fill: var(--bad); }
+.mf-bar.is-pending { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+.mf-value { font-size: 12px; font-weight: 700; fill: var(--text); }
+.mf-value.is-over { fill: var(--bad); }
+.mf-have { stroke: var(--text); stroke-width: 2; }
+.mf-well { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4; }
+.mf-tag { font-size: 10.5px; font-weight: 650; }
+.mf-tag-have { fill: var(--text); }
+.mf-tag-well { fill: var(--ok); }
+.swatch.mf-sw-needed { background: var(--series-1); }
+.swatch-line.mf-sw-have { border-top: 2px solid var(--text); }
+.swatch-line.mf-sw-well { border-top-color: var(--ok); }
+.mf-months { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.needs-months { margin: 16px 0 6px; }
+.needs-months h4 { margin: 0 0 4px; }
+.subs-panel .panel-actions { flex: 0 0 auto; display: flex; gap: 6px; align-items: flex-start; }
+.mf-value.is-pending { font-size: 9.5px; font-weight: 600; fill: var(--muted); }

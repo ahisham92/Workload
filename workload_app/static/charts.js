@@ -315,6 +315,60 @@ function stackedColumns(labels, series, { title, note, unit = 'MM',
   return figure(title, note, htmlNode('div', 'chart-scroll', svg), box);
 }
 
+/* ------------------------------------------------------ month forecast */
+
+/** People needed each month (columns) against the people we have (a solid
+ *  line) and 85% of them (a dashed line): the well-used mark. Every column
+ *  carries its number; a month with nothing planned yet is drawn hollow and
+ *  says so, rather than reading as a free month.
+ *  months: [{ label, needed, have, well, pending, tip }] */
+function monthForecast(months, { title, note, wellLabel = '85% busy' } = {}) {
+  const width = Math.max(360, months.length * 86);
+  const height = 236;
+  const padLeft = 34, padBottom = 30, padTop = 22, padRight = 64;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  // Whole people on the axis: the top is the next multiple of four.
+  const top = Math.max(1, ...months.flatMap((m) => [m.needed || 0, m.have || 0]));
+  const peak = top <= 40 ? Math.max(4, Math.ceil((top * 1.08) / 4) * 4) : niceMax(top);
+  const y = (v) => plotH - ((v || 0) / peak) * plotH;
+  const { svg, plot } = axisFrame(width, height, padLeft, padTop, plotW, plotH, peak);
+  svg.setAttribute('aria-label', title || 'People needed each month');
+  const slot = plotW / months.length;
+  const barW = Math.min(40, slot - 18);
+  const mid = (i) => i * slot + slot / 2;
+  months.forEach((m, i) => {
+    const top = y(m.needed);
+    const over = (m.needed || 0) > (m.have || 0) + 1e-9;
+    const busy = !over && (m.needed || 0) > (m.well || 0) + 1e-9;
+    const bar = svgEl('rect', {
+      x: mid(i) - barW / 2, y: m.pending ? plotH - 6 : top, width: barW,
+      height: m.pending ? 6 : Math.max(1, plotH - top), rx: 4,
+      class: `bar mf-bar${over ? ' is-over' : busy ? ' is-busy' : ''}${m.pending ? ' is-pending' : ''}`,
+    });
+    hoverable(bar, m.tip);
+    plot.append(bar);
+    plot.append(svgEl('text', { x: mid(i), y: (m.pending ? plotH - 6 : top) - 6, 'text-anchor': 'middle',
+      class: `mf-value${over ? ' is-over' : ''}${m.pending ? ' is-pending' : ''}` }, m.pending ? 'none yet' : tick(m.needed || 0)));
+    plot.append(svgEl('text', { x: mid(i), y: plotH + 19, 'text-anchor': 'middle', class: 'axis-label' }, m.label));
+  });
+  const line = (key, cls) => {
+    const d = months.map((m, i) => `${i ? 'L' : 'M'}${(i * slot).toFixed(1)} ${y(m[key]).toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${y(m[key]).toFixed(1)}`).join(' ');
+    plot.append(svgEl('path', { d, class: cls, fill: 'none' }));
+  };
+  line('well', 'mf-well');
+  line('have', 'mf-have');
+  const last = months[months.length - 1] || {};
+  plot.append(svgEl('text', { x: plotW + 6, y: y(last.have) + 4, class: 'mf-tag mf-tag-have' }, `have ${tick(last.have || 0)}`));
+  plot.append(svgEl('text', { x: plotW + 6, y: y(last.well) + 14, class: 'mf-tag mf-tag-well' }, wellLabel));
+  svg.append(plot);
+  const box = htmlNode('div', 'legend',
+    legendItem('people needed', 'swatch mf-sw-needed'),
+    legendItem('people we have', 'swatch swatch-line mf-sw-have'),
+    legendItem(`${wellLabel}: a well-used team`, 'swatch swatch-line mf-sw-well'));
+  return figure(title, note, htmlNode('div', 'chart-scroll', svg), box);
+}
+
 /* ------------------------------------------------------------ sparkline */
 
 /** A month-by-month trend small enough to sit inside a card. The dashed line
@@ -572,5 +626,5 @@ function chartEscape(text) {
 }
 
 window.charts = {
-  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation, escape: chartEscape,
+  donut, groupedBars, stackedColumns, scoreBars, sparkline, budgetBars, formation, monthForecast, escape: chartEscape,
 };

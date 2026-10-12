@@ -883,9 +883,14 @@
   /** The next two weeks, one tower per person, before and after the planner's suggestions. */
   function nextModel(data, outlook) {
     const names = new Set((data.people || []).map((p) => p.name));
+    const seen = new Map((data.people || []).map((p) => [p.name, p]));
     const people = (outlook.people || []).filter((p) => names.has(p.name) && p.before)
       .map((p) => ({
         name: p.name, color: engineerColor(p.name), now: p.before.load || 0,
+        // the manager has the big desk; somebody over their hours in the
+        // last weeks (timesheets) has a red note on theirs
+        manager: Boolean((seen.get(p.name) || {}).is_manager),
+        rest: ((seen.get(p.name) || {}).signal || {}).key === 'rest',
         after: (p.after || p.before).load || 0, hours: p.before.hours, hoursAfter: (p.after || p.before).hours,
         capacity: p.capacity, items: p.items || [],
       }))
@@ -903,7 +908,8 @@
       people, moves, byName, summary: outlook.summary || {},
       text: (p, which) => (which === 'after'
         ? `After the moves: ${pct(p.after)} of their hours (${hrs(p.hoursAfter)} lined up for ${hrs(p.capacity)}).`
-        : `Next two weeks: ${pct(p.now)} of their hours (${hrs(p.hours)} lined up for ${hrs(p.capacity)}).`),
+        : `Next two weeks: ${pct(p.now)} of their hours (${hrs(p.hours)} lined up for ${hrs(p.capacity)}).`)
+        + (p.rest ? ' Over their hours in the last weeks, so needs a lighter week.' : ''),
     };
   }
 
@@ -1003,11 +1009,13 @@
     setChildren(host,
       el('div', { class: 'panel-head' },
         el('div', {},
-          el('h3', {}, scape.mode === 'next' ? 'Who is over, who has room: the next two weeks' : 'Week by week, in 3D'),
+          el('h3', {}, scape.mode === 'next' ? 'The office: who has a pile of work, the next two weeks' : 'Week by week, in 3D'),
           el('p', { class: 'muted' },
             scape.mode === 'next'
-              ? 'One tower per person: the taller it is, the more work they have lined up for the next two weeks. '
-                + 'Above the glass sheet means more than their hours. '
+              ? 'Each person at their desk. The paper is the work lined up for them over the next two weeks: '
+                + 'two full piles are their hours, more piles are more than their hours. The folder on top takes the colour in the key below. '
+                + 'The big desk at the front is the manager’s. A red flag on a desk is somebody who was over their hours in the last weeks '
+                + '(from the timesheets): they need a lighter week even if their pile ahead is small. '
                 + (next.moves.length ? 'Press "Show the suggested moves" to see who should hand what to whom.' : '')
               : 'Each block is one person\'s week: its height is how much of their hours they booked, '
                 + 'the glass sheet is a full load. Left of the blue line are past weeks, right of it the next two.')),
@@ -1026,7 +1034,7 @@
     // The real 3D when the phone can draw it; the flat drawing if not.
     try {
       if (scape.mode === 'next') {
-        const three = await import('./team3d.js');
+        const three = await import('./office3d.js');
         if (stage.isConnected) instance = three.render(stage, next);
         if (instance) return;
         stage.replaceChildren(el('p', { class: 'muted' }, 'This phone cannot draw 3D; the ideas below say the same thing.'));

@@ -36,7 +36,7 @@ const BI_KINDS = [
     said: (s) => `${fmt.int(s.spend.jobs)} job(s)` },
 ];
 
-const BI_STEP_LABEL = { timesheets: 'Timesheets', budgets: 'Budgets', drawings: 'Drawing list' };
+const BI_STEP_LABEL = { timesheets: 'Timesheets', budgets: 'Budgets', drawings: 'Drawing list', plan: 'From Excel' };
 
 async function loadBringIn() {
   try {
@@ -52,7 +52,7 @@ function renderBringIn() {
   const body = $('#bringin-body');
   if (!body || !bring.state) return;
   setChildren(body, chooserPanel(), resultPanel(), whoPanel(bring.state.who),
-    holdsPanel(bring.state), keepUpPanel());
+    excelPanel(), holdsPanel(bring.state), keepUpPanel());
 }
 
 /* -------------------------------------------------------------- choosing */
@@ -64,7 +64,7 @@ function chooserPanel() {
   const zone = el('label', { class: 'bi-drop', for: 'bringin-files' },
     el('span', { class: 'bi-drop-icon', 'aria-hidden': 'true' }, '⇪'),
     el('strong', {}, bring.busy ? 'Reading…' : 'Choose your files'),
-    el('span', { class: 'muted' }, 'Timesheet exports, the Projects list and staff expenditures: '
+    el('span', { class: 'muted' }, 'Timesheet exports, the Projects list, staff expenditures and your projects and submissions from Excel: '
       + 'all of them at once, in any mix. Or drop them here.'),
     input);
   for (const name of ['dragenter', 'dragover']) {
@@ -124,6 +124,7 @@ function resultPanel() {
           + (ts.new_people.length ? ` New on the team: ${ts.new_people.join(', ')}.` : '')
           + (ts.new_projects ? ` ${ts.new_projects} new project(s) will be set up.` : '')) : null,
     ...(ts ? [...ts.errors, ...ts.warnings] : []).map((m) => el('div', { class: 'msg msg-warn' }, m)),
+    check.plan ? planPreview(check.plan) : null,
     ts && !ts.left_out ? el('p', { class: 'muted' },
       'Each person in these exports gets exactly the rows the exports hold for them; '
       + 'anybody not in them is left alone. A dated copy of the unit is kept first.') : null,
@@ -191,6 +192,63 @@ async function applyProposals() {
     toastError(error);
   }
   renderBringIn();
+}
+
+/* ------------------------------------------- projects and submissions in Excel */
+
+/** A value as it reads in the preview: dates day first, empty as a dash. */
+function planValue(field, value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return fmt.date(value);
+  if (field === 'budget_mm') return `${fmt.mm(value)} MM`;
+  return String(value);
+}
+
+const PLAN_KIND = { new_project: 'New project', project: 'Project', submission: 'Submission' };
+
+/** Every change the workbook would make, before anything is saved. */
+function planPreview(plan) {
+  const changes = plan.changes || [];
+  const fields = changes.reduce((n, c) => n + c.fields.length, 0);
+  return el('div', { class: 'bi-plan' },
+    el('h4', {}, changes.length
+      ? `From Excel: ${changes.length} ${changes.length === 1 ? 'line changes' : 'lines change'}, ${fields} ${fields === 1 ? 'value' : 'values'} in all`
+      : 'From Excel: nothing changed'),
+    changes.length
+      ? el('p', { class: 'muted' }, 'Check them: only these are saved when you tap Bring in. Nothing else in the app is touched, and nothing is removed.')
+      : el('p', { class: 'muted' }, 'Every value in the workbook is the same as in the app.'),
+    changes.length ? el('ul', { class: 'bi-plan-list' }, changes.map((c) => el('li', {},
+      el('div', {}, el('span', { class: `pill ${c.kind === 'new_project' ? 'pill-ok' : 'pill-info'}` }, PLAN_KIND[c.kind]),
+        ' ', el('b', {}, c.what)),
+      el('ul', { class: 'bi-plan-fields' }, c.fields.map((f) => el('li', {},
+        el('span', { class: 'muted' }, `${f.label}: `),
+        c.kind === 'new_project' ? null : el('span', { class: 'bi-plan-old' }, planValue(f.field, f.old)),
+        c.kind === 'new_project' ? null : ' → ',
+        el('b', {}, planValue(f.field, f.new)))))))) : null,
+    ...(plan.errors || []).map((m) => el('div', { class: 'msg msg-warn' }, m)));
+}
+
+async function downloadPlanBook() {
+  try {
+    const file = await voyage.during('Writing the workbook', () => api('/api/plan-book'));
+    downloadBase64(file.content_base64, file.filename);
+  } catch (error) {
+    toastError(error);
+  }
+}
+
+/** Change a lot at once: the projects and submissions out to Excel, and
+    back in through the box above. */
+function excelPanel() {
+  return el('section', { class: 'panel' },
+    el('h3', {}, 'Need to change a lot at once?'),
+    el('p', { class: 'muted' },
+      'Take every project and submission out to Excel: budgets, status, dates, revisions, client codes, '
+      + 'when the work starts and who prepares it. Change what you need, save, and drop the file in the box above. '
+      + 'You see every change before anything is saved, and only what you changed is written.'),
+    el('div', { class: 'row', style: 'margin-bottom:0' },
+      el('button', { class: 'btn btn-primary', type: 'button', onclick: downloadPlanBook },
+        '⭳ Projects and submissions in Excel')));
 }
 
 /* ------------------------------------------------------------ who is who */
@@ -346,4 +404,4 @@ async function startHere() {
         onclick: () => { switchView(s.go); window.scrollTo({ top: 0 }); } }, 'Go')))));
 }
 
-window.bringin = { load: loadBringIn, startHere };
+window.bringin = { load: loadBringIn, startHere, downloadPlanBook };
