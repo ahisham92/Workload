@@ -37,8 +37,9 @@
     reports: ['growth'], bringin: ['timesheets'], team: ['reference'] };
   // Before 9 Oct there were four paths; "Read the results" became part of "See how we're doing".
   const RENAMED = { results: 'workload' };
-  // Always in the bar, whichever path: help, and the administrator's tab.
-  const ALWAYS = ['guide', 'admin'];
+  // Always in the bar, whichever path: the summary video, help, and the
+  // administrator's tab.
+  const ALWAYS = ['video', 'guide', 'admin'];
   const KEY = 'selecao.path';
   const SKIP = 'selecao.path.skipWelcome';
 
@@ -137,6 +138,11 @@
       make('div', { class: 'path-cards' }, ...PATHS.map((p) => card(p,
         p.key === 'setup' && isNew() ? 'Start here if you are new'
           : current && current.key === p.key ? 'Last time' : ''))),
+      make('button', { type: 'button', class: 'path-video', onclick: () => window.switchView('video') },
+        make('span', { class: 'path-video-play', 'aria-hidden': 'true' }, '▶'),
+        make('span', { class: 'path-video-text' },
+          make('strong', {}, 'Watch it as a short video'),
+          make('span', {}, 'Our week, how we\'re doing, or both, in about a minute: Summary video'))),
       make('div', { class: 'path-foot' },
         make('button', { type: 'button', class: 'btn btn-ghost', onclick: () => choose('') },
           'Show all tabs'),

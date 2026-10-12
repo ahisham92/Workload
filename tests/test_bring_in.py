@@ -211,11 +211,11 @@ class TestPaths:
         on_paths = [v for found in lists for v in re.findall(r"'([a-z]+)'", found)]
         assert len(on_paths) == len(set(on_paths))
         # Between them, the paths and the pages sharing their tabs reach
-        # every tab but help and Admin.
+        # every tab but the ones always in the bar: the video, help and Admin.
         shared = self.paths[self.paths.index("const SHARED"):]
         shared = shared[:shared.index("};")]
         reached = set(on_paths) | set(re.findall(r"'([a-z]+)'", shared))
-        assert views - reached == {"guide", "admin"}
+        assert views - reached == {"video", "guide", "admin"}
 
 
 class TestAnotherWorker:

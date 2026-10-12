@@ -51,6 +51,7 @@
         { title: 'Sunday: copy of the plan', do: 'The app keeps a copy of the week\'s plan by itself; copy again after big changes', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
         { title: 'Thursday: kept and slipped', do: 'Plan against tasks done and timesheets; one tap on why each slip happened', where: 'Planner › Plan vs actual', go: ['planner', 'review'] },
         { title: 'Thursday: look back', do: 'Is the team on track? Overview answers it; Weekly report\'s Show more has how last week went', where: 'Overview, Weekly report', go: ['overview'] },
+        { title: 'Share the week as a video', do: 'Our week, how we\'re doing, or both, made from the results in about a minute; save it or share it', where: 'Summary video', go: ['video'] },
         { title: 'Ask for people early', do: 'Staffing ahead says how many, from when, for how long', where: 'Planner › People needed', go: ['planner', 'people'] },
       ] },
       { lane: 'When something comes up', note: 'as it happens, in any order', chain: false, steps: [
@@ -86,6 +87,7 @@
       ['Change many projects and submissions at once', 'Bring in data › Projects and submissions in Excel; change it, then drop it back in the same box', ['bringin']],
       ['Move work from one person to another', 'Planner › Move work', ['planner', 'handovers']],
       ['How did last week go?', 'Weekly report › Show more', ['weekly']],
+      ['A short video of our week, or of how we\'re doing, to watch or share', 'Summary video: pick what it shows, then Make the video', ['video']],
       ['Did we keep to the plan?', 'Planner › Plan vs actual', ['planner', 'review']],
       ['How is each person scoring?', 'Reports', ['reports']],
       ['How is each person growing?', 'Reports › Goals and growth', ['growth']],

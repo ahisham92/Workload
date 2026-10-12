@@ -18,7 +18,7 @@
 
   // The views a thumb should reach first, best first. The first four that
   // are on the page get a button of their own.
-  const DAILY = ['overview', 'planner', 'checkins', 'weekly', 'today', 'tasks', 'timesheets', 'reports'];
+  const DAILY = ['overview', 'planner', 'checkins', 'weekly', 'today', 'tasks', 'timesheets', 'reports', 'video'];
   const SLOTS = 4;
 
   /* -- keeping it on the home screen ------------------------------------ */
