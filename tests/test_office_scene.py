@@ -12,8 +12,10 @@ def test_the_office_replaces_the_towers():
     assert "team3d" not in SHOWCASE and not (STATIC_DIR / "team3d.js").exists()
 
 
-def test_two_full_piles_are_a_full_load_and_the_manager_has_the_big_desk():
-    assert "const PER_LOAD = 2;" in OFFICE and "const MAX_PILES = 4;" in OFFICE
+def test_more_work_is_a_taller_pile_and_the_manager_has_the_big_desk():
+    # Ahmed (2026-10-12): a big workload is a tall tower of paper.
+    assert "const FULL = 0.55;" in OFFICE and "const MAX_LOAD = 3;" in OFFICE
+    assert "Math.min(load || 0, MAX_LOAD)) * FULL" in OFFICE
     assert "const width = big ? 2.3 : 1.6;" in OFFICE
     assert "x.manager" in OFFICE and "manager: Boolean(" in SHOWCASE
 
