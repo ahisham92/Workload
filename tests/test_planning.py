@@ -247,39 +247,50 @@ class TestWhenToAskForPeople:
         fine = [a for a in data["alerts"] if a["kind"] == "fine"]
         assert {a["team_name"] for a in fine} == {"BERTHS", "COASTAL"}
 
+    @staticmethod
+    def _prepare(unit, who, job, hours_a_day, days, series="submission:900"):
+        """Submission preparation on ``days`` for ``who``, as a run-up has it."""
+        for day in days:
+            unit.add_task({"name": "Prepare", "kind": "Submission", "series": series,
+                           "assignees": who, "required_hours": hours_a_day * len(who),
+                           "start": day, "due": day, "project_number": job})
+
     def test_an_overloaded_team_is_told_how_many_and_for_how_long(self, unit):
-        unit.import_exports([export("more", booking(
-            "Kirolos Northwind", "P1", "BERTHS", "N4-0100D", 1, "Detail", 8))],
-            mode="append")
+        # Ahmed (2026-10-12): 45 h a week over is one more engineer, 90 two.
+        days = [d.isoformat() for d in weekdays(10, last=dt.date(2026, 10, 23))]
+        self._prepare(unit, ["Osama", "Kirolos"], "N1-0100D", 8.5, days)
+        self._prepare(unit, ["Osama"], "N2-0100D", 6, days, series="submission:901")
         data = unit.needs()
         asks = [a for a in data["alerts"] if a["kind"] == "need"]
         berths = [a for a in asks if a["team_name"] == "BERTHS"
                   and a["role"] == people.ROLE_ENGINEERING]
         assert berths, data["alerts"]
         ask = berths[0]
-        assert ask["people"] >= 1
-        assert ask["weeks"] >= 1
-        assert ask["ask_by"] == TODAY.isoformat()        # needed already
-        assert "ask for" in ask["title"]
+        assert ask["people"] == 1                  # 34 h a week over: one more
+        assert "ask for 1 more" in ask["title"]
+        assert "34 h a week more" in ask["detail"] and "42.5 h a week" in ask["detail"]
+        self._prepare(unit, ["Kirolos"], "N2-0100D", 8, days, series="submission:902")
+        ask = next(a for a in unit.needs()["alerts"] if a["kind"] == "need"
+                   and a["team_name"] == "BERTHS")
+        assert ask["people"] == 2                  # 74 h a week over: two
 
     def test_a_team_with_room_is_told_it_needs_nobody(self, unit):
         data = unit.needs()
         coastal = [a for a in data["alerts"] if a["team_name"] == "COASTAL"]
         assert coastal and all(a["kind"] in {"fine", "room"} for a in coastal)
-        # The forecast rests on pace for projects nobody has confirmed.
-        assert {p["number"] for p in data["assumed"]} >= {"N1-0100D"}
+        assert data["from_submissions"]
 
-    def test_a_confirmed_project_is_forecast_from_its_own_figures(self, unit):
+    def test_a_job_with_no_submission_planned_is_listed_not_guessed(self, unit):
+        # Ahmed (2026-10-12): "31 engineers is impossible" -- budgets with no
+        # submission planned are no forecast.
         detail = unit.project_detail("N3-0100D")
         project = dict(detail["project"], budget_mm=40, cac_override=12, start="2026-01-01",
                        end="2026-12-31", notes="")
         unit.save_project_with_deliverables(
             "N3-0100D", {"project": project, "deliverables": detail["deliverables"]})
         data = unit.needs()
-        coastal = [a for a in data["alerts"] if a["team_name"] == "COASTAL"
-                   and a["kind"] == "need"]
-        assert coastal and coastal[0]["people"] >= 2
-        assert "N3-0100D" not in {p["number"] for p in data["assumed"]}
+        assert not [a for a in data["alerts"] if a["kind"] == "need"]
+        assert "N3-0100D" in {p["number"] for p in data["unplanned"]}
 
     def test_weeks_start_today(self):
         span = needs.weeks_ahead(TODAY, 3)
@@ -388,7 +399,6 @@ class TestWorkComing:
                      for r in ("engineering", "drafting")) for d in (before, after)]
         assert week0[0] == pytest.approx(week0[1])
         assert week1[1] - week1[0] == pytest.approx(100, abs=1)
-        assert any(a["kind"] == "need" and a["team_name"] == "BERTHS" for a in after["alerts"])
 
     def test_bookings_use_it_up_and_are_not_counted_twice(self, unit):
         unit.add_planned_work({"name": "Concept", "job_number": "n2-0100d",
@@ -540,7 +550,11 @@ class TestTheDayFillsItself:
         days = sorted(t["due"] for t in steps)
         assert days == ["2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12",
                         "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"]
-        assert sum(t["required_hours"] for t in steps) == pytest.approx(left, abs=0.1)
+        # Never more than whole days for the two of them.
+        from workload_app import tasks as task_sheet
+        a_day = task_sheet.hours_per_day(unit.workbook.task_settings())
+        assert sum(t["required_hours"] for t in steps) == pytest.approx(
+            min(left, 8 * 2 * a_day), abs=0.1)
         one = steps[0]["hours_by_person"]
         assert one["Osama"] == pytest.approx(3 * one["Kirolos"], abs=0.05)
 
@@ -610,10 +624,12 @@ class TestTimeAway:
         assert week(before, 1)["capacity_hours"] > 0
 
     def test_a_week_short_because_somebody_is_away_is_a_handover_not_a_hire(self, unit):
-        unit.add_absence({"person": "Osama", "start": "2026-10-12", "end": "2026-10-16"})
+        days = [d.isoformat() for d in weekdays(10, last=dt.date(2026, 10, 23))]
+        TestWhenToAskForPeople._prepare(unit, ["Osama"], "N1-0100D", 16, days)
+        unit.add_absence({"person": "Kirolos", "start": "2026-10-12", "end": "2026-10-16"})
         alerts = [a for a in unit.needs()["alerts"]
                   if a["team_name"] == "BERTHS" and a["role"] == "engineering"]
-        assert [a["kind"] for a in alerts] == ["cover"]
+        assert [a["kind"] for a in alerts][0] == "cover" and "need" not in [a["kind"] for a in alerts]
         assert "Next days" in alerts[0]["detail"] and "5 days away" in alerts[0]["detail"]
 
     def test_nonsense_is_refused_and_a_typed_absence_can_go(self, unit):

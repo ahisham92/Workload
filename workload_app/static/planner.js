@@ -349,6 +349,12 @@ function needsFootnote(needs) {
   if (needs.late && needs.late.length) {
     notes.push(`Not counted: ${needs.late.map((p) => p.number).join(', ')} ${needs.late.length === 1 ? 'is' : 'are'} past the end date with no submission planned. Give a new end date on Projects, or a submission date, to count ${needs.late.length === 1 ? 'it' : 'them'}.`);
   }
+  if (needs.from_submissions) {
+    notes.unshift('The work is the submissions planned: each one’s preparation on the days before it, with the people on it.');
+  }
+  if (needs.unplanned && needs.unplanned.length) {
+    notes.push(`${needs.unplanned.length} job(s) have work left and no submission planned, so they are not counted: ${needs.unplanned.slice(0, 6).map((p) => p.number).join(', ')}${needs.unplanned.length > 6 ? '…' : ''}. Plan their submissions on Submissions to count them.`);
+  }
   if (needs.unstaffed && needs.unstaffed.length) {
     notes.push(`${needs.unstaffed.length} project(s) have work left and nobody booking to them.`);
   }

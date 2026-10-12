@@ -112,8 +112,16 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
              planned: Sequence[Dict[str, Any]] = (),
              team_names: Optional[Mapping[str, str]] = None,
              management: Optional[Mapping[str, float]] = None,
-             submitting: Optional[Mapping[str, _dt.date]] = None) -> Dict[str, Any]:
-    """``submitting`` is each job's last submission planned ahead."""
+             submitting: Optional[Mapping[str, _dt.date]] = None,
+             prep: Optional[Sequence[Tuple[str, str, _dt.date, float]]] = None
+             ) -> Dict[str, Any]:
+    """``submitting`` is each job's last submission planned ahead.
+
+    ``prep`` -- (person, job, day, hours) of submission preparation planned
+    -- is the work, when given: the same work Today and Move work show, so
+    the three never disagree (Ahmed, 2026-10-12: asking for 31 engineers
+    from budgets while the team had free days made no sense). Jobs with
+    work left and no submission planned are listed, not guessed at."""
     today = today or _today()
     submitting = submitting or {}
     # Leading people takes part of a leader's day; that part does no project work.
@@ -223,7 +231,28 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     assumed: List[str] = []
     late: List[str] = []
     unstaffed: List[str] = []
-    for figures in project_rows:
+    unplanned: List[str] = []
+    if prep is not None:
+        for name, number, day, hours in prep:
+            for i, (first, last) in enumerate(span):
+                if first <= day <= last:
+                    key = bucket(name)
+                    demand[key][i] += hours
+                    mine = makers[key].setdefault(number, [0.0] * len(span))
+                    mine[i] += hours
+                    break
+        planned_jobs = {number for _n, number, _d, _h in prep}
+        for figures in project_rows:
+            number = figures["number"]
+            project = register.get(number)
+            if project is None or not figures.get("in_scope", True) \
+                    or number in planned_jobs or number in counted_numbers:
+                continue
+            if (figures.get("remaining_mm") or 0) > 0 and not derive.needs_confirming(
+                    getattr(project, "notes", "") or "") \
+                    and getattr(project, "status", "") not in ("Finalized", "Cancelled", "Proposal"):
+                unplanned.append(number)
+    for figures in (project_rows if prep is None else ()):
         number = figures["number"]
         project = register.get(number)
         if project is None or not figures.get("in_scope", True):
@@ -322,6 +351,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
                 "away_days": _whole(away_days[key][i]) if key in away_days else 0,
                 "load": round(work[i] / cap, 3) if cap else None,
                 "gap_people": round(gap, 2),
+                "gap_hours": round(work[i] - cap, 1),
+                "person_week": round(person_week[i], 1),
             })
         jobs = sorted(((n, sum(w), sum(1 for h in w if h > 0.05))
                        for n, w in makers.get(key, {}).items()), key=lambda j: -j[1])
@@ -366,6 +397,8 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
         "assumed": [{"number": n, "name": names.get(n, n)} for n in assumed],
         "late": [{"number": n, "name": names.get(n, n)} for n in late],
         "unstaffed": [{"number": n, "name": names.get(n, n)} for n in unstaffed],
+        "unplanned": [{"number": n, "name": names.get(n, n)} for n in unplanned],
+        "from_submissions": prep is not None,
         "coming": coming,
         "data_through": last_day.isoformat() if last_day else None,
         "summary": {
@@ -437,7 +470,11 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
         run = weeks[i:j + 1]
         peak = max(w["gap_people"] for w in run)
         average = sum(w["gap_people"] for w in run) / len(run)
-        count = max(1, math.ceil(peak - 0.25))
+        # One more person for each full week of hours over, and one for any
+        # part of one: 60 h a week over is two (Ahmed, 2026-10-12).
+        count = max(1, math.ceil(peak - 1e-6))
+        extra = max(w.get("gap_hours", 0.0) for w in run)
+        one = max((w.get("person_week") or 0.0) for w in run)
         start = _dt.date.fromisoformat(run[0]["from"])
         end = _dt.date.fromisoformat(run[-1]["to"])
         open_ended = j == len(weeks) - 1
@@ -466,10 +503,11 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
                  f"for {length}{'+' if open_ended else ''}")
         has = group["people"]
         detail = (f"From {start:%d %b} to {end:%d %b}"
-                  f"{' and beyond' if open_ended else ''}, the work forecast needs "
-                  f"{average:.1f} more {people_module.role_label(role, 2)} than the "
-                  f"{has} the team has")
-        detail += (f", {peak:.1f} at the peak. " if peak - average >= 0.1 else ". ")
+                  f"{' and beyond' if open_ended else ''}, the work planned is up to "
+                  f"{extra:.0f} h a week more than the {has} "
+                  f"{people_module.role_label(role, has)} the team has can do. "
+                  f"One {people_module.role_label(role, 1)} does {one:g} h a week, "
+                  f"so that is {count} more. ")
         detail += ("Ask now." if severity == "now"
                    else f"Ask by {ask_by:%d %b} so they are there in time.")
         if group.get("jobs"):
@@ -498,7 +536,8 @@ def _alerts(group: Dict[str, Any], today: _dt.date) -> List[Dict[str, Any]]:
                 "kind": "room", "severity": "room",
                 "team_id": group["team_id"], "team_name": group["team_name"],
                 "role": role,
-                "title": f"{group['team_name']}: room for {spare} {who}'s worth of work",
+                "title": (f"{group['team_name']}: room for {spare} {who}"
+                          f"{chr(39) if who.endswith('s') else chr(39) + 's'} worth of work"),
                 "detail": (f"From {start:%d %b} to {end:%d %b} the forecast leaves "
                            f"at least {spare} {who} free. Take on work, or lend "
                            f"{'them' if spare != 1 else 'one'} to a team that is short."),
