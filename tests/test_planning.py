@@ -487,6 +487,63 @@ class TestTheDayFillsItself:
         shares = next(d for d in unit.workbook.deliverables() if d.row == row).shares
         assert shares["Kirolos"] == 1 and not shares.get("Osama")
 
+    def test_planning_a_submission_plans_its_preparation(self, unit):
+        # Ahmed (2026-10-12): a submission planned for 15/10 was on nobody's
+        # day, and there was nowhere on Submissions to say who prepares it.
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N2-0100D")
+        row = deliverable.row
+        body = deliverable.to_dict()
+        body["shares"] = {}
+        unit.update_deliverable(row, body)
+        unit.start_submission({"row": row, "planned": "2026-10-12"})
+        series = f"submission:{row}"
+        steps = [t for t in unit.tasks()["tasks"] if t["series"] == series]
+        assert steps and all(not t["assignees"] for t in steps)
+        item = next(i for i in unit.submission_register({})["items"] if i["row"] == row)
+        assert item["people"] == []
+        unit.change_run_up(row, {"people": ["Kirolos"]})
+        steps = [t for t in unit.tasks()["tasks"] if t["series"] == series]
+        assert all(t["assignees"] == ["Kirolos"] for t in steps if t["due"] >= TODAY.isoformat())
+        item = next(i for i in unit.submission_register({})["items"] if i["row"] == row)
+        assert item["people"] == ["Kirolos"]
+        kirolos = person(unit.day_plan({})["days"][0], "Kirolos")
+        assert any(b.get("row") == row for b in kirolos["blocks"])
+
+    def test_choosing_who_prepares_puts_in_a_missing_run_up(self, unit):
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N2-0100D")
+        row = deliverable.row
+        unit.start_submission({"row": row, "planned": "2026-10-12"})
+        unit.delete_task_series({"series": f"submission:{row}"})
+        unit.change_run_up(row, {"people": ["Osama"]})
+        steps = [t for t in unit.tasks()["tasks"] if t["series"] == f"submission:{row}"]
+        assert steps and all(t["assignees"] == ["Osama"] for t in steps)
+
+    def test_preparation_is_the_allocated_hours_up_to_the_day_it_goes(self, unit):
+        # Ahmed (2026-10-12): "if they are 200 hours and we have a couple of
+        # weeks with 2 engineers ... they'll be full days".
+        project = unit.workbook.project("N2-0100D")
+        body = project.to_dict()
+        body["budget_mm"] = 2
+        unit.update_project("N2-0100D", body)
+        deliverable = next(d for d in unit.workbook.deliverables()
+                           if d.project_number == "N2-0100D")
+        row = deliverable.row
+        left = unit._hours_left(unit.workbook)[row]
+        assert left > 0
+        body = deliverable.to_dict()
+        body["shares"] = {"Osama": 0.75, "Kirolos": 0.25}
+        unit.update_deliverable(row, body)
+        unit.start_submission({"row": row, "planned": "2026-10-16"})
+        steps = [t for t in unit.tasks()["tasks"] if t["series"] == f"submission:{row}"]
+        days = sorted(t["due"] for t in steps)
+        assert days == ["2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12",
+                        "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"]
+        assert sum(t["required_hours"] for t in steps) == pytest.approx(left, abs=0.1)
+        one = steps[0]["hours_by_person"]
+        assert one["Osama"] == pytest.approx(3 * one["Kirolos"], abs=0.05)
+
     def test_the_week_is_the_same_day_by_day(self, unit):
         data = unit.day_plan({"span": ["week"]})
         assert [d["date"] for d in data["days"]] == [
@@ -720,9 +777,9 @@ class TestTheSubmissionsPlan:
         unit.confirm_submissions({"items": [{"row": item["row"], "date": "2026-10-30"}]})
         steps = [t for t in unit.workbook.task_records()
                  if t.series == f"submission:{item['row']}"]
-        assert steps and all(dt.date(2026, 10, 19) <= t.due <= dt.date(2026, 10, 30)
-                             for t in steps)
+        # Its allocated hours run from today to the new day, each day once.
+        dues = [t.due for t in steps]
+        assert steps and len(dues) == len(set(dues))
+        assert max(dues) == dt.date(2026, 10, 30) and min(dues) >= TODAY
         day = unit.day_plan({"date": ["2026-10-29"]})["days"][0]
         assert any(b["kind"] == "submission" for b in person(day, "Osama")["blocks"])
-        day = unit.day_plan({"date": ["2026-10-12"]})["days"][0]
-        assert not any(b["kind"] == "submission" for b in person(day, "Osama")["blocks"])

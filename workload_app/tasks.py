@@ -216,6 +216,16 @@ def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 updated[key] = value
 
+    if "submission_hours_each" in data:
+        if data["submission_hours_each"] in (None, "", 0, "0"):
+            updated["submission_hours_each"] = None
+        else:
+            try:
+                updated["submission_hours_each"] = _parse_hours(
+                    data["submission_hours_each"], "Preparation hours a day")
+            except TaskError as error:
+                errors.extend(error.errors)
+
     for key, label in (("submission_hours_per_day", "Submission hours a day"),
                        ("meeting_hours", "Meeting hours")):
         if key in data and data[key] not in (None, ""):
@@ -243,6 +253,13 @@ def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
 def hours_per_day(config: Dict[str, Any]) -> float:
     """The contracted day: 09:00 to 17:30 is 8.5 hours."""
     return (_minutes(config["day_end"]) - _minutes(config["day_start"])) / 60.0
+
+
+def prep_hours_each(config: Dict[str, Any]) -> float:
+    """Each person's preparation a day before a submission: the setting, or
+    their whole working day."""
+    value = config.get("submission_hours_each")
+    return float(value) if value else hours_per_day(config)
 
 
 def _minutes(text: str) -> int:
@@ -502,6 +519,11 @@ def _split(shares: Mapping[str, Any], engineers: Sequence[str]
     return people, ({} if even else {n: weights[n] for n in people})
 
 
+def _per_person(task: Task) -> float:
+    """A preparation day's hours for each person on it."""
+    return (task.required_hours or 0.0) / max(1, len(task.assignees))
+
+
 def follow_split(wb: Any, row: int, shares: Mapping[str, Any], *,
                  engineers: Sequence[str], today: Optional[_dt.date] = None
                  ) -> int:
@@ -520,6 +542,7 @@ def follow_split(wb: Any, row: int, shares: Mapping[str, Any], *,
             continue
         if task.assignees == people and task.shares == weights:
             continue
+        task.required_hours = _per_person(task) * len(people)
         task.assignees = list(people)
         task.shares = dict(weights)
         changed += 1
@@ -556,9 +579,11 @@ def set_run_up(wb: Any, row: int, *, engineers: Sequence[str],
         if people is not None:
             if set(people) != set(task.assignees):
                 task.shares = {}
+                task.required_hours = _per_person(task) * len(people)
             task.assignees = list(people)
         if hours is not None:
-            task.required_hours = float(hours)
+            # Hours a day for each of them.
+            task.required_hours = float(hours) * max(1, len(task.assignees))
         changed += 1
     if changed:
         write_all(wb, existing)
@@ -662,6 +687,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
     identifier = next_id(existing, wb)
     added: List[Task] = []
     removed = 0
+    refreshed = 0
     covered = 0
     past = 0
 
@@ -686,6 +712,15 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
         # yet go, so the run-up is never prepared twice.
         run_up = set(working_days(
             due - _dt.timedelta(days=int(config["submission_lead_days"])), due, config))
+        # With hours allocated to it, the work is those hours from today to
+        # the day it goes, every working day (Ahmed, 2026-10-12: "it should
+        # depend on the allocated hours").
+        left = deliverable.get("hours_left")
+        a_day_total = None
+        if left and due >= today:
+            days = working_days(today, due, config) or days
+            run_up = set(days)
+            a_day_total = float(left) / max(1, len(days))
         stale = [t for t in existing
                  if t.series == series and not t.done and t.due not in run_up]
         if stale:
@@ -697,6 +732,14 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             continue
         assignees, weights = _split(deliverable.get("shares") or {}, engineers)
         name = deliverable.get("name") or f"Deliverable on row {row}"
+        hours = (a_day_total if a_day_total is not None
+                 else prep_hours_each(config) * max(1, len(assignees)))
+        if a_day_total is not None:
+            for task in existing:
+                if task.series == series and not task.done and task.due in run_up \
+                        and abs((task.required_hours or 0) - hours) > 0.01:
+                    task.required_hours = round(hours, 2)
+                    refreshed += 1
         for position, day in enumerate(days, start=1):
             if (series, day) in have:
                 continue
@@ -711,7 +754,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
                 deliverable_row=int(row),
                 deliverable_name=name,
                 assignees=assignees,
-                required_hours=float(config["submission_hours_per_day"]),
+                required_hours=round(hours, 2),
                 start=day,
                 due=day,
                 status=cfg.TASK_STATUSES[0],
@@ -724,7 +767,7 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
             have.add((series, day))
             identifier += 1
 
-    if added or removed:
+    if added or removed or refreshed:
         write_all(wb, existing)
     return {
         "added": len(added),

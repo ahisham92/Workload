@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from . import config as cfg, revisions, tasks as task_list
 from .model import (CreditStep, Deliverable, Engineer, Project, ProjectType,
                     ValidationError, as_date, as_fraction, as_number, as_text,
-                    iso, pattern_to_regex, stored_date)
+                    iso, pattern_to_regex, stored_date, today as model_today)
 from .timesheet_store import (REVISION_KEY, ROWS_REVISION_KEY, TimesheetStore,
                               note_change)
 
@@ -258,6 +258,7 @@ class Unit:
         if seed and not self.is_set_up():
             self.seed(load_defaults())
         self._issues_from_dates()
+        self._prep_full_days()
         self._revision = self._read_revision()
 
     # -- plumbing --------------------------------------------------------
@@ -1427,6 +1428,32 @@ class Unit:
         }
 
     # -- submissions and their revisions (revisions.py) ---------------------
+    def mark_setting(self, key: str, value: str = "1") -> None:
+        with self._write() as db:
+            self._set_setting(db, key, value)
+
+    def _prep_full_days(self) -> int:
+        """Once: preparation still ahead at the old two hours a day becomes
+        each person's whole day (or the hours set), as a new run-up has."""
+        if self._setting("prep_full_days"):
+            return 0
+        config = task_list.settings(self)
+        each = task_list.prep_hours_each(config)
+        today = model_today()
+        tasks = task_list.read(self)
+        changed = 0
+        for task in tasks:
+            if task.kind == "Submission" and task.series and not task.done \
+                    and task.due and task.due >= today \
+                    and abs((task.required_hours or 0) - 2.0) < 1e-9:
+                task.required_hours = each * max(1, len(task.assignees))
+                changed += 1
+        if changed:
+            task_list.write_all(self, tasks)
+        with self._write() as db:
+            self._set_setting(db, "prep_full_days", "1")
+        return changed
+
     def _issues_from_dates(self) -> int:
         """The sendings a deliverable's dates already record, made into issues
         for any deliverable that has dates and no issues yet -- a unit from
@@ -1864,13 +1891,18 @@ class Unit:
     def set_run_up(self, row: int, **change: Any) -> Dict[str, Any]:
         result = task_list.set_run_up(self, row, engineers=self.engineer_names(), **change)
         if change.get("people") is not None:
-            # Who prepares it is the deliverable's split: one place to say it.
-            people = list(dict.fromkeys(change["people"]))
-            split = {n: (1.0 / len(people) if n in people else None)
-                     for n in self.engineer_names()}
-            with self._write() as db:
-                self._write_shares(db, "deliverable_shares", "deliverable_row", row, split)
+            self.set_split(row, change["people"])
         return result
+
+    def set_split(self, row: int, people: Sequence[str]) -> None:
+        """Who prepares a deliverable is its split, evenly: one place to say it."""
+        people = [n for n in dict.fromkeys(people) if n in self.engineer_names()]
+        if not people:
+            return
+        split = {n: (1.0 / len(people) if n in people else None)
+                 for n in self.engineer_names()}
+        with self._write() as db:
+            self._write_shares(db, "deliverable_shares", "deliverable_row", row, split)
 
     def follow_splits(self, before: Dict[int, Dict[str, Any]], *,
                       today: Optional[_dt.date] = None) -> int:
@@ -1889,13 +1921,16 @@ class Unit:
     def generate_submission_tasks(self, *, only_row: Optional[int] = None,
                                   today: Optional[_dt.date] = None,
                                   include_past: bool = False,
-                                  config: Optional[Dict[str, Any]] = None
+                                  config: Optional[Dict[str, Any]] = None,
+                                  hours_left: Optional[Dict[int, float]] = None
                                   ) -> Dict[str, Any]:
-        """Fill in the run-up to every dated deliverable."""
+        """Fill in the run-up to every dated deliverable; ``hours_left`` is
+        each deliverable's allocated hours not yet booked, where known."""
         deliverables = []
         for source in self.deliverables():
             item = source.to_dict()
             item["shares"] = source.shares
+            item["hours_left"] = (hours_left or {}).get(source.row)
             deliverables.append(item)
         return task_list.generate_submissions(
             self, deliverables, engineers=self.engineer_names(),

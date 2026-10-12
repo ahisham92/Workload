@@ -1548,7 +1548,7 @@ function renderSubmissions() {
             'Drafted by the app: a date for every deliverable not yet submitted, from how much is left before it can go '
             + 'and how fast it is being done. Tap a date to change it: it saves at once. A ticked date is one the app '
             + 'suggests; tap Use to keep the ticked ones. To record what was sent or came back, use the sheet above. Each '
-            + `date goes on the deliverable, and its run-up (${fmt.hours(data.hours_a_day)} h a day over the ${data.lead_days} days before) `
+            + `date goes on the deliverable, and its run-up (${fmt.hours(data.hours_a_day)} h a day for each person over the ${data.lead_days} days before) `
             + 'goes into the right people’s days. '
             + (counts.typical
               ? `Projects nobody has confirmed yet are dated by how long this unit’s phases usually take (${data.typical_days} days`

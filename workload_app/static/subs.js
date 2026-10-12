@@ -166,7 +166,7 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       }));
     const head = el('tr', {},
       el('th', {}, 'Deliverable'), el('th', {}, 'Where it stands'), el('th', {}, 'Revision'),
-      el('th', {}, 'For'), el('th', {}, 'Planned'), el('th', {}, 'Submitted'),
+      el('th', {}, 'For'), el('th', {}, 'Who prepares it'), el('th', {}, 'Planned'), el('th', {}, 'Submitted'),
       el('th', {}, 'Returned'), el('th', {}, 'Review code'), el('th', {}, 'Reason / comments'),
       el('th', {}, ''));
     const rows = [];
@@ -184,6 +184,16 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
   const latestDate = (item) => {
     const last = item.issues[item.issues.length - 1];
     return last ? (last.returned || last.submitted || last.planned || '9999') : (item.status_date || '9999');
+  };
+
+  /** Who prepares it: tap to choose, on the sheet on the right. */
+  const whoCell = (item) => {
+    const people = item.people || [];
+    return el('td', { class: 'sub-who' }, el('button', {
+      type: 'button', class: `sub-who-btn${people.length ? '' : ' is-empty'}`,
+      title: 'Choose who prepares it',
+      onclick: () => openSubmission(item.row, { onChange: () => { changed(); reload(); } }),
+    }, people.length ? people.join(', ') : 'Choose who'));
   };
 
   /** A deliverable's rows: its newest sending, and the earlier ones folded. */
@@ -238,6 +248,7 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       who,
       el('td', {}, subStatusBox('none', [['none', 'Not started'], ...SUB_PICK], pick)),
       el('td', { class: 'sub-hint muted small', colspan: 2 }, 'Put in a date, or pick Submitted'),
+      whoCell(item),
       el('td', {}, planned),
       el('td', {}, submitted),
       el('td', { class: 'muted small', colspan: 3 }, item.step_name ? `Step reached: ${item.step_name}` : ''),
@@ -339,6 +350,7 @@ function submissionsPanel({ project = null, onChange = null } = {}) {
       who, statusCell,
       cell('rev', el('input', { type: 'text', maxlength: 12, 'aria-label': 'Revision', class: 'sub-revbox' })),
       cell('purpose', select(SUB_PURPOSES.map((p) => [p, p || '—']), 'Sent for')),
+      latest ? whoCell(item) : el('td', {}),
       cell('planned', el('input', { type: 'date', 'aria-label': 'Planned to go' })),
       cell('submitted', el('input', { type: 'date', 'aria-label': 'Really submitted' })),
       cell('returned', el('input', { type: 'date', 'aria-label': 'Came back' })),
@@ -524,14 +536,17 @@ function openSubmission(row, { onChange = null } = {}) {
   function prepPart(data) {
     const prep = data.prep;
     const ahead = prep.days.filter((d) => !d.done && d.date >= data.today);
-    if (!ahead.length) {
+    const issues = (data.item && data.item.issues) || [];
+    const last = issues[issues.length - 1];
+    const planned = last ? (!last.submitted && last.planned) : null;
+    if (!ahead.length && !(planned && planned >= data.today)) {
       return el('section', { class: 'sub-card-part' },
         el('h4', {}, 'Who prepares it?'),
-        el('p', { class: 'muted' }, prep.days.length
-          ? 'No preparation days left: they are all done or gone.'
-          : 'No preparation days yet. They are put in the week before the planned day.'));
+        el('p', { class: 'muted' }, last && last.submitted
+          ? 'It has gone: nothing left to prepare.'
+          : 'Put in the day it is planned to go first: the preparation goes on the days before it.'));
     }
-    const chosen = new Set(prep.people);
+    const chosen = new Set(prep.people.length ? prep.people : (data.item.people || []));
     const save = (change, done) => later(async () => {
       try {
         const result = await api(`/api/submissions/${row}/prep`, { method: 'PUT', quiet: true, body: change });
@@ -548,7 +563,7 @@ function openSubmission(row, { onChange = null } = {}) {
         if (chosen.has(name)) chosen.delete(name); else chosen.add(name);
         chip.classList.toggle('is-on', chosen.has(name));
         chip.setAttribute('aria-pressed', chosen.has(name) ? 'true' : 'false');
-        save({ people: data.engineers.filter((n) => chosen.has(n)) });
+        save({ people: data.engineers.filter((n) => chosen.has(n)) }, ahead.length ? null : load);
       });
       return chip;
     }));
@@ -565,8 +580,10 @@ function openSubmission(row, { onChange = null } = {}) {
       el('h4', {}, 'Who prepares it?'),
       el('p', { class: 'muted small' }, 'Tap a name to add or take them off. It applies from today to the planned day.'),
       people,
-      field('Hours a day, all of them together', hours, 'Shared between the people chosen.'),
-      el('p', { class: 'muted small' }, `Preparation days left: ${ahead.map((d) => dateText(d.date, { day: 'numeric', month: 'short' })).join(', ')}.`));
+      field('Hours a day, each person', hours, 'Their whole day unless you change it.'),
+      ahead.length
+        ? el('p', { class: 'muted small' }, `Preparation days left: ${ahead.map((d) => dateText(d.date, { day: 'numeric', month: 'short' })).join(', ')}.`)
+        : el('p', { class: 'muted small' }, 'Choose who, and the preparation goes on their days before it.'));
   }
 
   load();
