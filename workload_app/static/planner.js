@@ -1383,7 +1383,7 @@ function dayCards(day, shown) {
           el('span', { class: 'muted small' }, [p.grade_label, p.team_name].filter(Boolean).join(' · ')),
           el('span', { class: `pill ${p.away || p.over_hours ? 'pill-bad' : p.free_hours >= 1 ? 'pill-warn' : 'pill-ok'}` },
             p.away ? 'off today: hand these on'
-              : p.over_hours ? `${fmt.hours(p.over_hours)} h won't fit today`
+              : p.over_hours ? `${fmt.hours(p.over_hours)} h more than the day holds`
               : p.free_hours >= 1 ? `${fmt.hours(p.free_hours)} h free` : 'full')),
         el('ol', { class: 'day-blocks' }, p.blocks.map((b) => el('li', {
           class: `block block-${b.kind} ${b.done ? 'is-done' : ''}${b.row != null ? ' is-tappable' : ''}`,
@@ -1443,7 +1443,7 @@ function dayText(data) {
       if (!inChosenTeam(p, data)) continue;
       if (p.away || (!p.blocks.length && !p.over_hours)) continue;
       lines.push(`${p.name}${p.team_name ? ` (${p.team_name})` : ''}`
-        + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h won't fit today` : ''));
+        + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h more than the day holds` : ''));
       for (const b of p.blocks) {
         lines.push(`  ${b.start}–${b.end}  ${KIND_LABEL[b.kind] ? `${KIND_LABEL[b.kind]}: ` : ''}`
           + `${b.project && b.title !== b.project ? `${b.project} ` : ''}${b.title}`);
