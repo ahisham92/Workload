@@ -285,7 +285,11 @@ TASK_DEFAULT_SETTINGS: Dict[str, object] = {
     "horizon_weeks": 4,
     #: A deliverable's date pulls a week of daily preparation before it.
     "submission_lead_days": 7,
-    "submission_hours_per_day": 2.0,
+    "submission_hours_per_day": 2.0,       # before 2026-10-12; no longer used
+    #: Each person's preparation a day in a run-up; empty is their whole
+    #: working day (Ahmed: two hours for a submission in three days made no
+    #: sense).
+    "submission_hours_each": None,
     "meeting_hours": 1.0,
     "meeting_weekday": 0,
     "meeting_weeks": 12,

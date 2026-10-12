@@ -241,5 +241,5 @@ def plan(*, deliverable_rows: Sequence[Dict[str, Any]], deliverables: Sequence[A
         "typical_days": typical["days"],
         "typical_from": typical["from"],
         "lead_days": int(config.get("submission_lead_days", 7)),
-        "hours_a_day": float(config.get("submission_hours_per_day", 2.0)),
+        "hours_a_day": task_sheet.prep_hours_each(config),
     }

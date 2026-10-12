@@ -1434,3 +1434,5 @@ td.ci-ask { white-space: normal; min-width: 280px; }
 .bd-hours .bd-hours-box { width: 80px; }
 .sub-card-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .sub-pick { max-width: 220px; }
+.sub-who-btn { border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; text-align: left; padding: 2px 0; }
+.sub-who-btn.is-empty { color: var(--warn); font-weight: 600; }
