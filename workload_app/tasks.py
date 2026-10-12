@@ -719,7 +719,9 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
         left = deliverable.get("hours_left")
         a_day_total = None
         if left and due >= today:
-            days = working_days(today, due, config) or days
+            # From today, or once the job's previous submission has gone.
+            begin = max(today, _parse_date(deliverable.get("prep_start")) or today)
+            days = working_days(begin, due, config) or days
             run_up = set(days)
             # Never more than whole days for the people on it: what does not
             # fit is the date or the budget to look at, not 50-hour days.

@@ -1158,10 +1158,10 @@ class WorkloadService:
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
-        if not wb._setting("prep_by_allocation_3"):
+        if not wb._setting("prep_by_allocation_4"):
             # Once: run-ups still ahead take their allocated hours.
             wb.generate_submission_tasks(today=_today(), hours_left=self._hours_left(wb))
-            wb.mark_setting("prep_by_allocation_3")
+            wb.mark_setting("prep_by_allocation_4")
         index = self._index(wb)
         project_rows = metrics.project_rows(wb, index)
         drawn = self._drawings(wb, index, project_rows)
@@ -1342,8 +1342,9 @@ class WorkloadService:
             run = runs.setdefault(task.series, {
                 "row": task.deliverable_row, "job": task.project_number,
                 "name": task.deliverable_name or task.name, "due": task.due,
-                "people": [], "hours": 0.0, "days": 0})
+                "start": task.due, "people": [], "hours": 0.0, "days": 0})
             run["due"] = max(run["due"], task.due)
+            run["start"] = min(run["start"], task.due)
             run["hours"] += task.required_hours or 0.0
             run["days"] += 1
             for name in task.assignees:
@@ -1351,7 +1352,8 @@ class WorkloadService:
                     run["people"].append(name)
         out = []
         for run in runs.values():
-            out.append({**run, "due": iso(run["due"]), "hours": round(run["hours"], 1),
+            out.append({**run, "due": iso(run["due"]), "start": iso(run["start"]),
+                        "hours": round(run["hours"], 1),
                         "per_day": round(run["hours"] / max(1, run["days"]), 1),
                         "budget_left": (round(left[run["row"]], 1)
                                         if run["row"] in left else None),
@@ -2584,18 +2586,23 @@ class WorkloadService:
         issues = wb.issues().get(int(row), [])
         last = issues[-1] if issues else {}
         planned = last.get("planned")
+        left = self._hours_left(wb)
         if planned and not last.get("submitted") \
                 and _dt.date.fromisoformat(planned) >= _today():
             wb.generate_submission_tasks(only_row=int(row), today=_today(),
-                                         hours_left=self._hours_left(wb))
+                                         hours_left=left)
+        # The job's next submissions start once this one has gone, so they
+        # move with it.
+        wb.generate_submission_tasks(today=_today(), hours_left=left)
 
     def update_submission(self, issue_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             wb = self.workbook
             row = wb._issue(_issue_id(issue_id)).get("deliverable_row")
             issue = wb.update_issue(_issue_id(issue_id), body or {})
-            if "planned" in (body or {}):
-                # Its run-up moves with the planned day.
+            if {"planned", "submitted"} & set(body or {}):
+                # Its run-up moves with the planned day, and the job's next
+                # submissions start once it has gone.
                 self._plan_run_up(wb, row)
             return {"issue": issue, "save": self._commit()}
 
