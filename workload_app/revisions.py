@@ -119,6 +119,18 @@ def describe(issues: Sequence[Dict[str, Any]], today: _dt.date) -> Dict[str, Any
             "next_rev": next_rev(out[-1]["rev"]) if out else "0"}
 
 
+def slip(moves: Sequence[Dict[str, Any]], issue_id: Any) -> Optional[Dict[str, Any]]:
+    """How far one sending's planned day has moved: the day first planned,
+    the day it is now, how many times it moved and by how many days in all
+    (later is positive).  None when it never moved."""
+    mine = [m for m in moves if m.get("issue_id") == issue_id]
+    if not mine:
+        return None
+    first, now = mine[0]["old_date"], mine[-1]["new_date"]
+    days = (_dt.date.fromisoformat(now) - _dt.date.fromisoformat(first)).days
+    return {"first": first, "now": now, "times": len(mine), "days": days}
+
+
 def dates_for(issues: Sequence[Dict[str, Any]]) -> Dict[str, Optional[str]]:
     """The deliverable's own dates, as its issues tell them."""
     ordered = sorted(issues, key=lambda i: (i["seq"], i["id"]))

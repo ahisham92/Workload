@@ -1965,6 +1965,7 @@ class WorkloadApp:
              "manager"),
             ("GET", "/api/weekly", s("weekly"), "manager"),
             ("GET", "/api/weekly/download", self.weekly_download, "manager"),
+            ("GET", "/api/plan-book", s("plan_book_download"), "manager"),
             ("GET", "/api/push", self.push_status, "user"),
             ("POST", "/api/push/devices", self.push_subscribe, "user"),
             ("DELETE", "/api/push/devices/{}", self.push_unsubscribe, "user"),

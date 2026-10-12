@@ -14,6 +14,7 @@ import functools
 import hashlib
 import io
 import json
+import re
 import threading
 import traceback
 import uuid
@@ -26,6 +27,7 @@ from . import budgets as budgets_module
 from . import bringin
 from . import busy_calendar
 from . import meetings as meetings_module
+from . import plan_book
 from . import revisions as revisions_module
 from . import (calendar_, checkins as checkins_module, config as cfg, daily, derive,
                growth as growth_module, management as management_module,
@@ -1384,6 +1386,7 @@ class WorkloadService:
             wb = self.workbook
             inputs = self._planning(wb)
             drawn = inputs["drawings"]
+            prep = self._prep_hours(inputs)
             data = needs_module.forecast(
                 rows=inputs["rows"], project_rows=inputs["project_rows"],
                 projects=wb.projects(), roster=inputs["roster"],
@@ -1400,7 +1403,11 @@ class WorkloadService:
                 team_names={t["id"]: t["name"] for t in self.store.teams()},
                 management=inputs["management"].taken_a_day(),
                 submitting=self._submitting(wb),
-                prep=self._prep_hours(inputs))
+                prep=prep)
+            # The same work, month by month, for the chart (Ahmed, 2026-10-12).
+            data["by_month"] = needs_module.monthly(
+                prep=prep, roster=inputs["roster"], config=inputs["config"],
+                today=_today(), management=inputs["management"].taken_a_day())
             data["submissions"] = self._prep_list(wb, inputs)
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
@@ -2501,8 +2508,10 @@ class WorkloadService:
         with self._lock:
             wb = self.workbook
             wanted = ((query or {}).get("project") or [None])[0]
+            everything = bool(((query or {}).get("all") or [None])[0])
             today = _today()
             issues = wb.issues()
+            moves = wb.date_moves()
             projects = {p.number: p for p in wb.projects()}
             deliverables = wb.deliverables()
             listed = self._listed(deliverables)
@@ -2513,12 +2522,16 @@ class WorkloadService:
                 if project is None or (wanted and d.project_number != wanted):
                     continue
                 mine = issues.get(d.row, [])
-                if not wanted and not mine and project.status in (
+                if not wanted and not everything and not mine and project.status in (
                         "Finalized", "Cancelled", "Proposal"):
                     continue
                 state = revisions_module.describe(mine, today)
                 entry = listed.get(d.row)
+                # Every move of a planned day, so a slip shows (date history).
+                history = moves.get(d.row, [])
                 items.append({
+                    "moves": history,
+                    "slip": revisions_module.slip(history, mine[-1]["id"]) if mine else None,
                     "row": d.row, "project_number": d.project_number,
                     "project_name": project.name or d.project_number,
                     "name": d.name, "type_code": d.type_code,
@@ -2971,6 +2984,7 @@ class WorkloadService:
                 raise ApiError(HTTPStatus.BAD_REQUEST, "Choose your files first.")
             by_kind: Dict[str, List[Dict[str, Any]]] = {k: [] for k in bringin.KINDS}
             listed, errors = [], []
+            plans: List[Dict[str, Any]] = []
             for item in _objects(files, "files"):
                 filename = str(item.get("filename") or "file.xlsx")
                 kind, read = bringin.classify(filename, _decode(item.get("content_base64")))
@@ -2987,6 +3001,10 @@ class WorkloadService:
                            f"{len(read['rows']):,} row(s)"
                 elif kind == "drawings":
                     note = f"{len(read):,} drawing row(s)"
+                elif kind == "plan":
+                    note = (f"{len(read['projects']):,} project(s), "
+                            f"{len(read['submissions']):,} submission(s)")
+                    plans.append(read)
                 else:
                     note = ""
                 listed.append({"filename": filename, "kind": kind,
@@ -3014,13 +3032,23 @@ class WorkloadService:
                     result["timesheets"]["left_out"] = True
             else:
                 timesheet_token = None
+            # The workbook from Excel: every change it would make, shown
+            # before anything is saved.
+            result["plan"] = None
+            if plans:
+                seen = [self.plan_book_changes(book) for book in plans]
+                result["plan"] = {
+                    "changes": [c for found in seen for c in found["changes"]],
+                    "errors": [e for found in seen for e in found["errors"]]}
             ready = bool(timesheet_token or by_kind["projects"] or by_kind["spend"]
-                         or by_kind["drawings"])
+                         or by_kind["drawings"]
+                         or (result["plan"] and result["plan"]["changes"]))
             token = uuid.uuid4().hex
             self._keep_staged(token, {
                 "bring_in": True, "timesheets": timesheet_token,
                 "budgets": by_kind["projects"] + by_kind["spend"],
-                "drawings": by_kind["drawings"]})
+                "drawings": by_kind["drawings"],
+                "plan": plans if result["plan"] and result["plan"]["changes"] else []})
             result.update(token=token, ready=ready)
             return result
 
@@ -3084,8 +3112,77 @@ class WorkloadService:
                             "with no deliverable to go to" if r["unmatched"] else "")
                          + (f"; {len(r['proposals'])} change(s) to the register "
                             "suggested" if r["proposals"] else "") + "."))
+            if staged.get("plan"):
+                step("plan", lambda: self.apply_plan_book(staged["plan"]),
+                     lambda r: (
+                         f"{r['changed']:,} change(s) saved"
+                         + (f"; {len(r['failed'])} could not be: "
+                            + " ".join(r["failed"][:5]) if r["failed"] else "") + "."))
             return {"steps": steps, "state": self.bring_in_state(),
                     "save": {"saved": True}}
+
+    # -- projects and submissions, out to Excel and back (plan_book.py) ----
+    def _plan_now(self) -> Dict[str, Any]:
+        """What the plan workbook is compared with: the app as it is now."""
+        wb = self.workbook
+        register = self.submission_register({"all": ["1"]})
+        return {"projects": [p.to_dict() for p in wb.projects()],
+                "items": register["items"],
+                "starts": {row: iso(day) for row, day in wb.work_starts().items()},
+                "engineers": wb.engineer_names(),
+                "statuses": list(cfg.PROJECT_STATUSES)}
+
+    def plan_book_download(self) -> Dict[str, Any]:
+        """Every project and submission as a workbook to change in Excel."""
+        with self._lock:
+            now = self._plan_now()
+            register = self.submission_register()
+            data = plan_book.write(projects=now["projects"], items=register["items"],
+                                   starts=now["starts"], statuses=now["statuses"],
+                                   unit_name=self._unit_name())
+            name = re.sub(r'[\\/:*?"<>|]+', " ", self._unit_name() or "Selecao+").strip()
+            return {"filename": f"{name} projects and submissions {_today():%d-%m-%Y}.xlsx",
+                    "size_bytes": len(data),
+                    "content_base64": base64.b64encode(data).decode("ascii")}
+
+    def plan_book_changes(self, book: Dict[str, Any]) -> Dict[str, Any]:
+        """What bringing the workbook back would change. Writes nothing."""
+        with self._lock:
+            return plan_book.changes(book, **self._plan_now())
+
+    def apply_plan_book(self, books: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Write what changed in the workbook, line by line. A line that
+        cannot be saved says why; the others are still saved."""
+        with self._lock:
+            done, failed, errors = 0, [], []
+            for book in books:
+                found = self.plan_book_changes(book)
+                errors.extend(found["errors"])
+                order = {"new_project": 0, "project": 1, "submission": 2}
+                for change in sorted(found["changes"], key=lambda c: order[c["kind"]]):
+                    try:
+                        self._apply_plan_change(change)
+                        done += 1
+                    except (ApiError, ValidationError) as error:
+                        why = "; ".join(getattr(error, "errors", None) or [str(error)])
+                        failed.append(f"{change['what']}: {why}")
+            return {"changed": done, "failed": failed, "errors": errors}
+
+    def _apply_plan_change(self, change: Dict[str, Any]) -> None:
+        wb = self.workbook
+        if change["kind"] == "new_project":
+            self.add_project(change["body"])
+        elif change["kind"] == "project":
+            current = wb.project(change["key"]).to_dict()
+            self.update_project(change["key"], {**current, **change["body"]})
+        else:
+            row = change["row"]
+            if change["start"]:
+                self.start_submission({"row": row, **change["body"]})
+            elif change["body"]:
+                self.update_submission(change["issue_id"], change["body"])
+            if change["prep"]:
+                self.change_run_up(row, change["prep"])
 
     def keep_people(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Keep everybody listed as they are shown, so they are not asked

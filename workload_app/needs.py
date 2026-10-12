@@ -411,6 +411,64 @@ def forecast(*, rows: Sequence[Dict[str, Any]], project_rows: Sequence[Dict[str,
     }
 
 
+#: How many months the month-by-month chart looks ahead, this one included.
+MONTHS_AHEAD = 6
+#: The line on the month chart: a team this busy is well used, with a little
+#: room for the unplanned (the same green band as "Busy on real work").
+WELL_USED = 0.85
+
+
+def monthly(*, prep: Sequence[Tuple[str, str, _dt.date, float]],
+            roster: Sequence[Dict[str, Any]], config: Dict[str, Any],
+            today: _dt.date, management: Optional[Mapping[str, float]] = None,
+            months: int = MONTHS_AHEAD) -> Dict[str, Any]:
+    """People needed against people we have, month by month (engineers).
+
+    The work is the same submission preparation the weekly answer counts:
+    its hours in a month, over one person's hours in that month, is how many
+    people the month needs.  People we have is everybody's hours that month
+    (less leave, holidays and leading people) in whole people.  The 85% line
+    is what a well-used team carries; above it there is little room, above
+    people we have there is more work than people.  A month past the last
+    submission planned shows nothing needed because nothing is planned yet,
+    so it is marked rather than read as free."""
+    management = management or {}
+    a_day = task_sheet.hours_per_day(config)
+    people = {p["name"]: p for p in roster}
+    engineers = [p for p in roster if p.get("active", True)
+                 and people_module.role_of(p.get("grade")) == people_module.ROLE_ENGINEERING]
+    last_planned = max((day for _n, _j, day, _h in prep), default=None)
+    out = []
+    first = today
+    for _ in range(months):
+        nxt = (first.replace(day=1) + _dt.timedelta(days=32)).replace(day=1)
+        last = nxt - _dt.timedelta(days=1)
+        days = task_sheet.working_days(first, last, config)
+        one = len(days) * a_day
+        demand: Dict[str, float] = defaultdict(float)
+        for name, job, day, hours in prep:
+            if first <= day <= last and (not name or people_module.role_of(
+                    (people.get(name) or {}).get("grade")) == people_module.ROLE_ENGINEERING):
+                demand[job] += hours
+        have = sum(calendar_.present_days(config, p["name"], days)
+                   * max(0.0, a_day - management.get(p["name"], 0.0)) for p in engineers)
+        work = sum(demand.values())
+        out.append({
+            "month": first.strftime("%Y-%m"), "from": first.isoformat(),
+            "to": last.isoformat(), "working_days": len(days),
+            "hours": round(work, 1), "capacity_hours": round(have, 1),
+            "needed": round(work / one, 2) if one else 0.0,
+            "have": round(have / one, 2) if one else 0.0,
+            "well_used": round(WELL_USED * have / one, 2) if one else 0.0,
+            "jobs": [{"number": n, "hours": round(h, 1)} for n, h in
+                     sorted(demand.items(), key=lambda kv: -kv[1]) if h >= 0.5][:5],
+            "nothing_planned": last_planned is None or first > last_planned,
+        })
+        first = nxt
+    return {"months": out, "engineers": len(engineers), "well_used": WELL_USED,
+            "planned_until": last_planned.isoformat() if last_planned else None}
+
+
 def _teams(roster: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen: Dict[str, Dict[str, Any]] = {}
     for person in roster:
