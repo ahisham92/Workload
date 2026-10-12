@@ -250,7 +250,44 @@ function renderNeeds(needs) {
         el('p', { class: 'muted' }, dayFirstText(a.detail)),
         a.kind === 'need' ? needWeeks(needs, a) : null)))
       : el('p', { class: 'muted' }, 'Nobody to forecast for yet.'),
+    needsSources(needs),
     needsFootnote(needs));
+}
+
+/** Where the hours come from: each submission's preparation still ahead.
+ *  Tap one to change its date or who prepares it. */
+function needsSources(needs) {
+  const list = needs.submissions || [];
+  if (!list.length) return null;
+  const total = list.reduce((sum, s) => sum + s.hours, 0);
+  return el('details', { class: 'needs-sources' },
+    el('summary', {}, `Where the hours come from: ${list.length} ${list.length === 1 ? 'submission' : 'submissions'}, ${fmt.hours(total)} h of preparation`),
+    el('p', { class: 'muted small' },
+      `Each submission takes ${list[0].planned_share}% of its budget hours not yet booked, spread over the working days from today to its date, `
+      + 'never more than full days for the people on it. Tap one to change its date or who prepares it.'),
+    el('table', { class: 'table compact' },
+      el('thead', {}, el('tr', {},
+        ['Submission', 'Due', 'Who prepares it', 'Hours', 'Days', 'A day'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, list.map((s) => el('tr', {
+        class: 'is-tappable', tabindex: '0', title: 'Tap to see and change this submission',
+        onclick: () => openSubmission(s.row, { onChange: () => reloadNeeds() }),
+        onkeydown: (e) => { if (e.key === 'Enter') openSubmission(s.row, { onChange: () => reloadNeeds() }); },
+      },
+      el('td', {}, el('b', {}, s.job), ` ${s.name}`),
+      el('td', {}, dateText(s.due)),
+      el('td', {}, s.people.length ? s.people.join(', ') : 'nobody yet'),
+      el('td', {}, `${fmt.hours(s.hours)} h`),
+      el('td', {}, String(s.days)),
+      el('td', {}, `${fmt.hours(s.per_day)} h`))))));
+}
+
+async function reloadNeeds() {
+  try {
+    plan.needs = await api('/api/needs', { quiet: true });
+    showNeeds();
+  } catch (error) {
+    toastError(error);
+  }
 }
 
 const COMING_STATUS = {
