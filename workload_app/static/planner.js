@@ -263,22 +263,32 @@ function needsSources(needs) {
   return el('details', { class: 'needs-sources' },
     el('summary', {}, `Where the hours come from: ${list.length} ${list.length === 1 ? 'submission' : 'submissions'}, ${fmt.hours(total)} h of preparation`),
     el('p', { class: 'muted small' },
-      `Each submission takes ${list[0].planned_share}% of its budget hours not yet booked, spread over the working days from today to its date, `
+      `Each submission takes ${list[0].planned_share}% of its budget hours not yet booked, spread over the working days from when its work starts to its date, `
+      + 'and its work starts once the job’s previous submission has gone (or today), '
       + 'never more than full days for the people on it. Tap one to change its date or who prepares it.'),
     el('table', { class: 'table compact' },
       el('thead', {}, el('tr', {},
-        ['Submission', 'Due', 'Who prepares it', 'Hours', 'Days', 'A day'].map((h) => el('th', {}, h)))),
+        ['Submission', 'Work starts', 'Due', 'Who prepares it', 'Hours', 'Days', 'A day'].map((h) => el('th', {}, h)))),
       el('tbody', {}, list.map((s) => el('tr', {
         class: 'is-tappable', tabindex: '0', title: 'Tap to see and change this submission',
         onclick: () => openSubmission(s.row, { onChange: () => reloadNeeds() }),
         onkeydown: (e) => { if (e.key === 'Enter') openSubmission(s.row, { onChange: () => reloadNeeds() }); },
       },
       el('td', {}, el('b', {}, s.job), ` ${s.name}`),
-      el('td', {}, dateText(s.due)),
+      el('td', {}, whenText(s.start)),
+      el('td', {}, whenText(s.due)),
       el('td', {}, s.people.length ? s.people.join(', ') : 'nobody yet'),
       el('td', {}, `${fmt.hours(s.hours)} h`),
       el('td', {}, String(s.days)),
       el('td', {}, `${fmt.hours(s.per_day)} h`))))));
+}
+
+/** "Thu 15 Oct", with the year when it is not this year's. */
+function whenText(iso) {
+  if (!iso) return '—';
+  const other = iso.slice(0, 4) !== String(new Date().getFullYear());
+  return dateText(iso, other ? { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }
+    : undefined);
 }
 
 async function reloadNeeds() {

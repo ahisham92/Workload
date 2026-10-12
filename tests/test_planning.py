@@ -571,6 +571,35 @@ class TestTheDayFillsItself:
         one = steps[0]["hours_by_person"]
         assert one["Osama"] == pytest.approx(3 * one["Kirolos"], abs=0.05)
 
+    def test_a_job_s_next_submission_starts_once_the_one_before_has_gone(self, unit):
+        # Ahmed (2026-10-12): a submission a year away was being prepared
+        # from today.
+        detail = unit.project_detail("N2-0100D")
+        one = detail["deliverables"][0]
+        weight = one.get("phase_weight") or 1.0
+        items = [dict(one, phase_weight=weight / 2),
+                 {k: v for k, v in dict(one, name="Final stage",
+                                        phase_weight=weight / 2).items() if k != "row"}]
+        unit.save_project_with_deliverables(
+            "N2-0100D", {"project": dict(detail["project"], budget_mm=4),
+                         "deliverables": items})
+        rows = [d.row for d in unit.workbook.deliverables()
+                if d.project_number == "N2-0100D"]
+        assert len(rows) >= 2, rows
+        first, second = rows[:2]
+        unit.start_submission({"row": first, "planned": "2026-10-15"})
+        unit.start_submission({"row": second, "planned": "2026-10-29"})
+
+        def days(row):
+            return sorted(t["due"] for t in unit.tasks()["tasks"]
+                          if t["series"] == f"submission:{row}" and t["status"] != "Done")
+        assert days(first)[0] == "2026-10-07" and days(first)[-1] == "2026-10-15"
+        assert days(second)[0] == "2026-10-16" and days(second)[-1] == "2026-10-29"
+        # Moving the first submission moves where the next one starts.
+        issue = unit.workbook.issues()[first][-1]
+        unit.update_submission(issue["id"], {"planned": "2026-10-20"})
+        assert days(second)[0] == "2026-10-21"
+
     def test_only_part_of_the_budget_is_planned(self, unit):
         # Ahmed (2026-10-12): "we can work on 60% and leave like 40 for
         # comments and profit".

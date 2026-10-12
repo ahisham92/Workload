@@ -1927,15 +1927,38 @@ class Unit:
         """Fill in the run-up to every dated deliverable; ``hours_left`` is
         each deliverable's allocated hours not yet booked, where known."""
         deliverables = []
+        starts = self._prep_starts(today or model_today())
         for source in self.deliverables():
             item = source.to_dict()
             item["shares"] = source.shares
             item["hours_left"] = (hours_left or {}).get(source.row)
+            item["prep_start"] = starts.get(source.row)
             deliverables.append(item)
         return task_list.generate_submissions(
             self, deliverables, engineers=self.engineer_names(),
             only_row=only_row, today=today, include_past=include_past,
             config=config)
+
+    def _prep_starts(self, today: _dt.date) -> Dict[int, _dt.date]:
+        """The day each submission's preparation can start: the day after the
+        job's previous submission still to go, so a job's submissions are
+        prepared one after another rather than all from today (Ahmed,
+        2026-10-12: a submission a year away was being worked on today)."""
+        issues = self.issues()
+        going: Dict[str, List[_dt.date]] = {}
+        for d in self.deliverables():
+            last = (issues.get(d.row) or [{}])[-1]
+            if last.get("submitted") or not d.status_date or d.status_date < today:
+                continue
+            going.setdefault(d.project_number, []).append(d.status_date)
+        out: Dict[int, _dt.date] = {}
+        for d in self.deliverables():
+            if not d.status_date:
+                continue
+            before = [day for day in going.get(d.project_number, ()) if day < d.status_date]
+            if before:
+                out[d.row] = max(before) + _dt.timedelta(days=1)
+        return out
 
     def generate_weekly_meetings(self, data: Dict[str, Any]) -> Dict[str, Any]:
         number = str(data.get("project_number") or "").strip()
