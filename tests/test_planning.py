@@ -558,6 +558,22 @@ class TestTheDayFillsItself:
         one = steps[0]["hours_by_person"]
         assert one["Osama"] == pytest.approx(3 * one["Kirolos"], abs=0.05)
 
+    def test_only_part_of_the_budget_is_planned(self, unit):
+        # Ahmed (2026-10-12): "we can work on 60% and leave like 40 for
+        # comments and profit".
+        project = unit.workbook.project("N2-0100D")
+        body = project.to_dict()
+        body["budget_mm"] = 2
+        unit.update_project("N2-0100D", body)
+        row = next(d.row for d in unit.workbook.deliverables()
+                   if d.project_number == "N2-0100D")
+        assert unit.workbook.task_settings()["planned_share"] == 60
+        at_60 = unit._hours_left(unit.workbook)[row]
+        unit.save_task_settings({"planned_share": 100})
+        at_100 = unit._hours_left(unit.workbook)[row]
+        # 40% of the allocated hours (at least 40% of what is left) is kept.
+        assert 0 < at_60 and at_100 - at_60 >= 0.4 * at_100 - 0.1
+
     def test_the_week_is_the_same_day_by_day(self, unit):
         data = unit.day_plan({"span": ["week"]})
         assert [d["date"] for d in data["days"]] == [

@@ -4168,6 +4168,8 @@ function openWorkingDayModal() {
       type: 'number', min: '1', max: '60' },
     { name: 'submission_hours_each', label: 'Preparation hours a day, each person',
       type: 'number', step: '0.5', min: '0', hint: 'leave empty for their whole working day' },
+    { name: 'planned_share', label: 'Part of the budget to plan on (%)', type: 'number',
+      min: '10', max: '100', hint: 'preparation is planned on this part of each budget; the rest is kept for comments and profit' },
     { name: 'meeting_hours', label: 'Weekly meeting hours', type: 'number',
       step: '0.5', min: '0' },
     { name: 'meeting_weeks', label: 'Meeting series (weeks)', type: 'number',
