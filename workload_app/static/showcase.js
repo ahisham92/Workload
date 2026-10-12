@@ -1013,7 +1013,7 @@
           el('p', { class: 'muted' },
             scape.mode === 'next'
               ? 'Each person at their desk. The paper is the work lined up for them over the next two weeks: '
-                + 'two full piles are their hours, more piles are more than their hours. The folder on top takes the colour in the key below. '
+                + 'the more work, the taller the piles. Piles as high as the top of the screen are their full hours; piles towering over it are more than their hours. The folder on top takes the colour in the key below. '
                 + 'The big desk at the front is the manager’s. A red flag on a desk is somebody who was over their hours in the last weeks '
                 + '(from the timesheets): they need a lighter week even if their pile ahead is small. '
                 + (next.moves.length ? 'Press "Show the suggested moves" to see who should hand what to whom.' : '')

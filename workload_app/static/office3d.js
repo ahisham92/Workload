@@ -1,8 +1,8 @@
 /* Selecao+ — the next two weeks as an office (WebGL).
  *
  * Each person sits at a desk with a computer. The paper piled on the desk is
- * the work they have lined up for the next two weeks: two full piles are a
- * full load, more piles are more than their hours. The folder on top of the
+ * the work they have lined up for the next two weeks: the more work, the
+ * taller the piles; at a full load they reach the top of the screen. The folder on top of the
  * piles takes the load's colour (blue room, green about right, amber heavy,
  * red over). The manager has the big desk at the head of the room. A red note
  * on a desk is somebody who has been over their hours in the last weeks (from
@@ -19,17 +19,19 @@ import {
 } from './load3d.js';
 
 const DESK_H = 0.74;      // desk top height
-const PILE = 0.36;        // one full pile of paper
-const PER_LOAD = 2;       // piles that make a full load
-const MAX_PILES = 4;      // twice a full load is as high as it is drawn
+const FULL = 0.55;        // each pile's height at a full load
+const MAX_LOAD = 3;       // three times a full load is as tall as it is drawn
+const MAX_PILES = 2;      // a pile each side of the computer
 const XG = 2.15;          // desk spacing across
 const ZG_WIDE = 2.3;      // desk spacing back to front
 const ZG_NARROW = 2.8;    // more on a phone, so the names fit between rows
 
-/** How tall each pile stands for a load: two full piles are a full load. */
+/** How tall each pile stands for a load: the more work, the taller the
+ *  tower of paper (Ahmed, 2026-10-12). At a full load both piles reach the
+ *  top of the screen; at twice a full load they stand well above it. */
 function piles(load) {
-  const total = Math.max(0, Math.min(load || 0, MAX_PILES / PER_LOAD)) * PER_LOAD * PILE;
-  return Array.from({ length: MAX_PILES }, (_, i) => Math.max(0, Math.min(PILE, total - i * PILE)));
+  const h = Math.max(0, Math.min(load || 0, MAX_LOAD)) * FULL;
+  return Array.from({ length: MAX_PILES }, () => h);
 }
 
 /** A CSS colour, var() included, as the browser resolves it. */
@@ -136,8 +138,8 @@ function desk(p, { width, depth, color, facing, big }) {
 function paper(p, group, width) {
   const sheet = mat(p.dark ? '#e7e3d8' : '#fbfaf5', { roughness: 0.92 });
   const edge = new THREE.LineBasicMaterial({ color: p.dark ? '#9a9486' : '#cfcabd' });
-  const spots = [-width / 2 + 0.3, -width / 2 + 0.6, width / 2 - 0.6, width / 2 - 0.3];
-  const order = [0, 3, 1, 2];               // left, right, then inwards
+  const spots = [-width / 2 + 0.32, width / 2 - 0.32];
+  const order = [0, 1];                     // left and right of the computer
   const stacks = order.map((k, i) => {
     const mesh = box(0.26, 1, 0.34, sheet);
     mesh.position.set(spots[k], DESK_H, (i % 2 ? 0.04 : -0.03));
@@ -309,7 +311,7 @@ export function render(host, model) {
     const da = desks[a]; const db = desks[b];
     const ha = pileTop(da, da.person.now); const hb = pileTop(db, db.person.after);
     const lift = Math.max(ha, hb) + 1.0 + k * 0.3;
-    const xa = da.at.x - da.width / 2 + 0.3; const xb = db.at.x - db.width / 2 + 0.3;
+    const xa = da.at.x - da.width / 2 + 0.32; const xb = db.at.x - db.width / 2 + 0.32;
     const curve = new THREE.CubicBezierCurve3(
       new THREE.Vector3(xa, ha, da.at.z), new THREE.Vector3(xa, lift, da.at.z),
       new THREE.Vector3(xb, lift, db.at.z), new THREE.Vector3(xb, hb + 0.25, db.at.z));
@@ -352,7 +354,7 @@ export function render(host, model) {
     }
   });
   const pcts = desks.map((d) => label(`${Math.round(d.person.now * 100)}%`,
-    new THREE.Vector3(d.at.x - d.width / 2 + 0.45, DESK_H + 0.1, d.at.z), 'scape3d-pct',
+    new THREE.Vector3(d.at.x - d.width / 2 + 0.32, DESK_H + 0.1, d.at.z), 'scape3d-pct',
     'translate(-50%, calc(-100% - 6px))'));
   const arcLabels = arcInfo.map((info) => {
     const a = label(info.label, info.mid, 'scape3d-move', 'translate(-50%, -50%)');
@@ -377,8 +379,8 @@ export function render(host, model) {
     }
     hull.push(new THREE.Vector3(x, 1.75, backZ));
   }
-  desks.forEach((d) => hull.push(new THREE.Vector3(d.at.x, DESK_H + 1.3, d.at.z)));
-  if (model.moves.length) desks.forEach((d) => hull.push(new THREE.Vector3(d.at.x, DESK_H + 2, d.at.z)));
+  desks.forEach((d) => hull.push(new THREE.Vector3(d.at.x, DESK_H + 0.2 + Math.max(...piles(Math.max(d.person.now, d.person.after))), d.at.z)));
+  if (model.moves.length) desks.forEach((d) => hull.push(new THREE.Vector3(d.at.x, DESK_H + 0.9 + Math.max(...piles(Math.max(d.person.now, d.person.after))), d.at.z)));
   const probe = new THREE.PerspectiveCamera();
   const tilt = narrow ? 0.82 : 0.95;
   const dir = new THREE.Vector3(Math.sin(0.18) * Math.sin(tilt), Math.cos(tilt), Math.cos(0.18) * Math.sin(tilt));
