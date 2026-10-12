@@ -20,7 +20,7 @@ import uuid
 import zipfile
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from . import budgets as budgets_module
 from . import bringin
@@ -1158,10 +1158,10 @@ class WorkloadService:
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
-        if not wb._setting("prep_by_allocation"):
+        if not wb._setting("prep_by_allocation_2"):
             # Once: run-ups still ahead take their allocated hours.
             wb.generate_submission_tasks(today=_today(), hours_left=self._hours_left(wb))
-            wb.mark_setting("prep_by_allocation")
+            wb.mark_setting("prep_by_allocation_2")
         index = self._index(wb)
         project_rows = metrics.project_rows(wb, index)
         drawn = self._drawings(wb, index, project_rows)
@@ -1315,6 +1315,20 @@ class WorkloadService:
                     "outlook": self._outlook(self.workbook, body or {})}
 
     @staticmethod
+    def _prep_hours(inputs: Dict[str, Any]) -> List[Tuple[str, str, _dt.date, float]]:
+        """Every person's submission preparation still ahead, day by day."""
+        today = _today()
+        out = []
+        for task in inputs["tasks"]:
+            if daily.is_prep_step(task) and not task.done and task.due \
+                    and task.due >= today:
+                # Nobody chosen yet: still work, for the team to find somebody.
+                for name in task.assignees or [""]:
+                    out.append((name, task.project_number, task.due,
+                                task.hours_for(name) if name else task.required_hours or 0.0))
+        return out
+
+    @staticmethod
     def _submitting(wb) -> Dict[str, _dt.date]:
         """Each job's last submission planned and not yet sent."""
         issues = wb.issues()
@@ -1353,7 +1367,8 @@ class WorkloadService:
                 planned=self.store.planned_work(),
                 team_names={t["id"]: t["name"] for t in self.store.teams()},
                 management=inputs["management"].taken_a_day(),
-                submitting=self._submitting(wb))
+                submitting=self._submitting(wb),
+                prep=self._prep_hours(inputs))
             data["drawings"] = {k: drawn[k] for k in
                                 ("known", "total", "done", "left", "progress",
                                  "hours_per_drawing", "drafting_hours_per_drawing",
@@ -2507,6 +2522,12 @@ class WorkloadService:
         budget."""
         hours_per_mm = wb.hours_per_man_month() or 0.0
         budgets = {p.number: p.budget_mm for p in wb.projects()}
+        # Only the team's own share of a job's budget is the team's to do.
+        try:
+            shares = {j["job_number"]: j["share"] for j in budgets_module._jobs(self)
+                      if j.get("share") is not None}
+        except Exception:                     # no budgets brought in yet
+            shares = {}
         weights = wb.weight_by_project()
         out: Dict[int, float] = {}
         for item in metrics.deliverable_rows(wb, self._index(wb)):
@@ -2514,7 +2535,8 @@ class WorkloadService:
             total = weights.get(item["project_number"]) or 0.0
             if not budget or not total or not item.get("phase_weight"):
                 continue
-            allocated = budget * hours_per_mm * item["phase_weight"] / total
+            allocated = (budget * shares.get(item["project_number"], 1.0)
+                         * hours_per_mm * item["phase_weight"] / total)
             out[item["row"]] = max(0.0, allocated - (item.get("actual_hours") or 0.0))
         return out
 

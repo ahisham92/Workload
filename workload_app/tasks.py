@@ -720,7 +720,12 @@ def generate_submissions(wb: Any, deliverables: Sequence[Dict[str, Any]], *,
         if left and due >= today:
             days = working_days(today, due, config) or days
             run_up = set(days)
-            a_day_total = float(left) / max(1, len(days))
+            # Never more than whole days for the people on it: what does not
+            # fit is the date or the budget to look at, not 50-hour days.
+            people_on = sum(1 for n in engineers
+                            if ((deliverable.get("shares") or {}).get(n) or 0) > 0)
+            a_day_total = min(float(left) / max(1, len(days)),
+                              hours_per_day(config) * max(1, people_on))
         stale = [t for t in existing
                  if t.series == series and not t.done and t.due not in run_up]
         if stale:
