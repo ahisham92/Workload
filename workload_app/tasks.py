@@ -204,6 +204,7 @@ def save_settings(source: Any, data: Dict[str, Any]) -> Dict[str, Any]:
         ("horizon_weeks", "The window", 1, 52),
         ("submission_lead_days", "The run-up to a deliverable", 1, 60),
         ("meeting_weeks", "The meeting series", 1, 104),
+        ("planned_share", "The part of the budget to plan on", 10, 100),
     ):
         if key in data and data[key] not in (None, ""):
             try:

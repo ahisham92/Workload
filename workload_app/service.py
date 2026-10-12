@@ -1158,10 +1158,10 @@ class WorkloadService:
 
     def _planning(self, wb) -> Dict[str, Any]:
         """What the planner and the forecast both start from."""
-        if not wb._setting("prep_by_allocation_2"):
+        if not wb._setting("prep_by_allocation_3"):
             # Once: run-ups still ahead take their allocated hours.
             wb.generate_submission_tasks(today=_today(), hours_left=self._hours_left(wb))
-            wb.mark_setting("prep_by_allocation_2")
+            wb.mark_setting("prep_by_allocation_3")
         index = self._index(wb)
         project_rows = metrics.project_rows(wb, index)
         drawn = self._drawings(wb, index, project_rows)
@@ -2529,6 +2529,9 @@ class WorkloadService:
         except Exception:                     # no budgets brought in yet
             shares = {}
         weights = wb.weight_by_project()
+        # Ahmed (2026-10-12): work is planned on part of the budget; the
+        # rest is kept for the client's comments and for profit.
+        planned_share = (wb.task_settings().get("planned_share") or 100) / 100.0
         out: Dict[int, float] = {}
         for item in metrics.deliverable_rows(wb, self._index(wb)):
             budget = budgets.get(item["project_number"])
@@ -2537,6 +2540,7 @@ class WorkloadService:
                 continue
             allocated = (budget * shares.get(item["project_number"], 1.0)
                          * hours_per_mm * item["phase_weight"] / total)
+            allocated *= planned_share
             out[item["row"]] = max(0.0, allocated - (item.get("actual_hours") or 0.0))
         return out
 
@@ -2791,7 +2795,12 @@ class WorkloadService:
 
     def save_task_settings(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            return self._saved({"settings": self.workbook.save_task_settings(body)})
+            wb = self.workbook
+            settings = wb.save_task_settings(body)
+            if "planned_share" in (body or {}):
+                # A new share re-plans the preparation still ahead.
+                wb.generate_submission_tasks(today=_today(), hours_left=self._hours_left(wb))
+            return self._saved({"settings": settings})
 
     def generate_submission_tasks(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:

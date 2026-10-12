@@ -290,6 +290,9 @@ TASK_DEFAULT_SETTINGS: Dict[str, object] = {
     #: working day (Ahmed: two hours for a submission in three days made no
     #: sense).
     "submission_hours_each": None,
+    #: Per cent of a deliverable's budget its preparation is planned on; the
+    #: rest is kept for comments and profit (Ahmed: work on 60%, leave 40).
+    "planned_share": 60,
     "meeting_hours": 1.0,
     "meeting_weekday": 0,
     "meeting_weeks": 12,
