@@ -2642,10 +2642,14 @@ class WorkloadService:
             days = sorted((t for t in wb.task_records() if t.series == series),
                           key=lambda t: t.due or today)
             ahead = [t for t in days if not t.done and t.due and t.due >= today]
+            left = self._hours_left(wb)
             return {
                 "today": register["today"], "item": item,
                 "engineers": wb.engineer_names(),
                 "prep": {
+                    "starts": iso(wb.work_starts().get(row)),
+                    "budget_left": (round(left[row], 1) if row in left else None),
+                    "planned_share": wb.task_settings().get("planned_share") or 100,
                     "people": list(ahead[0].assignees) if ahead else [],
                     "hours": (round(ahead[0].required_hours / max(1, len(ahead[0].assignees)), 2) if ahead and ahead[0].required_hours else None),
                     "days": [{"date": iso(t.due), "done": t.done,
@@ -2669,10 +2673,23 @@ class WorkloadService:
                 change["hours"] = float(body["hours"])
             except (TypeError, ValueError):
                 raise ValidationError(["Give the hours a day as a number."])
-        if not change:
+        starts = "starts" in body
+        start = None
+        if starts and body["starts"] not in (None, ""):
+            try:
+                start = _dt.date.fromisoformat(str(body["starts"]))
+            except ValueError:
+                raise ValidationError(["Give the day the work starts as a date."])
+        if not change and not starts:
             raise ValidationError(["Nothing to change."])
         with self._lock:
             wb = self.workbook
+            if starts:
+                # The run-up is spread again from that day.
+                wb.set_work_start(row, start)
+                self._plan_run_up(wb, row)
+                if not change:
+                    return {"starts": iso(start), "save": self._commit()}
             if "people" in change:
                 # Choosing who prepares a submission with no preparation
                 # days yet puts them on the days before it.
