@@ -24,6 +24,7 @@
 <link rel="stylesheet" href="look.css">
 <link rel="stylesheet" href="focus.css">
 <link rel="stylesheet" href="sheet.css">
+<link rel="stylesheet" href="video.css">
 </head>
 <body>
 <div id="voyage" class="voyage-veil" data-opening="Opening Selecao+"></div>
@@ -108,6 +109,7 @@
   <button class="tab" data-view="team" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>Team</span></button>
   <button class="tab" data-view="timesheets" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Timesheets</span></button>
   <button class="tab" data-view="bringin" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span>Bring in data</span></button>
+  <button class="tab" data-view="video" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg><span>Summary video</span></button>
   <button class="tab" data-view="guide" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><circle cx="12" cy="17.2" r=".6"/></svg><span>How to use</span></button>
   <button class="tab" data-view="reference" role="tab"><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/></svg><span>Scoring rules</span></button>
   <button class="tab" data-view="admin" id="tab-admin" role="tab" hidden><svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Accounts</span></button>
@@ -392,6 +394,17 @@
     <div id="bringin-body"><div class="empty">Working it out…</div></div>
   </section>
 
+  <!-- ---------------------------------------------------------- video -->
+  <section class="view" id="view-video">
+    <div class="view-head">
+      <div>
+        <h2>Summary video</h2>
+        <p class="muted">A short video of our week, of how we're doing, or both, made from the app's own results.</p>
+      </div>
+    </div>
+    <div id="video-body"></div>
+  </section>
+
   <!-- ---------------------------------------------------------- guide -->
   <section class="view" id="view-guide">
     <div class="view-head">
@@ -568,6 +581,7 @@
 <script src="dates.js"></script>
 <script src="sheet.js"></script>
 <script src="subs.js"></script>
+<script src="video.js"></script>
 <script src="pocket.js"></script>
 </body>
 </html>

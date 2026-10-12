@@ -2845,6 +2845,7 @@ function switchView(view) {
   if (view === 'growth' && window.growth) window.growth.load();
   if (view === 'budgets' && window.budgets) window.budgets.load();
   if (view === 'guide' && window.guide) window.guide.load();
+  if (view === 'video' && window.video) window.video.load();
   if (view === 'bringin' && window.bringin) window.bringin.load();
   if (view === 'team' && window.showcase) window.showcase.teamCards();
   for (const tab of $$('.tab')) tab.classList.toggle('is-active', tab.dataset.view === view);

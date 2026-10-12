@@ -42,6 +42,7 @@ from .timesheets import ParsedTimesheet
 from .model import ValidationError, iso, pattern_to_regex, today as _model_today
 from . import unit as unit_module
 from . import urgent as urgent_module
+from . import video as video_module
 from . import weekly as weekly_module
 from . import weekplan
 from .unit import Unit, outside_message
@@ -1489,6 +1490,24 @@ class WorkloadService:
                 config=inputs["config"], checkins=self.checkins(),
                 needs=self.needs(), submissions=self.submissions(),
                 rows=inputs["rows"], project_names=inputs["project_names"])
+
+    def video(self) -> Dict[str, Any]:
+        """What the summary video shows: the week ahead and the year so far,
+        from the figures the other tabs already work out."""
+        with self._lock:
+            wb = self.workbook
+            inputs = self._planning(wb)
+            today = _today()
+            checkins, needs, submissions = self.checkins(), self.needs(), self.submissions()
+            weekly = weekly_module.build(
+                unit_name=self._unit_name(), today=today,
+                config=inputs["config"], checkins=checkins, needs=needs,
+                submissions=submissions, rows=inputs["rows"],
+                project_names=inputs["project_names"])
+            return video_module.build(
+                unit_name=self._unit_name(), today=today, weekly=weekly,
+                checkins=checkins, needs=needs, submissions=submissions,
+                report=self.reports("year", None, None), budgets=self.budgets())
 
     def _agendas(self, inputs: Dict[str, Any], today: _dt.date,
                  saved: List[Dict[str, Any]], slots: Dict[int, Dict[str, Any]]):

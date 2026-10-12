@@ -46,9 +46,9 @@ def test_the_groups_match_the_pages_the_paths_keep():
         assert re.findall(r"'([a-z]+)'", found.group(1)) == rest
 
 
-def test_the_bar_holds_eight_tabs_plus_help_and_admin():
+def test_the_bar_holds_eight_tabs_plus_video_help_and_admin():
     sharing = {v for g in _groups() for v in g[1:]}
-    assert len(VIEWS - sharing - {"guide", "admin"}) == 8
+    assert len(VIEWS - sharing - {"video", "guide", "admin"}) == 8
 
 
 def test_every_tab_asks_a_question_and_answers_it():

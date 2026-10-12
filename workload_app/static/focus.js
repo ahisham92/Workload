@@ -58,6 +58,7 @@
     team: 'Who is on the team, and is everyone set up?',
     reference: 'What are the numbers measured against?',
     guide: 'Where do I start, and where do I find things?',
+    video: 'Can I see our week, and how we are doing, as a short video?',
   };
 
   /* -- the last reply to each read ---------------------------------------- */
@@ -208,6 +209,21 @@
         say: dayFirstText(data.headline),
         tone: (data.todo || []).some((t) => t.tone === 'bad') ? 'warn' : 'ok',
         next: first ? `Start with: ${dayFirstText(first.text)}` : 'Nothing to act on this week.',
+      };
+    },
+
+    video() {
+      const data = replies['/api/video'];
+      if (!data || !data.week) return null;
+      const late = (data.week.due || {}).late || 0;
+      const busy = (data.doing || {}).busy;
+      const parts = [];
+      if (late) parts.push(`${late} late submission${late === 1 ? '' : 's'}`);
+      if (busy !== null && busy !== undefined) parts.push(`${pct(busy)} busy on real work`);
+      return {
+        say: `A short video of ${data.week.title ? dayFirstText(data.week.title.replace(/^Week/, 'the week')) : 'this week'}${parts.length ? `: ${parts.join(', ')}, and more` : ''}, drawn from the team's own figures.`,
+        tone: 'ok',
+        next: 'Pick Our week, How we\'re doing or Both, then Make the video. It plays here, then you can save it or share it.',
       };
     },
 

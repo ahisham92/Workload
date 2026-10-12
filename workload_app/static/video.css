@@ -1,0 +1,45 @@
+/* Selecao+ — the summary video (video.js). */
+
+.vd-pick, .vd-panel { max-width: 980px; margin-left: auto; margin-right: auto; }
+.vd-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 10px 0 14px; }
+.vd-choice {
+  appearance: none; font: inherit; cursor: pointer; text-align: left; color: var(--text);
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
+  border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2);
+  transition: border-color .15s, transform .15s;
+}
+.vd-choice:hover, .vd-choice:focus-visible { border-color: var(--accent); transform: translateY(-1px); }
+.vd-choice.is-on {
+  color: #fff; border-color: transparent;
+  background: linear-gradient(120deg, var(--navy, #101B2D) 0%, var(--navy-2, #1a2a45) 100%);
+  box-shadow: inset 0 -3px 0 #FF5A1F;
+}
+.vd-choice-title { font-weight: 700; font-size: 1.05rem; }
+.vd-choice-say { font-size: .88rem; opacity: .8; }
+.vd-shapes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+.vd-stage {
+  display: grid; place-items: center; padding: 12px; border-radius: var(--radius);
+  background: radial-gradient(circle at 30% 20%, #1f3357 0%, #0b1322 75%);
+}
+.vd-canvas, .vd-player { display: block; border-radius: 14px; box-shadow: 0 18px 40px -18px rgba(0, 0, 0, .7); background: #101B2D; }
+.vd-stage[data-shape="tall"] .vd-canvas, .vd-stage[data-shape="tall"] .vd-player {
+  height: min(72vh, 760px); width: auto; aspect-ratio: 9 / 16; max-width: 100%;
+}
+.vd-stage[data-shape="wide"] .vd-canvas, .vd-stage[data-shape="wide"] .vd-player {
+  width: 100%; height: auto; aspect-ratio: 16 / 9;
+}
+.vd-canvas[hidden], .vd-player[hidden] { display: none; }
+.vd-controls { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; text-align: center; }
+.vd-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.vd-progress { width: min(420px, 100%); height: 8px; accent-color: #FF5A1F; }
+.vd-note { margin: 0; max-width: 62ch; font-size: .9rem; }
+
+/* On a phone the three choices sit side by side, titles only. */
+@media (max-width: 640px) {
+  .vd-choices { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .vd-choice { padding: 10px 8px; text-align: center; align-items: center; }
+  .vd-choice-title { font-size: .92rem; }
+  .vd-choice-say { display: none; }
+  .vd-stage { padding: 8px; }
+}

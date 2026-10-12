@@ -20,6 +20,7 @@
     growth: 'workload',
     bringin: 'setup', timesheets: 'setup', team: 'setup', reference: 'setup',
     guide: 'setup', admin: 'setup', paths: 'setup',
+    video: 'workload',
   };
   const NAME = {
     plan: 'Plan the week', workload: 'See how we\'re doing', setup: 'Set up',

@@ -39,3 +39,19 @@
 .path-card-tabs { font-size: .82rem; color: var(--accent); font-weight: 600; }
 .path-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
 .path-skip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .9rem; }
+
+/* The summary video, one tap from the start page (video.js). */
+.path-video {
+  appearance: none; font: inherit; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 14px; width: 100%; margin-top: 14px;
+  padding: 14px 18px; border-radius: var(--radius); border: 0; color: #fff;
+  background: linear-gradient(110deg, var(--navy, #101B2D) 0%, var(--navy-2, #1a2a45) 70%, #3a2a3a 100%);
+  box-shadow: var(--shadow);
+}
+.path-video:hover, .path-video:focus-visible { transform: translateY(-2px); }
+.path-video-play {
+  flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: #FF5A1F; color: #fff; font-size: 1.05rem; padding-left: 3px;
+}
+.path-video-text { display: flex; flex-direction: column; gap: 2px; }
+.path-video-text span { opacity: .78; font-size: .9rem; }
