@@ -11,7 +11,7 @@
 /** The three steps, the same on every page. */
 function calendarSteps() {
   return el('ol', { class: 'cal-steps' },
-    el('li', {}, 'Open Outlook on the web (outlook.office.com), then Settings ⚙, Calendar, Shared calendars.'),
+    el('li', {}, 'Open Outlook on the web (outlook.office.com), then Settings (the gear), Calendar, Shared calendars.'),
     el('li', {}, 'Under "Publish a calendar" pick your Calendar and "Can view when I\'m busy", then Publish.'),
     el('li', {}, 'Copy the ICS link (ends in .ics) and paste it here. Done once.'));
 }
@@ -105,7 +105,7 @@ function meetingForm({ day, people = [], ticked = [], add }) {
 function meetingList(meetings, { remove, canRemove = () => true, showPeople = true }) {
   if (!meetings.length) return el('p', { class: 'muted small' }, 'No meetings put in yet.');
   return el('ul', { class: 'request-list' }, meetings.map((m) => el('li', { class: 'request meet-item' },
-    el('span', { class: 'request-time' }, `${dateText(m.next)} ${m.start}–${m.end}`),
+    el('span', { class: 'request-time' }, `${dateText(m.next)} ${m.start} to ${m.end}`),
     el('span', { class: 'request-what' },
       el('span', { class: `pill meet-${m.kind}` }, MEETING_KIND[m.kind] || m.kind), ' ',
       el('b', {}, m.title || 'Meeting'),

@@ -229,9 +229,9 @@
             node.data.number.split('-')[0]));
         }
         group.appendChild(svgEl('title', {},
-          `${node.data.number} — ${node.data.name}\n`
+          `${node.data.number} · ${node.data.name}\n`
           + `${node.data.remaining_mm} MM left of ${node.data.budget_mm}\n`
-          + `${node.data.recent_hours} h recently — `
+          + `${node.data.recent_hours} h recently, `
           + `${STATE_WORD[state] || ''}`));
         node.el = group;
         circles.appendChild(group);
@@ -247,7 +247,7 @@
         group.appendChild(svgEl('text', { class: 'map-who', y: PERSON_R + 12 },
           shortName(node.data.name)));
         group.appendChild(svgEl('title', {},
-          `${node.data.name} — ${node.data.grade_label}`
+          `${node.data.name} · ${node.data.grade_label}`
           + `${node.data.team_name ? `, ${node.data.team_name}` : ''}\n`
           + `on ${node.data.projects.length} project(s): `
           + node.data.projects.join(', ')));

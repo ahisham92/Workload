@@ -1,0 +1,325 @@
+/* Selecao+ — polish.css: the finishing pass (16 Oct). Loaded last.
+ *
+ * One pass over every tab against a design checklist (plugin87's
+ * ux-ui-agent-skills, read as advice):
+ *  - one thing leads: each tab's title and answer are clearly the biggest
+ *    thing on it, and the first card of a row (the most pressing) stands out;
+ *  - no coloured edge on one side of a box: a box in a colour has a thin line
+ *    in that colour all round and a faint wash, and its words say the rest;
+ *  - every button, tab and link shows hover, press and keyboard focus;
+ *  - nothing to tap smaller than 24 px, bigger on a phone;
+ *  - drop-downs drawn as the app's own list (pick.js), never a white box;
+ *  - figures line up (tabular numbers), titles wrap evenly, lines stay
+ *    readable, and nothing moves for people who asked their phone for less
+ *    motion.
+ * Nothing here changes a number or what a screen holds. */
+
+:root {
+  --ring: 0 0 0 2px var(--surface-base, #fff), 0 0 0 4px var(--tone, var(--accent));
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --fast: .14s;
+  --hair: color-mix(in srgb, var(--tone, var(--accent)) 28%, var(--border));
+}
+
+/* ------------------------------------------------------ one thing leads */
+/* The tab's title is the largest type on the page, 2.5x the body or more. */
+.view[data-tone] .view-head h2, .view[data-tone] .report-head h2 {
+  font-size: clamp(28px, 1.4vw + 18px, 38px); line-height: 1.08; letter-spacing: -.025em;
+  text-wrap: balance;
+}
+.view[data-tone] .view-head .vh-question, .view[data-tone] .report-head .vh-question {
+  font-size: clamp(15px, .3vw + 13px, 17px);
+}
+/* The answer is the first place the eye lands under the title. */
+.answer { padding: 16px 22px; gap: 16px; border-radius: 16px; }
+.answer-say { font-size: clamp(1.08rem, .5vw + .95rem, 1.32rem); line-height: 1.3; letter-spacing: -.01em; text-wrap: pretty; }
+@media (max-width: 640px) {
+  .answer { padding: 12px 14px; }
+  .answer-say { font-size: 1.04rem; }
+  .view[data-tone] .view-head h2, .view[data-tone] .report-head h2 { font-size: 26px; }
+}
+.answer-next { font-size: .95rem; text-wrap: pretty; }
+.answer-dot { width: 16px; height: 16px; }
+/* The first card in a row is the most pressing one: it carries the colour. */
+.view[data-tone] .card-row > :first-child:not(:only-child) {
+  background: color-mix(in srgb, var(--tone) 13%, var(--surface-base));
+  border-color: color-mix(in srgb, var(--tone) 45%, var(--border));
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 14px 30px -16px color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+/* ------------------------------------------ no coloured edge on one side */
+/* Panels: a thin line in the tab's colour all round, not a stripe on top;
+   the title is marked by a small dot, not a bar. */
+.view[data-tone] .panel {
+  border: 1px solid var(--hair);
+  background:
+    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--tone-2) 10%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 11%, var(--surface-base)) 0,
+      color-mix(in srgb, var(--tone) 6%, var(--surface-base)) 100%);
+}
+.view[data-tone] .panel > h3::before, .view[data-tone] .panel > .dl-head > h3::before,
+.view[data-tone] .panel > div:first-child > h3:first-child::before {
+  width: 8px; height: 8px; border-radius: 50%; margin-right: 9px; vertical-align: 2px;
+  background: linear-gradient(135deg, var(--tone), var(--tone-2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 18%, transparent);
+}
+.view[data-tone] .hg-holder .panel { border: 0; }
+.card::before, .view[data-tone] .card::before { display: none; }
+.view[data-tone] .card { border: 1px solid var(--hair); }
+
+/* Boxes that used a coloured stripe for their state: the same colour, all round. */
+.toast, .stat, .hero, .finding, .quick-add, .request, .holiday-prompt, .list-proposals,
+.ci-card, .ci-sum, .bi-start, .bu-detail, .gr-todo-item, .gr-person, .pm-tile, .wk-head,
+.wk-todo li, .pf-point, .idea, .day-card.is-over {
+  --edge: var(--tone, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--edge) 42%, var(--border)) !important;
+}
+.finding, .gr-todo-item, .pm-tile, .wk-todo li { --edge: var(--muted); }
+.hero { --edge: var(--series-4); }
+.hero.hero-year { --edge: var(--series-2); }
+.hero.hero-project { --edge: var(--series-1); }
+.idea { --edge: var(--c, var(--accent)); }
+.gr-person { --edge: var(--pc, var(--accent)); }
+.toast.bad, .stat-bad, .finding-bad, .request.is-late, .ci-card.ci-rest, .ci-sum-bad,
+.gr-todo-item.gr-bad, .pm-bad, .wk-todo li.wk-bad, .pf-now, .day-card.is-over { --edge: var(--bad); }
+.toast.warn, .stat-warn, .finding-warn, .ci-card.ci-busy, .ci-sum-warn,
+.gr-todo-item.gr-warn, .pf-soon, .wk-todo li.wk-warn { --edge: var(--warn); }
+.pm-warn { --edge: var(--series-4); }
+.toast.ok, .stat-ok, .finding-ok, .request.is-done, .ci-card.ci-fresh, .ci-sum-ok,
+.pm-ok, .wk-todo li.wk-ok { --edge: var(--ok); }
+.gr-todo-item.gr-info { --edge: var(--accent); }
+/* A box with a state gets a faint wash in its colour too. */
+.stat-bad, .stat-warn, .stat-ok, .finding-bad, .finding-warn, .finding-ok,
+.request.is-late, .ci-card.ci-rest, .ci-card.ci-busy, .ci-card.ci-fresh,
+.ci-sum-bad, .ci-sum-warn, .ci-sum-ok, .gr-todo-item.gr-bad, .gr-todo-item.gr-warn,
+.pm-bad, .pm-warn, .pm-ok, .wk-todo li.wk-bad, .wk-todo li.wk-warn, .wk-todo li.wk-ok,
+.pf-now, .pf-soon, .toast.bad, .toast.warn, .toast.ok {
+  background-color: color-mix(in srgb, var(--edge) 7%, var(--surface));
+}
+.day-card.is-over {
+  background: color-mix(in srgb, var(--bad) 4%, var(--surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bad) 18%, transparent), var(--lift, var(--shadow));
+}
+.quick-add { background: color-mix(in srgb, var(--tone, var(--accent)) 8%, var(--surface-base)); border-radius: 14px; }
+
+/* ------------------------------------------------ buttons in every state */
+/* Plain buttons: no white fill. A thin line in the tab's colour over the
+   panel; a wash on hover; pressed, they sink a little. */
+.view[data-tone] .btn:not(.btn-primary):not(.btn-danger) {
+  background: color-mix(in srgb, var(--tone) 5%, transparent);
+  border-color: var(--hair); color: var(--text);
+}
+.view[data-tone] .btn:not(.btn-primary):not(.btn-danger):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tone) 13%, transparent);
+  border-color: color-mix(in srgb, var(--tone) 55%, var(--border));
+}
+.view[data-tone] :is(.view-head, .report-head) .btn:not(.btn-primary):not(.btn-danger) {
+  background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .24); color: #fff;
+}
+.view[data-tone] :is(.view-head, .report-head) .btn:not(.btn-primary):not(.btn-danger):hover:not(:disabled) {
+  background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .4);
+}
+.view[data-tone] .btn-danger { background: transparent; border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); }
+.view[data-tone] .btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.btn, .tab, .subtab, .path-chip, .vh-page, .fold-more, .path-card, .pick, .thumb-bar button, .stat, .pm-tile {
+  transition: background-color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out),
+    color var(--fast) var(--ease-out), box-shadow var(--fast) var(--ease-out), transform var(--fast) var(--ease-out);
+}
+.btn:active:not(:disabled), .subtab:active, .path-chip:active, .vh-page:active, .fold-more:active,
+.pick:active:not(:disabled), .thumb-bar button:active, .stat:active:not(:disabled) { transform: translateY(1px) scale(.98); }
+.path-card:active, .pm-tile:active { transform: scale(.985); }
+.btn:disabled, .pick:disabled { opacity: .5; cursor: not-allowed; }
+.btn[aria-busy="true"] { cursor: progress; }
+
+/* Keyboard focus: one clear ring in the tab's colour, on everything. */
+:focus { outline: none; }
+:focus-visible { outline: none; box-shadow: var(--ring); }
+.btn:focus-visible, .pick:focus-visible, .path-chip:focus-visible, .subtab:focus-visible, .vh-page:focus-visible,
+.tab:focus-visible, .fold-more:focus-visible, .path-card:focus-visible, .stat:focus-visible, .pm-tile:focus-visible,
+summary:focus-visible, .why-btn:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: none; box-shadow: var(--ring);
+}
+input:not(table.gsheet *):focus, textarea:not(table.gsheet *):focus {
+  outline: none; box-shadow: var(--ring); border-color: var(--tone, var(--accent));
+}
+th.auto-sort:focus-visible, .block.is-tappable:focus-visible { outline: 2px solid var(--tone, var(--accent)); outline-offset: -2px; box-shadow: none; }
+
+/* --------------------------------------------- inputs: tinted, not white */
+.view[data-tone] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not(table.gsheet *),
+.view[data-tone] textarea:not(table.gsheet *) {
+  background-color: color-mix(in srgb, var(--tone) 5%, var(--surface-base));
+  border-color: var(--hair);
+}
+.view[data-tone] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover:not(:focus):not(:disabled),
+.view[data-tone] textarea:hover:not(:focus):not(:disabled) { border-color: color-mix(in srgb, var(--tone) 50%, var(--border)); }
+.view[data-tone] .view-head input, .view[data-tone] .report-head input {
+  background-color: rgba(255, 255, 255, .95); border-color: transparent;
+}
+/* Pop-up forms: the same tinted boxes, on a card in the tab's colour. */
+body[data-tone] .modal {
+  background: color-mix(in srgb, var(--tone) 4%, var(--surface-base)); border-color: var(--hair);
+  border-radius: 18px;
+}
+body[data-tone] .modal :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), textarea) {
+  background-color: color-mix(in srgb, var(--tone) 6%, var(--surface-base)); border-color: var(--hair);
+}
+body[data-tone] .modal .btn:not(.btn-primary):not(.btn-danger) {
+  background: color-mix(in srgb, var(--tone) 5%, transparent); border-color: var(--hair);
+}
+body[data-tone] .modal .btn-primary {
+  background: linear-gradient(120deg, var(--tone), color-mix(in srgb, var(--tone) 70%, var(--tone-2))); border-color: transparent;
+}
+input[aria-invalid="true"], textarea[aria-invalid="true"], input.is-bad {
+  border-color: var(--bad) !important; background-color: color-mix(in srgb, var(--bad) 6%, var(--surface)) !important;
+}
+input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 88%, transparent); }
+input[type="checkbox"], input[type="radio"] {
+  width: 18px; height: 18px; margin: 3px; accent-color: var(--tone, var(--accent)); cursor: pointer; vertical-align: -4px;
+}
+input[type="range"] { accent-color: var(--tone, var(--accent)); }
+
+/* ------------------------------------------------ the app's own drop-down */
+select.pick-native {
+  position: absolute !important; width: 1px !important; height: 1px !important; min-width: 0 !important;
+  padding: 0 !important; margin: 0 !important; border: 0 !important; opacity: 0 !important;
+  pointer-events: none !important; clip-path: inset(50%) !important; overflow: hidden !important;
+}
+.pick {
+  appearance: none; font: inherit; color: var(--text); cursor: pointer; text-align: left;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-width: 0; max-width: 100%; min-height: 36px; padding: 6px 10px 6px 12px;
+  border-radius: var(--radius); border: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--tone, var(--accent)) 6%, var(--surface-base, var(--surface)));
+}
+.pick:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tone, var(--accent)) 55%, var(--border));
+  background: color-mix(in srgb, var(--tone, var(--accent)) 11%, var(--surface-base, var(--surface)));
+}
+.pick[aria-expanded="true"] { border-color: var(--tone, var(--accent)); box-shadow: var(--ring); }
+/* Every choice stacked out of sight, so the button is as wide as the longest. */
+.pick-face { display: inline-grid; min-width: 0; flex: 1 1 auto; }
+.pick-sizer, .pick-text { grid-area: 1 / 1; }
+.pick-sizer { display: grid; visibility: hidden; height: 0; overflow: hidden; }
+.pick-sizer > span { grid-area: 1 / 1; white-space: nowrap; }
+.pick-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-chev {
+  flex: none; width: 22px; height: 22px; display: grid; place-items: center; margin-right: -2px;
+  border-radius: 6px; color: var(--tone-ink, var(--accent));
+  background: color-mix(in srgb, var(--tone, var(--accent)) 12%, transparent);
+  transition: transform var(--fast) var(--ease-out);
+}
+.pick-chev svg, .pick-tick svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.pick[aria-expanded="true"] .pick-chev { transform: rotate(180deg); }
+/* Where a drop-down filled its row, its button does too. */
+.field > .pick, .form-grid .pick, .sub-field .pick, .modal-body .field > .pick,
+.step-body .pick, .meet-form .pick { width: 100%; }
+.edit-table .pick { min-width: 120px; min-height: 32px; padding: 4px 8px; font-size: 12.5px; }
+.subs-table td.sub-purpose .pick { min-width: 74px; }
+.subs-table td.sub-code .pick { min-width: 132px; }
+.quick-add-options .pick { max-width: 210px; }
+.quick-add .pick { min-height: 40px; }
+@media (max-width: 700px) { .quick-add-options .pick { flex: 1 1 45%; max-width: none; } }
+.view[data-tone] .view-head .field > span, .view[data-tone] .report-head .field > span { white-space: nowrap; }
+/* On the navy banner: a light chip, as the drop-down was. */
+.view[data-tone] .view-head .pick, .view[data-tone] .report-head .pick {
+  background: rgba(255, 255, 255, .95); border-color: transparent; color: var(--navy);
+}
+.view[data-tone] .view-head .pick:hover, .view[data-tone] .report-head .pick:hover { background: #fff; }
+.view[data-tone] .view-head .pick-chev, .view[data-tone] .report-head .pick-chev { color: var(--tone); }
+
+.pick-scrim { position: fixed; inset: 0; z-index: 90; }
+.pick-pop {
+  position: fixed; z-index: 91; display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 14px; border: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--tone, var(--accent)) 5%, var(--surface-base, var(--surface)));
+  box-shadow: 0 2px 6px rgba(16, 24, 40, .08), 0 22px 48px -18px rgba(16, 24, 40, .45);
+  animation: pick-in .16s var(--ease-out);
+}
+.pick-list { overflow-y: auto; overscroll-behavior: contain; padding: 6px; outline: none; }
+.pick-list:focus-visible { box-shadow: none; }
+.pick-opt {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 10px 7px 6px;
+  border-radius: 9px; cursor: pointer; line-height: 1.3;
+}
+.pick-opt.is-on { background: color-mix(in srgb, var(--tone, var(--accent)) 12%, transparent); }
+.pick-opt[aria-selected="true"] { font-weight: 600; color: var(--tone-ink, var(--accent)); }
+.pick-opt[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.pick-tick { flex: none; width: 18px; display: grid; place-items: center; visibility: hidden; }
+.pick-opt[aria-selected="true"] .pick-tick { visibility: visible; }
+.pick-group {
+  padding: 10px 10px 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.pick-title { padding: 14px 18px 6px; font-weight: 700; font-size: 15px; }
+/* On a phone: a sheet from the bottom, with room for a thumb. */
+.pick-pop.is-sheet {
+  left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); top: auto;
+  max-height: min(70vh, 520px); border-radius: 22px;
+  animation: pick-up .22s var(--ease-out);
+}
+.pick-pop.is-sheet::before {
+  content: ""; flex: none; align-self: center; width: 38px; height: 4px; margin-top: 8px;
+  border-radius: 4px; background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.pick-pop.is-sheet .pick-list { padding: 4px 8px 10px; }
+.pick-pop.is-sheet .pick-opt { min-height: 46px; font-size: 16px; padding: 10px 12px 10px 8px; }
+.pick-pop.is-sheet + .pick-scrim, .pick-scrim:has(+ .pick-pop.is-sheet) { background: rgba(10, 16, 28, .38); }
+@keyframes pick-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes pick-up { from { transform: translateY(24px); opacity: 0; } }
+
+/* ------------------------------------------------------- room for fingers */
+.why-btn { width: 18px; height: 18px; font-size: 11px; position: relative; }
+.why-btn::after { content: ''; position: absolute; inset: -4px; }
+summary { min-height: 24px; padding-block: 3px; cursor: pointer; }
+@media (pointer: coarse) {
+  .btn { min-height: 40px; }
+  .btn-sm { min-height: 34px; }
+  .pick { min-height: 42px; }
+  .path-chip, .subtab, .vh-page { min-height: 36px; }
+  .why-btn::after { inset: -12px; }
+  summary { min-height: 32px; display: list-item; }
+  input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; }
+}
+
+/* ------------------------------------------------- type that reads easily */
+td, th, .value, .num, .pill, .card .value, .score-value, .pc-stat-value, .bu-bar-value,
+.wk-bar-value, .pm-cpi, .ci-cell, .answer-say, .dl-value, .kpi, .plan-date, time { font-variant-numeric: tabular-nums; }
+.view h3, .panel-head h3, .card-head, .step-title, .path-card-title { text-wrap: balance; }
+.view p, .muted, .answer-next, .step-hint { text-wrap: pretty; }
+.view[data-tone] .panel p, .view[data-tone] .panel .muted { max-width: 72ch; }
+::selection { background: color-mix(in srgb, var(--tone, var(--accent)) 28%, transparent); }
+
+/* The badges on Reports' top strip: drawn icons in the box's colour. */
+.hero .medal {
+  width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center;
+  color: var(--edge); background: color-mix(in srgb, var(--edge) 14%, transparent);
+}
+.hero .medal svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* The rank in a ranking: a medal-coloured disc, not a picture. */
+.rank-medal {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  font-size: 12px; font-weight: 800; color: #3b2a00; margin-right: 6px; vertical-align: 1px;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .14), 0 1px 2px rgba(16, 24, 40, .2);
+}
+.rank-1 { background: linear-gradient(135deg, #ffe08a, #e0a924); }
+.rank-2 { background: linear-gradient(135deg, #eef1f5, #a9b2bf); color: #26303d; }
+.rank-3 { background: linear-gradient(135deg, #f3c39a, #b8743f); color: #3a1f08; }
+.path-video-play svg, .ico-inline svg { width: 18px; height: 18px; fill: currentColor; }
+.path-video-play { padding-left: 0; }
+.ico-inline { display: inline-grid; vertical-align: -3px; margin-right: 4px; }
+.ico-inline svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; width: 15px; height: 15px; }
+
+/* ------------------------------------------------ less motion, if asked */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+  .btn:active, .subtab:active, .path-chip:active, .pick:active, .path-card:active, .pm-tile:active,
+  .path-card:hover, .pm-tile:hover, .path-video:hover { transform: none !important; }
+}
+@media print {
+  .pick { border: 0; background: none; padding: 0; }
+  .pick-chev { display: none; }
+}

@@ -346,7 +346,7 @@ async function reloadNeeds() {
 
 const COMING_STATUS = {
   'waiting': ['warn', 'starts later'], 'due to start': ['warn', 'nobody booking yet'],
-  'started': ['ok', 'being booked'], 'used up': ['muted', 'hours used up — at its pace now'],
+  'started': ['ok', 'being booked'], 'used up': ['muted', 'hours used up, at its pace now'],
   'taken over': ['muted', 'on its own figures now'],
 };
 
@@ -400,7 +400,7 @@ function workComing(needs) {
     coming.length ? el('ul', { class: 'request-list' }, coming.map((c) => {
       const [tone, text] = COMING_STATUS[c.status] || ['muted', c.status];
       return el('li', { class: 'request' },
-        el('span', { class: 'request-time' }, `${shortDate(c.start)} – ${shortDate(c.end)}`),
+        el('span', { class: 'request-time' }, `${shortDate(c.start)} to ${shortDate(c.end)}`),
         el('span', { class: 'request-what' }, el('b', {}, c.name),
           el('span', { class: 'muted small' }, [c.job_number && c.job_number !== c.name ? c.job_number : '',
             c.team_name, `${fmt.hours(c.hours)} h`, c.booked ? `${fmt.hours(c.booked)} h booked` : '']
@@ -572,7 +572,7 @@ function openHandover(person, item) {
     { name: 'what', label: 'What', type: 'select', options: what, full: true },
     { name: 'to', label: 'To', type: 'select', full: true, options: others.map((p) => ({
       value: p.name,
-      label: `${p.name} — ${fmt.pct0(p.after.load)} loaded${p.team_name ? `, ${p.team_name}` : ''}`
+      label: `${p.name} · ${fmt.pct0(p.after.load)} loaded${p.team_name ? `, ${p.team_name}` : ''}`
         + (p.role !== person.role ? ` (${(ROLE_LABEL[p.role] || '').toLowerCase().replace(/s$/, '')})` : ''),
     })) },
     { name: 'share', label: 'How much of it', type: 'select', hint: 'for a share of their time',
@@ -1148,7 +1148,7 @@ function weekText(days) {
   const sorted = order.filter((d) => days.includes(d));
   const startsSunday = days.includes(6) && !days.includes(5);
   const list = startsSunday ? sorted : sorted.filter((d) => d !== 6).concat(days.includes(6) ? [6] : []);
-  return `${WEEKDAY[list[0]]}–${WEEKDAY[list[list.length - 1]]}`;
+  return `${WEEKDAY[list[0]]} to ${WEEKDAY[list[list.length - 1]]}`;
 }
 
 async function saveHolidays(body, message) {
@@ -1223,7 +1223,7 @@ function holidayPrompt(data) {
 
 
 function awayWhen(a) {
-  return a.start === a.end ? shortDate(a.start) : `${shortDate(a.start)} – ${shortDate(a.end)}`;
+  return a.start === a.end ? shortDate(a.start) : `${shortDate(a.start)} to ${shortDate(a.end)}`;
 }
 
 function awayText(a) {
@@ -1334,7 +1334,7 @@ function quickAdd(data) {
       const result = await api('/api/requests', { method: 'POST', body: bodyOf(extra) });
       if (result.save) markSaved(result.save);
       toast(`${result.person}, ${slotText(result.start, result.end)}`
-        + (result.late ? ' — later than wanted' : ''), result.late ? 'bad' : 'ok');
+        + (result.late ? ', later than wanted' : ''), result.late ? 'bad' : 'ok');
       title.value = '';
       plan.needs = null;
       if (state.tasks) state.tasks = null;
@@ -1430,7 +1430,7 @@ function slotText(start, end) {
   if (!start) return '';
   const sameDay = start.slice(0, 10) === end.slice(0, 10);
   const day = start.slice(0, 10) === isoDay(new Date()) ? '' : `${shortDate(start.slice(0, 10))} `;
-  return `${day}${start.slice(11, 16)}–${sameDay ? '' : `${shortDate(end.slice(0, 10))} `}${end.slice(11, 16)}`;
+  return `${day}${start.slice(11, 16)} to ${sameDay ? '' : `${shortDate(end.slice(0, 10))} `}${end.slice(11, 16)}`;
 }
 
 function requestList(data) {
@@ -1523,7 +1523,7 @@ function weekTable(data, shown) {
 
 /** The plan as plain text: what Share sends and Print prints. */
 function dayText(data) {
-  const unit = data.unit ? ` — ${data.unit}` : '';
+  const unit = data.unit ? `, ${data.unit}` : '';
   const lines = [];
   for (const day of data.days) {
     lines.push(`${dateText(day.date)}${unit}`);
@@ -1534,7 +1534,7 @@ function dayText(data) {
       if (!inChosenTeam(p, data)) continue;
       if (p.away || (!p.blocks.length && !p.over_hours)) continue;
       lines.push(`${p.name}${p.team_name ? ` (${p.team_name})` : ''}`
-        + (p.over_hours ? ` — ${fmt.hours(p.over_hours)} h more than the day holds` : ''));
+        + (p.over_hours ? `, ${fmt.hours(p.over_hours)} h more than the day holds` : ''));
       for (const b of p.blocks) {
         lines.push(`  ${b.start}–${b.end}  ${KIND_LABEL[b.kind] ? `${KIND_LABEL[b.kind]}: ` : ''}`
           + `${b.project && b.title !== b.project ? `${b.project} ` : ''}${b.title}`);
@@ -1774,7 +1774,7 @@ function proposalsBlock(proposals, after) {
       } }, 'Apply')),
     el('ul', { class: 'plain-list' }, proposals.map((p) => el('li', {},
       el('span', { class: 'code' }, `${p.project_number} `), el('b', {}, p.name), ': ',
-      changeText(p.change), el('span', { class: 'muted small' }, ` — ${p.why}`)))));
+      changeText(p.change), el('span', { class: 'muted small' }, `, ${p.why}`)))));
 }
 
 /** Projects > Drawing list: the template, the upload, and what it changed. */
@@ -1819,7 +1819,7 @@ function openDrawingList() {
     input.value = '';
   });
   openPanel('Drawing list', el('div', { class: 'drawing-list' },
-    el('p', {}, 'Upload the drawing list the team keeps — one row a drawing — and each deliverable\'s drawing count, '
+    el('p', {}, 'Upload the drawing list the team keeps, one row a drawing, and each deliverable\'s drawing count, '
       + 'how many have gone to the client and the codes that came back are read from it. '
       + 'Any list with headings like Job Number, Drawing No., Status, Issued and Code will do.'),
     el('div', { class: 'row' },

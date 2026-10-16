@@ -187,7 +187,7 @@ function donut(data, { title, note, unit = 'MM', size = 190, digits = 2 } = {}) 
 
   const items = shown.map((row, i) => ({
     color: colorOf(row, i),
-    label: `${row.label} — ${row.value.toFixed(digits)} (${((row.value / total) * 100 || 0).toFixed(0)}%)`,
+    label: `${row.label} · ${row.value.toFixed(digits)} (${((row.value / total) * 100 || 0).toFixed(0)}%)`,
   }));
   return figure(title, note, htmlNode('div', 'donut-wrap', svg, legend(items)));
 }
