@@ -446,7 +446,7 @@ function openLinkModal() {
     closeModal();
     state.me = result.user;
     toast(result.linked
-      ? `Done — ${result.units} unit${result.units === 1 ? '' : 's'} brought across.`
+      ? `Done: ${result.units} unit${result.units === 1 ? '' : 's'} brought across.`
       : 'That is already the account you are in.', 'ok');
     await renderChooser();
   });
@@ -454,11 +454,11 @@ function openLinkModal() {
 
 function openAccountModal() {
   const me = state.me || {};
-  openModal(`Account — ${me.display_name || me.username}`, [
+  openModal(`Account · ${me.display_name || me.username}`, [
     { name: 'current_password', label: 'Current password', type: 'password',
       full: true },
     { name: 'new_password', label: 'New password', type: 'password', full: true,
-      hint: 'at least 10 characters — and one an administrator of this app may '
+      hint: 'at least 10 characters, and one an administrator of this app may '
         + 'read, so never a password you use anywhere else' },
     { name: 'again', label: 'New password again', type: 'password', full: true },
   ], async () => {
@@ -560,7 +560,7 @@ function renderMap() {
         + 'ones shrink away. Its colour is whether the effort going in matches '
         + 'the work left. A person sits between the projects they charge to, '
         + 'and '
-        + 'projects that share people pull together — so somebody on two of '
+        + 'projects that share people pull together, so somebody on two of '
         + 'them ends up in the overlap. Drag anything to rearrange it.'),
       el('div', { class: 'map-legend' },
         el('span', { class: 'map-key map-bad' }, 'crowded'),
@@ -574,7 +574,7 @@ function renderMap() {
       canvas,
       el('p', { class: 'muted' },
         `Effort is the last ${data.thresholds.window} month(s)`
-        + (data.recent_months.length ? ` — ${data.recent_months.map(monthLabel).join(', ')}.` : '.')
+        + (data.recent_months.length ? `, ${data.recent_months.map(monthLabel).join(', ')}.` : '.')
         + ' A project with budget left and nobody charging to it reads as '
         + 'starved, which is the point: it is the one nobody has noticed.')),
     el('div', { class: 'panel', id: 'map-detail' },
@@ -588,7 +588,7 @@ function showMapDetail(node, data) {
   if (node.kind === 'project') {
     const p = node.data;
     setChildren(host,
-      el('h3', {}, `${p.number} — ${p.name}`),
+      el('h3', {}, `${p.number} · ${p.name}`),
       el('div', { class: 'cards cards-3' },
         ...[['Budget left', `${fmt.mm(p.remaining_mm)} MM`,
              `of ${fmt.mm(p.budget_mm)} · ${p.status}`],
@@ -615,7 +615,7 @@ function showMapDetail(node, data) {
   }
   const person = node.data;
   setChildren(host,
-    el('h3', {}, `${person.name} — ${person.grade_label}`),
+    el('h3', {}, `${person.name} · ${person.grade_label}`),
     el('p', { class: 'muted' },
       person.team_name ? `In ${person.team_name}.` : 'Not in a team.'),
     el('div', { class: 'row-actions' },
@@ -628,7 +628,7 @@ function showMapDetail(node, data) {
       })),
     person.shared
       ? el('p', { class: 'muted' },
-          `On ${person.projects.length} projects at once — which is why they sit `
+          `On ${person.projects.length} projects at once, which is why they sit `
           + 'between those circles.')
       : null);
 }
@@ -640,7 +640,7 @@ function renderFindings(data) {
     el('p', { class: 'muted' },
       `Judged on the last ${data.thresholds.window} month(s) of booked hours`
       + (data.recent_months.length
-        ? ` — ${data.recent_months.map(monthLabel).join(', ')}. ` : '. ')
+        ? `, ${data.recent_months.map(monthLabel).join(', ')}. ` : '. ')
       + 'Booked hours are history, not a forecast: this says what has been '
       + 'happening, and the decision stays yours.'),
     findings.length
@@ -847,7 +847,7 @@ async function editTeam(team) {
 
 async function deleteTeam(team) {
   if (!window.confirm(
-    `Delete the team "${team.name}"?\n\nIts ${team.headcount} people stay — `
+    `Delete the team "${team.name}"?\n\nIts ${team.headcount} people stay, `
     + 'they just stop being in a team. No timesheet row is touched.')) return;
   try {
     await api(`/api/teams/${team.id}`, { method: 'DELETE' });
@@ -923,7 +923,7 @@ function renderAdmin() {
 
   setChildren($('#admin-body'), el('div', {},
     el('p', { class: 'muted' },
-      'Accounts can only be made here — there is no public sign-up. A new '
+      'Accounts can only be made here. There is no public sign-up. A new '
       + 'account starts with no units and sees nothing of anyone else\'s.'),
     el('div', { class: 'table-wrap' }, el('table', { class: 'admin-table' },
       el('thead', {}, el('tr', {},
@@ -970,8 +970,8 @@ async function newAccount() {
     { name: 'role', label: 'Kind of account', type: 'select', full: true,
       hint: 'a manager owns units and edits them; a team member only sees '
         + 'their own figures, and is given them from a manager\'s Team tab',
-      options: [{ value: 'manager', label: 'Manager — runs a team' },
-        { value: 'member', label: 'Team member — read-only' }] },
+      options: [{ value: 'manager', label: 'Manager: runs a team' },
+        { value: 'member', label: 'Team member: read-only' }] },
     { name: 'password', label: 'Password', type: 'password', full: true,
       hint: 'leave blank and one is generated for you' },
     { name: 'is_admin', label: 'May manage accounts', type: 'checks', full: true,
@@ -1099,7 +1099,7 @@ function openModal(title, fields, onSubmit, values = {}) {
     }
     form.append(el('label', { class: `field ${field.full ? 'full' : ''}` },
       el('span', {}, field.label,
-        field.hint ? el('span', { class: 'hint' }, ` — ${field.hint}`) : null),
+        field.hint ? el('span', { class: 'hint' }, `, ${field.hint}`) : null),
       input));
   }
 
@@ -1203,7 +1203,7 @@ function renderOverview() {
     ['Earned MM', num(t.earned_mm), '', 'value delivered'],
     ['Profit / (loss)', num(t.profit_mm), tone.amount(t.profit_mm), 'earned − actual'],
     ['Busy on real work', fmt.pct(t.utilisation), tone.utilisation(t.utilisation),
-      `projects and proposals ${countedTo(report).short}; 85–105% is right`
+      `projects and proposals ${countedTo(report).short}; 85 to 105% is right`
       + notFilled(t, '; ')],
     ['Efficiency (CPI)', fmt.ratio(t.cpi), tone.cpi(t.cpi),
       t.cpi >= 1 ? 'earning above cost; 1.00 or more is good' : 'earning below cost; 1.00 or more is good'],
@@ -1239,7 +1239,7 @@ function renderHeroes(report) {
   setChildren(strip, 
     month
       ? el('div', { class: 'hero' },
-          el('span', { class: 'medal' }, '🏅'),
+          el('span', { class: 'medal', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M8.2 13.6 7 22l5-3 5 3-1.2-8.4"/></svg>' }),
           el('div', { class: 'who' },
             el('div', { class: 'label' }, `Top of ${month.label}`),
             el('div', { class: 'name' }, month.hero || '—'),
@@ -1247,14 +1247,14 @@ function renderHeroes(report) {
               `scored ${num(month.hero_score, 1)} of 100 · strongest on `
               + `${(month.hero_strongest || '').toLowerCase()}`)))
       : el('div', { class: 'hero' },
-          el('span', { class: 'medal' }, '🏅'),
+          el('span', { class: 'medal', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M8.2 13.6 7 22l5-3 5 3-1.2-8.4"/></svg>' }),
           el('div', { class: 'who' },
             el('div', { class: 'label' }, 'Top of the month'),
             el('div', { class: 'hero-empty' },
               'No completed month with booked time in this period yet.'))),
     year
       ? el('div', { class: 'hero hero-year' },
-          el('span', { class: 'medal' }, '🏆'),
+          el('span', { class: 'medal', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>' }),
           el('div', { class: 'who' },
             el('div', { class: 'label' }, `Top of ${periodName(report.period)}`),
             el('div', { class: 'name' }, year.engineer || '—'),
@@ -1264,18 +1264,18 @@ function renderHeroes(report) {
       : null,
     champion
       ? el('div', { class: 'hero hero-project' },
-          el('span', { class: 'medal' }, '🎖️'),
+          el('span', { class: 'medal', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10l-3 7h-4z"/><circle cx="12" cy="15.5" r="5"/><path d="m12 13 .9 1.8 2 .3-1.4 1.4.3 2-1.8-.9-1.8.9.3-2-1.4-1.4 2-.3z"/></svg>' }),
           el('div', { class: 'who' },
             el('div', { class: 'label' }, `Project of ${periodName(report.period)}`),
             el('div', { class: 'name' }, champion.number),
             el('div', { class: 'why', title: champion.name },
-              `${trim(champion.name, 64)} — finalized, CPI `
+              `${trim(champion.name, 64)}, finalized, CPI `
               + `${fmt.ratio(champion.cpi)} on ${num(champion.actual_mm)} MM `
               + `spent, best of ${champion.finalists} finished`)))
       : null,
     Object.keys(wins).length
-      ? el('div', { class: 'hero', style: 'border-left-color: var(--series-3)' },
-          el('span', { class: 'medal' }, '📅'),
+      ? el('div', { class: 'hero', style: '--edge: var(--series-3)' },
+          el('span', { class: 'medal', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M8 14h2M12 14h2M16 14h.5M8 17h2M12 17h2"/></svg>' }),
           el('div', { class: 'who' },
             el('div', { class: 'label' }, 'Months on top'),
             el('div', { class: 'why', style: 'margin-top:4px' },
@@ -1391,7 +1391,7 @@ function renderFormation(report) {
           `The timesheets stop on ${dateText(upto.day, { day: 'numeric', month: 'short', year: 'numeric' })}, `
           + 'so the days since are not counted yet. Bring in the latest timesheets to bring it up to date.') : null),
       el('span', { class: 'legend formation-key' },
-        ...[['ok', 'on plan 85–105%'], ['warn', 'light 70–85%'], ['bad', 'over 105% or under 70%']].map(
+        ...[['ok', 'on plan 85 to 105%'], ['warn', 'light 70 to 85%'], ['bad', 'over 105% or under 70%']].map(
           ([key, label]) => el('span', { class: 'legend-item' },
             el('span', { class: `swatch ring-swatch ring-${key}` }), label)))),
     charts.formation(rows, {
@@ -1523,8 +1523,8 @@ function engineerBlock(name, report, overview) {
         el('span', { class: 'swatch', style: `background:${engineerColor(name)}` }),
         name,
         won ? el('span', { class: 'pill pill-info', title: 'months won in this period' },
-          `🏅 ${won}`) : null),
-      el('span', { class: `pill ${pill}`, title: 'hours on projects and proposals against the hours they were there to work; 85–105% is right' },
+          `top in ${won} month${won === 1 ? '' : 's'}`) : null),
+      el('span', { class: `pill ${pill}`, title: 'hours on projects and proposals against the hours they were there to work; 85 to 105% is right' },
         `${fmt.pct(util)} busy on real work`)),
 
     el('div', { class: 'meter' },
@@ -2020,7 +2020,7 @@ function renderProjects() {
   setChildren(projectSelect, 
     el('option', { value: 'all' }, `All projects (${state.projects.length})`),
     ...state.projects.map((p) => el('option', { value: p.number },
-      `${p.number} — ${p.name}`)));
+      `${p.number} · ${p.name}`)));
   projectSelect.value = state.projects.some((p) => p.number === chosen) ? chosen : 'all';
 
   const statusSelect = $('#project-status-filter');
@@ -2117,7 +2117,7 @@ function renderProjectSummary(byNumber) {
     live.length
       ? el('section', { class: 'panel' }, charts.budgetBars(
           live.map(({ p, m }) => ({
-            label: p.number, title: `${p.number} — ${p.name}`,
+            label: p.number, title: `${p.number} · ${p.name}`,
             budget: p.budget_mm || 0, actual: m.actual_mm || 0, earned: m.earned_mm || 0,
           })),
           { title: 'Spent against budget', note: 'active and on-hold projects, largest first' }))
@@ -2255,7 +2255,7 @@ function field(label, name, opts = {}) {
     oninput: (e) => { draft[name] = typedValue(e.target, opts); scheduleSave(); },
   });
   return el('label', { class: 'field' },
-    el('span', {}, label, opts.hint ? el('span', { class: 'hint' }, ` — ${opts.hint}`) : null),
+    el('span', {}, label, opts.hint ? el('span', { class: 'hint' }, `, ${opts.hint}`) : null),
     input);
 }
 
@@ -2430,7 +2430,7 @@ function refreshTotals() {
       el('span', { class: 'muted' }, complete
         ? 'the scope is fully accounted for'
         : total > 1
-          ? `over by ${((total - 1) * 100).toFixed(1)} points — reduce a weight`
+          ? `over by ${((total - 1) * 100).toFixed(1)} points, reduce a weight`
           : `${((1 - total) * 100).toFixed(1)} points unaccounted for`));
   }
   const save = $('#detail-save');
@@ -2472,7 +2472,7 @@ function deliverableRow(d, position) {
       stepSelect.value = '';
     },
   }, state.reference.project_types.map((t) =>
-    el('option', { value: t.code }, `${t.code} — ${t.name}`)));
+    el('option', { value: t.code }, `${t.code} · ${t.name}`)));
   typeSelect.value = d.type_code || '';
 
   const num = (key, opts = {}) => el('input', {
@@ -2593,7 +2593,8 @@ function renderReference() {
         el('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: saveReference },
           'Save changes'))
     : el('button', { class: 'btn', type: 'button', onclick: unlockReference },
-        '🔒 Unlock to edit'));
+        el('span', { class: 'ico-inline', html: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>' }),
+        'Unlock to edit'));
 
   if (!state.referenceDraft) {
     state.referenceDraft = {
@@ -2790,7 +2791,7 @@ async function refreshAll() {
   state.projectDrawings = new Map((projects.drawings || []).map((d) => [d.number, d]));
 
   $('#unit-title').textContent = status.unit ? status.unit.name : 'Selecao+';
-  document.title = status.unit ? `${status.unit.name} — Selecao+` : 'Selecao+';
+  document.title = status.unit ? `${status.unit.name} · Selecao+` : 'Selecao+';
   // The file lives on the server now, so its path is nobody's business but
   // the administrator's; what a person needs is which unit they are in.
   $('#workbook-path').textContent =
@@ -3071,14 +3072,14 @@ function renderDashboard(data) {
   const t = data.team;
   const statuses = data.by_status;
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Team totals — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Team totals · ${data.period.label}`),
     kpiCards([
       ['Planned MM', num(t.planned_mm), 'full period plan'],
       ['Actual MM', num(t.actual_mm), 'what was burned'],
       ['Earned MM', num(t.earned_mm), 'value delivered'],
       ['Profit / (loss)', num(t.profit_mm), 'earned − actual', tone.amount(t.profit_mm)],
       ['Busy on real work', fmt.pct(t.utilisation),
-        `projects and proposals ${countedTo(data).short}; 85–105% is right${notFilled(t, '; ')}`,
+        `projects and proposals ${countedTo(data).short}; 85 to 105% is right${notFilled(t, '; ')}`,
         tone.utilisation(t.utilisation)],
       ['Efficiency (CPI)', fmt.ratio(t.cpi),
         t.cpi >= 1 ? 'earning above cost' : 'earning below cost', tone.cpi(t.cpi)],
@@ -3107,7 +3108,7 @@ function renderDashboard(data) {
       el('h3', {}, 'Portfolio by status'),
       el('p', { class: 'muted' },
         'Only projects live in this period, which is why these total less than '
-        + 'the headline figures above — those cover every project in the register.'),
+        + 'the headline figures above. Those cover every project in the register.'),
       table(['Status', 'Projects', 'Budget MM', 'Planned MM', 'Actual MM',
              'Earned MM', 'Remaining MM', 'In scope?'],
         statuses.map((s) => ({
@@ -3189,7 +3190,7 @@ function renderEngineerKpis(data) {
     .sort((a, b) => b.total - a.total);
 
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Each person's figures — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Each person's figures · ${data.period.label}`),
     el('div', { class: 'report-grid' },
       el('section', { class: 'panel' },
         charts.groupedBars(names, [
@@ -3294,7 +3295,7 @@ function renderTeamMember(data) {
 
   return el('div', {},
     el('div', { class: 'report-head' },
-      el('h3', { class: 'report-title' }, `${chosen} — ${data.period.label}`),
+      el('h3', { class: 'report-title' }, `${chosen} · ${data.period.label}`),
       el('div', { class: 'subtabs no-print' }, names.map((name) =>
         el('button', {
           class: `subtab ${name === chosen ? 'is-active' : ''}`, type: 'button',
@@ -3346,10 +3347,9 @@ function renderTeamMember(data) {
 function renderScorecard(data) {
   const board = data.scorecard;
   const names = data.engineers;
-  const medal = ['🥇', '🥈', '🥉'];
 
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Team scorecard — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Team scorecard · ${data.period.label}`),
     el('p', { class: 'muted' },
       'A weighted ranking. "Higher is better" factors score against the best '
       + 'performer; target factors score 100 on target and fall away either side.'),
@@ -3369,7 +3369,8 @@ function renderScorecard(data) {
       el('h3', {}, 'Ranking'),
       table(['Rank', 'Engineer', 'Weighted score', 'Strongest factor', 'Weakest factor'],
         board.ranking.map((r) => ({
-          cells: [`${medal[r.rank - 1] || ''} ${r.rank}`, r.engineer,
+          cells: [r.rank <= 3
+            ? { node: el('span', { class: `rank-medal rank-${r.rank}` }, String(r.rank)) } : r.rank, r.engineer,
             toned(r.score, tone.score, (v) => num(v, 1)),
             { node: el('span', {}, r.strongest), wide: true },
             { node: el('span', {}, r.weakest), wide: true }],
@@ -3398,7 +3399,7 @@ function renderReview(data) {
   const issues = data.issues || [];
 
   return el('div', {},
-    el('h3', { class: 'report-title' }, `Summary for management — ${data.period.label}`),
+    el('h3', { class: 'report-title' }, `Summary for management · ${data.period.label}`),
     kpiCards([
       ['Planned MM', num(t.planned_mm), 'what we said we would burn'],
       ['Actual MM', num(t.actual_mm), 'what we actually burned'],
@@ -3500,7 +3501,7 @@ function renderTeam() {
 
     el('p', { class: 'muted' },
       'A sign-in lets that person see their own workload, projects, hours and '
-      + 'tasks — and nothing else in the unit. They cannot change anything.'));
+      + 'tasks, and nothing else in the unit. They cannot change anything.'));
 }
 
 /** How much of each person's hours went on booked work over the last year. */
@@ -3623,7 +3624,7 @@ function openSiteAccessModal(person) {
     { name: 'person', label: 'Who is this on the site?', type: 'select', full: true,
       options: free.map((p) => ({ value: p.id,
         label: p.name && p.login && p.name !== p.login
-          ? `${p.name} — ${p.login}` : (p.name || p.login) })),
+          ? `${p.name} · ${p.login}` : (p.name || p.login) })),
       hint: 'everyone who can open Selecao+ on this site. They need no new '
         + 'password: they sign in as they always do, and see their own figures '
         + 'in this unit and nothing else.' },
@@ -3641,7 +3642,7 @@ function openAccessModal(person) {
   if (state.site) { openSiteAccessModal(person); return; }
   openModal(`Give ${person.short_name} a sign-in`, [
     { name: 'username', label: 'Username', full: true,
-      hint: 'what they type to sign in — letters, digits, dot, dash, underscore' },
+      hint: 'what they type to sign in: letters, digits, dot, dash, underscore' },
     { name: 'display_name', label: 'Their name', full: true },
     { name: 'password', label: 'Password', type: 'password', full: true,
       hint: 'leave blank and one is generated for you' },
@@ -3652,7 +3653,7 @@ function openAccessModal(person) {
     if (result.password) {
       window.alert(`${person.short_name} can now sign in.\n\n`
         + `Username: ${result.user.username}\nPassword: ${result.password}\n\n`
-        + 'Write it down now — it cannot be read back. They see only their own '
+        + 'Write it down now. It cannot be read back. They see only their own '
         + 'figures, and can change nothing.');
     } else {
       toast(`${result.user.username} now signs in as ${person.short_name}.`, 'ok');
@@ -3801,7 +3802,7 @@ function renderTasks() {
   fillFilter($('#task-engineer'), 'Everyone',
     data.engineers.map((name) => ({ value: name, label: name })));
   fillFilter($('#task-project'), 'Every project',
-    data.projects.map((p) => ({ value: p.number, label: `${p.number} — ${p.name}` })));
+    data.projects.map((p) => ({ value: p.number, label: `${p.number} · ${p.name}` })));
   fillFilter($('#task-status-filter'), 'Any status',
     data.statuses.map((name) => ({ value: name, label: name })));
 
@@ -3828,9 +3829,9 @@ function renderTaskLoad(data) {
   setChildren($('#task-load'), el('section', { class: 'panel' },
     el('h3', {}, 'Who is loaded, and who is not'),
     el('p', { class: 'muted' },
-      `Open work due in the next ${load.weeks} week(s) — ${window_} — against `
+      `Open work due in the next ${load.weeks} week(s), ${window_}, against `
       + `${fmt.int(load.working_days)} working days of `
-      + `${num(load.hours_per_day)} hours (${settings.day_start}–${settings.day_end}), `
+      + `${num(load.hours_per_day)} hours (${settings.day_start} to ${settings.day_end}), `
       + `so ${fmt.hours(load.capacity_hours)} hours each. A shared task counts `
       + 'only its share against each person. Overdue work is counted too; '
       + 'anything past the window is not.'),
@@ -3856,7 +3857,7 @@ function renderTaskLoad(data) {
           el('div', { class: 'load-detail' },
             e.overtime_hours
               ? el('div', { class: 'v-bad' },
-                  `${fmt.hours(e.overtime_hours)} h beyond the working day — `
+                  `${fmt.hours(e.overtime_hours)} h beyond the working day, `
                   + 'overtime, or work that has to move')
               : el('div', { class: 'muted' },
                   `${fmt.hours(e.spare_hours)} h still free`),
@@ -3966,7 +3967,7 @@ function renderTaskTable(data) {
               : el('span', { class: 'pill pill-warn' }, 'nobody')),
             task.shared
               ? el('div', { class: 'muted small' },
-                  `shared — ${num(task.hours_each)} h each`)
+                  `shared · ${num(task.hours_each)} h each`)
               : null),
           el('td', { class: 'num' }, task.required_hours === null
             ? '—' : fmt.hours(task.required_hours)),
@@ -4044,7 +4045,7 @@ function taskProgressCell(task) {
 function taskFields(data) {
   const deliverables = data.deliverables.map((d) => ({
     value: String(d.row),
-    label: `${d.project_number} — ${d.name}${d.date ? ` (${fmt.date(d.date)})` : ''}`,
+    label: `${d.project_number} · ${d.name}${d.date ? ` (${fmt.date(d.date)})` : ''}`,
   }));
   return [
     { name: 'name', label: 'Task', full: true },
@@ -4073,7 +4074,7 @@ function taskFields(data) {
       min: '0', max: '100', hint: 'pro-rata tasks only' },
     { name: 'stage', label: 'Stage reached', type: 'select',
       options: (data.stages || []).map((st) => ({
-        value: st.key, label: `${st.label} — ${Math.round(st.value * 100)}%` })),
+        value: st.key, label: `${st.label} · ${Math.round(st.value * 100)}%` })),
       hint: 'workflow tasks only' },
     { name: 'review_code', label: 'Review code', type: 'select',
       options: (data.review_codes || []).map((c) => ({ value: c.key, label: c.label })),
@@ -4194,7 +4195,7 @@ function openSubmissionModal() {
       hint: 'or leave on every deliverable still ahead',
       options: [{ value: '', label: 'Every deliverable still ahead' },
         ...dated.map((d) => ({
-          value: String(d.row), label: `${d.project_number} — ${d.name} (${fmt.date(d.date)})`,
+          value: String(d.row), label: `${d.project_number} · ${d.name} (${fmt.date(d.date)})`,
         }))] },
     { name: 'include_past', label: 'Include dates already past', type: 'checks',
       full: true, options: [{ value: 'yes', label: 'Yes, generate for past dates too' }] },
@@ -4208,9 +4209,9 @@ function openSubmissionModal() {
     toast(result.added
       ? `${result.added} task(s) added across ${result.deliverables} deliverable(s).`
       : (result.past_deliverables
-        ? `Nothing to add — every dated deliverable is already past `
+        ? `Nothing to add: every dated deliverable is already past `
           + `(${result.past_deliverables} of them). Tick the box to include those.`
-        : 'Nothing to add — every dated deliverable already has its week.'),
+        : 'Nothing to add: every dated deliverable already has its week.'),
     result.added ? 'ok' : 'warn');
     await loadTasks();
   }, { deliverable_row: '' });
@@ -4223,7 +4224,7 @@ function openMeetingModal() {
     { name: 'project_number', label: 'For', type: 'select', full: true,
       options: [{ value: '', label: 'The unit as a whole' },
         ...data.projects.map((p) => ({
-          value: p.number, label: `${p.number} — ${p.name}`,
+          value: p.number, label: `${p.number} · ${p.name}`,
         }))] },
     { name: 'weekday', label: 'Every', type: 'select',
       options: data.weekdays.map((name, index) => ({

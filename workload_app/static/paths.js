@@ -14,6 +14,13 @@
 (function () {
   'use strict';
 
+  // The video's play button, drawn rather than a character that each phone draws its own way.
+  function playIcon() {
+    const span = make('span', { class: 'path-video-play', 'aria-hidden': 'true' });
+    span.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.4-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"/></svg>';
+    return span;
+  }
+
   // Three paths, each asking one question; each tab sits on one path only.
   // Tabs that answer the same kind of question share a tab (focus.js): Tasks
   // with Planner, Resourcing with Check-ins, Budgets with Projects, Growth
@@ -139,7 +146,7 @@
         p.key === 'setup' && isNew() ? 'Start here if you are new'
           : current && current.key === p.key ? 'Last time' : ''))),
       make('button', { type: 'button', class: 'path-video', onclick: () => window.switchView('video') },
-        make('span', { class: 'path-video-play', 'aria-hidden': 'true' }, '▶'),
+        playIcon(),
         make('span', { class: 'path-video-text' },
           make('strong', {}, 'Watch it as a short video'),
           make('span', {}, 'Our week, how we\'re doing, or both, in about a minute: Summary video'))),

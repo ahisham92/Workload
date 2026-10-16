@@ -158,8 +158,8 @@ function render() {
     ? `${data.unit.name}${data.unit.manager ? ` · ${data.unit.manager}'s team` : ''}`
     : '';
   $('#member-title').textContent = isOwn(data)
-    ? `My workload — ${data.period.label}`
-    : `${data.engineer}'s workload — ${data.period.label}`;
+    ? `My workload · ${data.period.label}`
+    : `${data.engineer}'s workload · ${data.period.label}`;
 
   fillUnits(data);
   fillPeople(data);
@@ -279,7 +279,7 @@ function renderMonths(data) {
   setChildren($('#member-months'), table(
     ['Month', 'Actual MM', 'Earned MM', 'Busy on real work', 'CPI', 'Score'],
     data.months.map((m) => [
-      el('span', {}, m.label, m.won ? el('span', { title: 'best in the team that month' }, ' 🏅') : null),
+      el('span', {}, m.label, m.won ? el('span', { class: 'pill pill-info', title: 'best in the team that month', style: 'margin-left:6px' }, 'top') : null),
       num(m.actual_mm),
       num(m.earned_mm),
       toned(m.utilisation, tone.utilisation, fmt.pct),
@@ -321,7 +321,7 @@ function renderTasks(data) {
           t.definition ? el('div', { class: 'muted small' }, t.definition) : null,
           t.shared_with
             ? el('div', { class: 'muted small' },
-                `shared with ${t.shared_with} other(s) — ${num(t.hours_each)} h is yours`)
+                `shared with ${t.shared_with} other(s), ${num(t.hours_each)} h is yours`)
             : null),
         t.deliverable_name || t.project_number || '—',
         num(t.hours_each),

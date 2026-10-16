@@ -68,7 +68,7 @@
       el('div', { class: 'dl-row' },
         dial({ label: 'Busy on real work', value: t.utilisation, text: fmt.pct(t.utilisation), min: 0, max: 1.3,
           band: [0.85, 1.05], toneName: tone.utilisation(t.utilisation),
-          sub: 'projects and proposals so far; 85–105% is right'
+          sub: 'projects and proposals so far; 85 to 105% is right'
             + (t.days_not_filled ? `; ${t.days_not_filled} day${t.days_not_filled === 1 ? '' : 's'} not filled in yet` : '') }),
         dial({ label: 'Earning per hour spent', value: t.cpi, text: fmt.ratio(t.cpi), min: 0.5, max: 1.5,
           band: [1, 1.5], toneName: tone.cpi(t.cpi),
@@ -100,7 +100,7 @@
         type: 'button', class: `pm-tile pm-${cpiTone || 'plain'} ${closed ? 'is-closed' : ''}`,
         style: `flex-grow:${(size * 10).toFixed(2)};flex-basis:${Math.round(110 + size * 170)}px;--fill:${(progress * 100).toFixed(1)}%;`
           + `min-height:${Math.round(86 + size * 64)}px`,
-        title: `${p.number} — ${p.name}\n${fmt.pct(progress)} along · budget ${fmt.mm(p.budget_mm)} MM`
+        title: `${p.number} · ${p.name}\n${fmt.pct(progress)} along · budget ${fmt.mm(p.budget_mm)} MM`
           + (m.cpi ? ` · ${fmt.ratio(m.cpi)} earned per MM spent` : ''),
         onclick: () => openProject(p.number),
       },
@@ -264,7 +264,7 @@
     if (state.report) place('overview-pulse', $('#overview-cards'), pulse(state.report.team, 'How the team is doing'));
   });
   wrapGlobal('renderDashboard', (node, data) => {
-    const dials = pulse(data.team, `How the team is doing — ${data.period.label}`);
+    const dials = pulse(data.team, `How the team is doing · ${data.period.label}`);
     if (node && dials) {
       const title = node.querySelector('.report-title');
       if (title) title.after(dials); else node.prepend(dials);

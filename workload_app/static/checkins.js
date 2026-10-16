@@ -307,7 +307,7 @@ function leadingPanel(data) {
         ? el('ol', { class: 'ci-meetings' }, l.meetings.map((m) => el('li', {},
           el('details', {},
             el('summary', {},
-              el('span', { class: 'ci-meet-when' }, `${dateText(m.date, { weekday: 'short', day: 'numeric' })} ${m.start}–${m.end}`),
+              el('span', { class: 'ci-meet-when' }, `${dateText(m.date, { weekday: 'short', day: 'numeric' })} ${m.start} to ${m.end}`),
               el('b', {}, m.title),
               m.kind === 'team' ? el('span', { class: 'muted small' }, ` · ${m.with.join(', ')}`) : null),
             el('ul', { class: 'ci-agenda' }, m.agenda.map((line) => el('li', {}, line)))))))
