@@ -359,6 +359,15 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  /* How it stands, said with an icon and a word as well as the colour. */
+  const ANSWER_WORD = { ok: 'On track', warn: 'Worth a look', bad: 'Needs action', info: 'Good to know' };
+  function glyphFor(tone) {
+    const g = make('span', { class: 'answer-glyph', 'aria-hidden': 'true' });
+    const icon = window.kit && window.kit.icon[tone === 'info' ? 'info' : tone];
+    if (icon) g.innerHTML = icon;
+    return g;
+  }
+
   function drawAnswer(view) {
     const section = viewEl(view);
     const answerFor = ANSWER[view];
@@ -373,7 +382,9 @@
     if (card && card.dataset.sign === sign) { card.hidden = false; return; }
     const fresh = make('div', { class: 'answer', 'data-answer-tone': answer.tone || 'ok', role: 'status' },
       make('span', { class: 'answer-dot', 'aria-hidden': 'true' }),
+      glyphFor(answer.tone || 'ok'),
       make('div', { class: 'answer-body' },
+        make('span', { class: 'answer-word' }, ANSWER_WORD[answer.tone || 'ok'] || ''),
         make('p', { class: 'answer-say' }, answer.say),
         answer.next ? make('p', { class: 'answer-next' }, answer.next) : null),
       answer.act ? make('button', { type: 'button', class: 'btn btn-sm answer-act',

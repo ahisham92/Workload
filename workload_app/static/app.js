@@ -125,6 +125,8 @@ function progressCell(value) {
 }
 
 function toast(message, kind = '') {
+  // The kit's message bar: an icon and a word with the colour, and a close.
+  if (window.kit) return window.kit.toast(message, kind);
   const node = el('div', { class: `toast ${kind}` }, message);
   $('#toasts').append(node);
   setTimeout(() => {

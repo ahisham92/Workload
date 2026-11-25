@@ -90,6 +90,7 @@ async function api(path, { quiet = false, ...options } = {}) {
 }
 
 function toast(message, kind = '') {
+  if (window.kit) return window.kit.toast(message, kind);
   const node = el('div', { class: `toast ${kind}` }, message);
   $('#toasts').append(node);
   setTimeout(() => node.remove(), 5000);
