@@ -204,6 +204,26 @@ function planValue(field, value) {
   return String(value);
 }
 
+/** How far a value moves: "+50 (+20%)" for a number, "12 days later" for a date. */
+function planDiff(before, after) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (iso.test(String(before)) && iso.test(String(after))) {
+    const days = Math.round((Date.parse(after) - Date.parse(before)) / 86400000);
+    if (!days) return null;
+    const n = Math.abs(days);
+    return el('span', { class: `k-diff ${days > 0 ? 'is-down' : 'is-up'}` },
+      `${n} ${n === 1 ? 'day' : 'days'} ${days > 0 ? 'later' : 'earlier'}`);
+  }
+  const a = Number(before);
+  const b = Number(after);
+  if (before === null || before === '' || after === null || after === ''
+      || !Number.isFinite(a) || !Number.isFinite(b) || a === b) return null;
+  const d = b - a;
+  const pct = a ? ` (${d > 0 ? '+' : '−'}${Math.round(Math.abs(d) / Math.abs(a) * 100)}%)` : '';
+  const amount = Number(Math.abs(d).toFixed(2));
+  return el('span', { class: `k-diff ${d > 0 ? 'is-up' : 'is-down'}` }, `${d > 0 ? '+' : '−'}${amount}${pct}`);
+}
+
 const PLAN_KIND = { new_project: 'New project', project: 'Project', submission: 'Submission' };
 
 /** Every change the workbook would make, before anything is saved. */
@@ -224,7 +244,8 @@ function planPreview(plan) {
         el('span', { class: 'muted' }, `${f.label}: `),
         c.kind === 'new_project' ? null : el('span', { class: 'bi-plan-old' }, planValue(f.field, f.old)),
         c.kind === 'new_project' ? null : ' → ',
-        el('b', {}, planValue(f.field, f.new)))))))) : null,
+        el('b', {}, planValue(f.field, f.new)),
+        c.kind === 'new_project' ? null : planDiff(f.old, f.new))))))) : null,
     ...(plan.errors || []).map((m) => el('div', { class: 'msg msg-warn' }, m)));
 }
 

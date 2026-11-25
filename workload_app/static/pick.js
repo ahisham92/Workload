@@ -10,6 +10,12 @@
  * once. Keyboard: arrows, Home/End, Enter or Space, Escape, and typing the
  * first letters of an option.
  *
+ * A long list (eight choices or more) opens with a search box: every word
+ * typed must be in the choice, spaces and capitals do not count ("ap 12"
+ * finds "Apapa Berth 12"), the letters found are marked, and choices that
+ * start with the first word come first. The last five picked from that list
+ * sit on top under "Recent" (kept in this browser only).
+ *
  * Spreadsheet cells (sheet.js) keep their own plain drop-downs.
  */
 (function () {
@@ -144,9 +150,103 @@
   }
 
   // --- the list ---------------------------------------------------------------
+  const SEARCH_FROM = 8;
+  const RECENT = 5;
+  const norm = (t) => String(t).toLowerCase().replace(/\s+/g, '');
+  const wordsOf = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
+  function hit(text, words) {
+    const flat = norm(text);
+    return words.every((w) => flat.includes(w));
+  }
+  /** The choice's words with what was typed marked. */
+  function marked(text, words) {
+    const span = document.createElement('span');
+    if (!words.length) { span.textContent = text; return span; }
+    const lower = text.toLowerCase();
+    const on = new Array(text.length).fill(false);
+    for (const w of words) {
+      for (let at = lower.indexOf(w); at >= 0; at = lower.indexOf(w, at + 1)) {
+        for (let k = at; k < at + w.length; k += 1) on[k] = true;
+      }
+    }
+    let run = '';
+    let lit = false;
+    const flush = () => {
+      if (!run) return;
+      if (lit) { const m = document.createElement('mark'); m.textContent = run; span.append(m); } else span.append(run);
+      run = '';
+    };
+    for (let k = 0; k < text.length; k += 1) {
+      if (on[k] !== lit) { flush(); lit = on[k]; }
+      run += text[k];
+    }
+    flush();
+    return span;
+  }
+  /** Which list this is, so its recent picks are its own. */
+  function keyOf(select) {
+    return `pick-recent:${select.name || select.id || labelOf(select) || [...select.options].slice(0, 3).map((x) => x.value).join('|')}`;
+  }
+  function recentOf(select) {
+    try { return JSON.parse(localStorage.getItem(keyOf(select)) || '[]'); } catch (_) { return []; }
+  }
+  function remember(select, value) {
+    if (select.options.length < SEARCH_FROM || value === '') return;
+    try {
+      const list = [value, ...recentOf(select).filter((v) => v !== value)].slice(0, RECENT);
+      localStorage.setItem(keyOf(select), JSON.stringify(list));
+    } catch (_) { /* private window: no recents */ }
+  }
+  function optionRow(o, opt, i, words, suffix = '') {
+    const row = document.createElement('div');
+    row.className = 'pick-opt';
+    row.id = `${o.list.id}-${i}${suffix}`;
+    row.setAttribute('role', 'option');
+    row.dataset.index = i;
+    const on = i === o.select.selectedIndex;
+    row.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (opt.disabled || opt.parentElement.disabled) row.setAttribute('aria-disabled', 'true');
+    const tick = document.createElement('span');
+    tick.className = 'pick-tick';
+    tick.innerHTML = TICK;
+    row.append(tick, marked(opt.textContent, words));
+    return row;
+  }
+  function heading(text) {
+    const h = document.createElement('div');
+    h.className = 'pick-group';
+    h.setAttribute('role', 'presentation');
+    h.textContent = text;
+    return h;
+  }
+
   function fill(o) {
     const { select, list } = o;
     list.replaceChildren();
+    const words = o.search ? wordsOf(o.search.value) : [];
+    if (words.length) {
+      const first = words[0];
+      const found = [...select.options].map((opt, i) => ({ opt, i }))
+        .filter(({ opt }) => !opt.hidden && hit(opt.textContent, words));
+      found.sort((a, b) => norm(b.opt.textContent).startsWith(first) - norm(a.opt.textContent).startsWith(first) || a.i - b.i);
+      for (const { opt, i } of found) list.append(optionRow(o, opt, i, words));
+      if (!found.length) {
+        const none = document.createElement('div');
+        none.className = 'pick-none';
+        none.textContent = 'Nothing matches. Try fewer letters.';
+        list.append(none);
+      }
+      return;
+    }
+    if (o.search) {
+      const values = [...select.options].map((x) => x.value);
+      const recent = recentOf(select).map((v) => values.indexOf(v)).filter((i) => i >= 0 && !select.options[i].hidden);
+      if (recent.length) {
+        list.append(heading('Recent'));
+        for (const i of recent) list.append(optionRow(o, select.options[i], i, [], '-r'));
+        list.append(heading('All'));
+      }
+    }
     let group = null;
     [...select.options].forEach((opt, i) => {
       const parent = opt.parentElement;
@@ -159,21 +259,7 @@
         list.append(h);
       }
       if (opt.hidden) return;
-      const row = document.createElement('div');
-      row.className = 'pick-opt';
-      row.id = `${list.id}-${i}`;
-      row.setAttribute('role', 'option');
-      row.dataset.index = i;
-      const on = i === select.selectedIndex;
-      row.setAttribute('aria-selected', on ? 'true' : 'false');
-      if (opt.disabled || parent.disabled) row.setAttribute('aria-disabled', 'true');
-      const tick = document.createElement('span');
-      tick.className = 'pick-tick';
-      tick.innerHTML = TICK;
-      const t = document.createElement('span');
-      t.textContent = opt.textContent;
-      row.append(tick, t);
-      list.append(row);
+      list.append(optionRow(o, opt, i, []));
     });
   }
 
@@ -227,15 +313,43 @@
       title.textContent = name;
       sheet.append(title);
     }
+    let search = null;
+    if (select.options.length >= SEARCH_FROM) {
+      search = document.createElement('input');
+      search.type = 'search';
+      search.placeholder = 'Type to find';
+      search.autocomplete = 'off';
+      search.spellcheck = false;
+      search.setAttribute('aria-label', name ? `Find in ${name}` : 'Find');
+      search.setAttribute('aria-controls', list.id);
+      const box = document.createElement('label');
+      box.className = 'pick-search';
+      box.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
+      box.append(search);
+      sheet.append(box);
+    }
     sheet.append(list);
     document.body.append(scrim, sheet);
-    open = { select, button, list, sheet, scrim, typed: '', typedAt: 0 };
+    open = { select, button, list, sheet, scrim, search, typed: '', typedAt: 0 };
     fill(open);
     place(open);
     button.setAttribute('aria-expanded', 'true');
     button.setAttribute('aria-controls', list.id);
-    list.focus({ preventScroll: true });
+    // On a phone the keyboard would cover the list: the search box waits for a tap.
+    if (search && !phone()) search.focus({ preventScroll: true });
+    else list.focus({ preventScroll: true });
     mark(open, list.querySelector('[aria-selected="true"]') || rows(open)[0]);
+    if (search) {
+      search.addEventListener('input', () => {
+        if (!open) return;
+        fill(open);
+        mark(open, rows(open)[0]);
+      });
+      search.addEventListener('keydown', (e) => {
+        if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Home' || e.key === 'End') return;
+        onKey(e);
+      });
+    }
 
     list.addEventListener('click', (e) => {
       const row = e.target.closest('.pick-opt');
@@ -283,6 +397,7 @@
     const { select } = open;
     const changed = select.selectedIndex !== index;
     select.selectedIndex = index;
+    remember(select, select.value);
     close(true);
     if (changed) {
       select.dispatchEvent(new Event('input', { bubbles: true }));

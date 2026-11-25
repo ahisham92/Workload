@@ -310,6 +310,82 @@ td, th, .value, .num, .pill, .card .value, .score-value, .pc-stat-value, .bu-bar
 .ico-inline { display: inline-grid; vertical-align: -3px; margin-right: 4px; }
 .ico-inline svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; width: 15px; height: 15px; }
 
+/* ------------------------------------------------------ the control kit */
+/* The buttons, boxes and cards of the kit (kit.css) on every tab: paper
+   surfaces with a hairline, the logo's blue for the one main action, focus and
+   choices; the tab's own colour stays in its banner, its dots and a faint wash. */
+:root { --ring: 0 0 0 2px var(--k-s1), 0 0 0 4px var(--k-focus); }
+body {
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+}
+body[data-tone] { --bg: color-mix(in srgb, var(--tone) 4%, var(--k-s0)); }
+.view[data-tone] {
+  --surface: color-mix(in srgb, var(--tone) 3%, var(--k-s1));
+  --surface-2: color-mix(in srgb, var(--tone) 5%, var(--k-side));
+  --border: color-mix(in srgb, var(--tone) 10%, var(--k-stroke));
+  --hair: color-mix(in srgb, var(--tone) 18%, var(--k-stroke));
+}
+.view[data-tone] .panel {
+  border-radius: var(--k-r-card); box-shadow: var(--k-soft);
+  background:
+    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--tone-2) 5%, transparent), transparent 60%),
+    color-mix(in srgb, var(--tone) 3%, var(--k-s1));
+}
+.view[data-tone] .card { border-radius: var(--k-r-card); background: color-mix(in srgb, var(--tone) 3%, var(--k-s1)); }
+
+/* Buttons: one filled main action; outlined for the rest; plain for the least. */
+.btn {
+  min-height: 34px; padding: 6px 14px; border-radius: var(--k-r); font-weight: 600;
+  border: 1px solid var(--k-stroke-strong); background: transparent; color: var(--k-text0);
+}
+.btn-sm { min-height: 30px; padding: 4px 10px; }
+.btn:hover:not(:disabled) { background: var(--k-s3); }
+.btn:active:not(:disabled) { background: var(--k-accent-soft); }
+.view[data-tone] .btn:not(.btn-primary):not(.btn-danger), body[data-tone] .modal .btn:not(.btn-primary):not(.btn-danger) {
+  background: transparent; border-color: color-mix(in srgb, var(--tone) 22%, var(--k-stroke-strong)); color: var(--k-text0);
+}
+.view[data-tone] .btn:not(.btn-primary):not(.btn-danger):hover:not(:disabled),
+body[data-tone] .modal .btn:not(.btn-primary):not(.btn-danger):hover:not(:disabled) {
+  background: var(--k-s3); border-color: var(--k-stroke-strong);
+}
+.view[data-tone] .btn:not(.btn-primary):not(.btn-danger):active:not(:disabled) { background: var(--k-accent-soft); border-color: var(--k-accent); }
+.btn-ghost, .view[data-tone] .btn.btn-ghost:not(.btn-primary):not(.btn-danger) { border-color: transparent; background: transparent; }
+.btn-primary, .view[data-tone] .btn-primary, body[data-tone] .modal .btn-primary {
+  background: var(--k-accent); border-color: var(--k-accent); color: var(--k-on-accent); filter: none;
+}
+.btn-primary:hover:not(:disabled), .view[data-tone] .btn-primary:hover:not(:disabled), body[data-tone] .modal .btn-primary:hover:not(:disabled) {
+  background: var(--k-accent-hover); border-color: var(--k-accent-hover); box-shadow: var(--k-glow); filter: none;
+}
+.btn-primary:active:not(:disabled) { background: var(--k-accent-pressed) !important; border-color: var(--k-accent-pressed) !important; box-shadow: none; }
+.btn-danger, .view[data-tone] .btn-danger { background: transparent; color: var(--k-bad); border-color: var(--k-bad-line); }
+.btn-danger:hover:not(:disabled), .view[data-tone] .btn-danger:hover:not(:disabled) { background: var(--k-bad-soft); color: var(--k-bad-strong); border-color: var(--k-bad); }
+.btn:disabled { opacity: 1; background: var(--k-s3) !important; border-color: var(--k-stroke) !important; color: var(--k-text3) !important; box-shadow: none !important; }
+
+/* Boxes to type in: a hairline, a stronger one under the pointer, blue when typing. */
+.view[data-tone] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not(table.gsheet *),
+.view[data-tone] textarea:not(table.gsheet *),
+body[data-tone] .modal :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), textarea) {
+  background-color: color-mix(in srgb, var(--tone) 3%, var(--k-s1)); border-color: color-mix(in srgb, var(--tone) 14%, var(--k-stroke-strong));
+  border-radius: var(--k-r);
+}
+input:not(table.gsheet *):focus, textarea:not(table.gsheet *):focus { border-color: var(--k-accent) !important; }
+.pick {
+  border-color: color-mix(in srgb, var(--tone, var(--k-accent)) 14%, var(--k-stroke-strong));
+  background: color-mix(in srgb, var(--tone, var(--k-accent)) 3%, var(--k-s1));
+}
+.pick:hover:not(:disabled) { border-color: var(--k-text2); background: color-mix(in srgb, var(--tone, var(--k-accent)) 6%, var(--k-s1)); }
+.pick[aria-expanded="true"] { border-color: var(--k-accent); }
+.pick-chev { color: var(--k-text2); background: transparent; }
+.pick-pop { background: var(--k-s1); border-color: var(--k-stroke); box-shadow: var(--k-pop); border-radius: var(--k-r-card); }
+.pick-pop.is-sheet { border-radius: 22px; }
+.pick-opt:hover, .pick-opt.is-on { background: var(--k-s3); }
+.pick-opt[aria-selected="true"] { color: var(--k-accent-strong); background: var(--k-accent-soft); }
+.pick-opt[aria-selected="true"].is-on { background: var(--k-accent-soft-pressed); }
+.pick-pop.is-sheet + .pick-scrim, .pick-scrim:has(+ .pick-pop.is-sheet) { background: var(--k-scrim); }
+body[data-tone] .modal { background: var(--k-s1); border-color: var(--k-stroke); border-radius: 16px; }
+::selection { background: color-mix(in srgb, var(--k-accent-bright) 30%, transparent); }
+input[type="checkbox"]:not(table.gsheet *), input[type="radio"]:not(table.gsheet *) { accent-color: var(--k-accent); }
+
 /* ------------------------------------------------ less motion, if asked */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
